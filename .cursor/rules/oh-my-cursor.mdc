@@ -12,3 +12,12 @@ alwaysApply: true
 - Keep local, external, and manual evidence separate. Report unverified seams explicitly.
 - Redact secrets, tokens, credentials, private keys, authorization headers, and sensitive environment values from logs and handoffs.
 - Prefer the smallest reversible change, targeted validation, and an evidence-backed stop condition.
+
+## Persistent execution (the boulder never stops)
+
+- Persist mode is OPT-IN and driven by the `stop`/`subagentStop` hooks. When active, a completed turn is continued with a follow-up directive instead of idling; do not treat a single completed turn as the end of the goal.
+- Arm it with `omcu persist start --goal "<goal>" [--max-loops N] [--deadline-min M]`; inspect with `omcu persist status`.
+- While persist is active: do NOT stop to ask "should I proceed?" on obvious next steps, and do NOT idle after finishing one step. Re-read repository truth and `.omcu` state, take the smallest reversible next step, and run targeted verification each loop.
+- Stop honestly. Call `omcu persist done` only when the goal is met with fresh evidence (never to silence the loop), or `omcu persist stop` to abort. A genuine blocker that only the user can resolve is a valid stop — state it plainly.
+- The loop is bounded three ways: Cursor's `loop_limit`, the `--max-loops` ceiling, and the `--deadline-min` wall clock. A user abort or a turn error never continues.
+- Persist never writes `passes`/`verified`; it only re-injects the working directive. Completion still requires the CLI verification transition.

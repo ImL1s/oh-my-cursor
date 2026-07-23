@@ -8,7 +8,7 @@ export function parseCli(argv: readonly string[]): ParsedCommand {
   if (argv.length === 0 || ['help', '--help', '-h'].includes(argv[0] ?? '')) return { command: 'help', action: null, args: [] };
   if (argv.length === 1 && ['version', '--version', '-v'].includes(argv[0] ?? '')) return { command: 'version', action: null, args: [] };
   const [command = '', possibleAction, ...rest] = argv;
-  const actionCommands = new Set(['capabilities', 'session', 'state', 'run', 'lease', 'recover', 'compact', 'memory', 'notify', 'tracker', 'wiki', 'workflow', 'team']);
+  const actionCommands = new Set(['capabilities', 'session', 'state', 'run', 'lease', 'recover', 'compact', 'memory', 'notify', 'tracker', 'wiki', 'workflow', 'team', 'persist']);
   if (!actionCommands.has(command)) return { command, action: null, args: argv.slice(1) };
   if (possibleAction === undefined || possibleAction.startsWith('-')) return { command, action: null, args: argv.slice(1) };
   return { command, action: possibleAction, args: rest };

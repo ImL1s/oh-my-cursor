@@ -1,10 +1,23 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { parseHookInput, redactHookValue, responseForEvent, SUPPORTED_EVENTS } from '../../hooks/omcu-hook.mjs';
+import {
+  parseHookInput,
+  persistFollowup,
+  redactHookValue,
+  resolveOmcuEntrypoint,
+  responseForEvent,
+  runHook,
+  SUPPORTED_EVENTS,
+} from '../../hooks/omcu-hook.mjs';
 
 const root = path.resolve(import.meta.dirname, '../..');
+
+function fakeRunner(stdout, status = 0) {
+  return () => ({ status, stdout, stderr: '' });
+}
 
 describe('Cursor lifecycle hooks', () => {
   it('registers only supported Cursor camelCase events requested by the plugin', () => {
@@ -20,6 +33,9 @@ describe('Cursor lifecycle hooks', () => {
     expect(config.hooks.preToolUse).toEqual([
       { command: 'node ${CURSOR_PLUGIN_ROOT}/hooks/omcu-hook.mjs preToolUse', matcher: 'Shell' },
     ]);
+    // stop/subagentStop carry loop_limit as the outermost persist safety cap.
+    expect(config.hooks.stop[0]).toMatchObject({ loop_limit: 500 });
+    expect(config.hooks.subagentStop[0]).toMatchObject({ loop_limit: 500 });
   });
 
   it('redacts hook input without persisting or returning it', () => {
@@ -50,5 +66,59 @@ describe('Cursor lifecycle hooks', () => {
     const source = fs.readFileSync(path.join(root, 'hooks/omcu-hook.mjs'), 'utf8');
     expect(source).not.toMatch(/writeFile|appendFile|mkdir|verification\s*[:=]|passes\s*[:=]/);
     expect(source).not.toMatch(/permission\s*:\s*['"]allow|sandbox(?:ed)?\s*:\s*true/i);
+  });
+});
+
+describe('persist follow-up wiring (anti idle-stop)', () => {
+  it('resolves the installed omcu entrypoint only under CURSOR_PLUGIN_ROOT/dist', () => {
+    expect(resolveOmcuEntrypoint({})).toBeNull();
+    expect(resolveOmcuEntrypoint({ CURSOR_PLUGIN_ROOT: '/no/such/root' })).toBeNull();
+    expect(resolveOmcuEntrypoint({ CURSOR_PLUGIN_ROOT: root })).toBe(path.join(root, 'dist', 'bin', 'omcu.js'));
+  });
+
+  it('returns the CLI follow-up verbatim when the oracle says continue', () => {
+    const decision = JSON.stringify({ continue: true, followup_message: 'keep going', reason: 'persist_active' });
+    expect(persistFollowup('{"status":"completed"}', { CURSOR_PLUGIN_ROOT: root }, fakeRunner(decision)))
+      .toEqual({ followup_message: 'keep going' });
+  });
+
+  it('fails open to a normal stop on every declined or broken path', () => {
+    const env = { CURSOR_PLUGIN_ROOT: root };
+    expect(persistFollowup('{}', {}, fakeRunner('{"continue":true,"followup_message":"x"}'))).toEqual({});
+    expect(persistFollowup('{}', env, fakeRunner(JSON.stringify({ continue: false, reason: 'status_aborted' })))).toEqual({});
+    expect(persistFollowup('{}', env, fakeRunner('not json'))).toEqual({});
+    expect(persistFollowup('{}', env, fakeRunner('{}', 2))).toEqual({});
+    expect(persistFollowup('{}', env, () => { throw new Error('spawn failed'); })).toEqual({});
+    expect(persistFollowup('{}', env, fakeRunner(JSON.stringify({ continue: true, followup_message: '' })))).toEqual({});
+  });
+
+  it('runHook continues stop/subagentStop turns and leaves other events passive', async () => {
+    const env = { CURSOR_PLUGIN_ROOT: root };
+    const cont = fakeRunner(JSON.stringify({ continue: true, followup_message: 'boulder', reason: 'persist_active' }));
+    expect(await runHook('stop', '{"status":"completed"}', env, cont)).toEqual({ followup_message: 'boulder' });
+    expect(await runHook('subagentStop', '{"status":"completed"}', env, cont)).toEqual({ followup_message: 'boulder' });
+    expect(await runHook('preToolUse', '{"tool_name":"Shell"}', env, cont)).toEqual({});
+    expect(await runHook('beforeSubmitPrompt', '{}', env, cont)).toEqual({ continue: true });
+    const declined = fakeRunner(JSON.stringify({ continue: false, reason: 'goal_marked_done' }));
+    expect(await runHook('stop', '{"status":"completed"}', env, declined)).toEqual({});
+  });
+
+  it('end-to-end through the real CLI: active persist continues, done halts', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-hook-e2e-'));
+    try {
+      const omcu = path.join(root, 'dist', 'bin', 'omcu.js');
+      execFileSync(process.execPath, [omcu, 'persist', 'start', '--goal', 'ship it', '--max-loops', '5'], { cwd: dir });
+      const active = execFileSync(process.execPath, [path.join(root, 'hooks/omcu-hook.mjs'), 'stop'], {
+        cwd: dir, env: { ...process.env, CURSOR_PLUGIN_ROOT: root }, input: '{"status":"completed","loop_count":1}', encoding: 'utf8',
+      });
+      expect(JSON.parse(active).followup_message).toContain('boulder never stops');
+      execFileSync(process.execPath, [omcu, 'persist', 'done'], { cwd: dir });
+      const halted = execFileSync(process.execPath, [path.join(root, 'hooks/omcu-hook.mjs'), 'stop'], {
+        cwd: dir, env: { ...process.env, CURSOR_PLUGIN_ROOT: root }, input: '{"status":"completed","loop_count":1}', encoding: 'utf8',
+      });
+      expect(JSON.parse(halted)).toEqual({});
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -14,10 +14,10 @@
       { "command": "node ${CURSOR_PLUGIN_ROOT}/hooks/omcu-hook.mjs preCompact" }
     ],
     "stop": [
-      { "command": "node ${CURSOR_PLUGIN_ROOT}/hooks/omcu-hook.mjs stop" }
+      { "command": "node ${CURSOR_PLUGIN_ROOT}/hooks/omcu-hook.mjs stop", "loop_limit": 500 }
     ],
     "subagentStop": [
-      { "command": "node ${CURSOR_PLUGIN_ROOT}/hooks/omcu-hook.mjs subagentStop" }
+      { "command": "node ${CURSOR_PLUGIN_ROOT}/hooks/omcu-hook.mjs subagentStop", "loop_limit": 500 }
     ]
   }
 }

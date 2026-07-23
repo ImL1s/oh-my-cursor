@@ -8,6 +8,30 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - No unreleased changes recorded.
 
+## 0.2.0 - 2026-07-23
+
+### Added
+
+- **Persistent execution ("the boulder never stops")** — an opt-in loop that
+  keeps a completed Cursor turn going instead of idle-stopping, driven by the
+  native `stop`/`subagentStop` hooks returning a `followup_message`.
+  - `omcu persist start --goal "<goal>" [--max-loops N] [--deadline-min M]`,
+    plus `omcu persist status|done|stop` and the read-only `omcu persist decide`
+    oracle the hook consults.
+  - Bounded three ways — Cursor's `loop_limit` (500), the `--max-loops` ceiling,
+    and the `--deadline-min` wall clock. A user abort or a turn error never
+    continues; only a clean `completed` status may loop.
+  - The follow-up directive re-injects the working goal and never fabricates
+    `passes`/`verified`/completion; the CLI verification transition remains the
+    only authority. The hook is pure read + decide and fails open to a normal
+    stop on any missing/malformed state or CLI problem.
+
+### Security
+
+- The persist hook never mutates state: Cursor owns the loop budget and the
+  `omcu` CLI owns the goal/ceiling/deadline/done flag. State reads refuse
+  symlinks and out-of-bounds or wrong-schema objects (fail-safe = inactive).
+
 ## 0.1.0 - 2026-07-23
 
 ### Added

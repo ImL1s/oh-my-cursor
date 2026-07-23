@@ -60,6 +60,7 @@ For the first offline bootstrap, verify the checksum, extract the `.tgz`, and ru
 | Local services | `recover`, `compact`, `memory`, `notify`, `tracker`, `wiki` | Project-local; not native Cursor services. |
 | Plugin/MCP | `mcp-install`, `mcp-server` | Fixed read/proposal MCP tools; no shell or verification authority. |
 | Workflows | `workflow`, `ralplan`, `ralph`, `autopilot`, `review`, `qa`, `accept` | Receipts and gates remain advisory and `verified: false`. |
+| Persistence | `persist start`/`status`/`done`/`stop` | Opt-in "boulder never stops" loop via the `stop`/`subagentStop` hooks; never fabricates completion. |
 | Parallel work | `ulw`, `team` | Worktrees/tmux are experimental local coordination, not native Cursor teams. |
 
 Run `omcu --help` for the command index and read the [full CLI reference](docs/cli.md) for options and examples.

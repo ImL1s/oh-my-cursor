@@ -9,6 +9,8 @@ import { routeSessionCommand, type SessionCommand } from '../sessions/router.js'
 import { createCliMutationAuthority } from '../state/authority.js';
 import { LeaseStore, RunStateStore } from '../state/store.js';
 import type { RunStatus } from '../state/types.js';
+import { decidePersist } from '../persist/decision.js';
+import { completePersist, persistStatus, readPersistState, startPersist, stopPersist } from '../persist/state.js';
 import { LifecycleTracker, type LifecyclePhase } from '../tracker/index.js';
 import { LifecycleWiki } from '../wiki/index.js';
 import { integerOption, jsonOption, option, requiredOption } from './parser.js';
@@ -34,8 +36,51 @@ export async function handleLocalServices(command: string, action: string | null
   if (command === 'notify') return handleNotify(action, args, context);
   if (command === 'tracker') return handleTracker(action, args, context);
   if (command === 'wiki') return handleWiki(action, args, context);
+  if (command === 'persist') return handlePersist(action, args, context);
   if (command === 'state' || command === 'run' || command === 'cancel' || command === 'lease') return handleState(command, action, args, context);
   return null;
+}
+
+function handlePersist(action: string | null, args: readonly string[], context: CliContext): number {
+  if (action === 'start') {
+    const goal = requiredOption(args, '--goal');
+    const maxLoops = option(args, '--max-loops');
+    const deadline = option(args, '--deadline-min');
+    const state = startPersist(context.root, {
+      goal,
+      ...(maxLoops === undefined ? {} : { maxLoops: integerOption(args, '--max-loops') }),
+      ...(deadline === undefined ? {} : { deadlineMinutes: integerOption(args, '--deadline-min') }),
+    });
+    printJson(context.io, { ok: true, action: 'start', state });
+    return 0;
+  }
+  if (action === 'stop') {
+    printJson(context.io, { ok: true, action: 'stop', state: stopPersist(context.root) });
+    return 0;
+  }
+  if (action === 'done') {
+    printJson(context.io, { ok: true, action: 'done', state: completePersist(context.root) });
+    return 0;
+  }
+  if (action === 'status' || action === null) {
+    printJson(context.io, { ok: true, action: 'status', ...persistStatus(context.root) });
+    return 0;
+  }
+  if (action === 'decide') {
+    // Read-only decision oracle: consulted by the stop hook. Reads Cursor's
+    // hook stdin JSON and prints the followup decision. Never mutates state.
+    let input: unknown = {};
+    const inline = option(args, '--input');
+    if (inline !== undefined) {
+      try { input = JSON.parse(inline); } catch { input = {}; }
+    } else {
+      try { input = JSON.parse(fs.readFileSync(0, 'utf8')); } catch { input = {}; }
+    }
+    const decision = decidePersist(readPersistState(context.root), input, Date.now());
+    printJson(context.io, decision);
+    return 0;
+  }
+  throw new Error(`E_PERSIST_ACTION_UNKNOWN: ${action}`);
 }
 
 async function handleSession(action: string | null, args: readonly string[], context: CliContext): Promise<number> {
