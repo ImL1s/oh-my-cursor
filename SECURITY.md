@@ -34,6 +34,6 @@ Important boundaries:
 - Workflow receipts, subagent output, MCP proposals, memory records, notifications, and tmux collection never establish acceptance.
 - Only the `omcu run transition` and `omcu run verify` path may mutate authoritative run completion and verification state. Verification requires a 64-character lowercase SHA-256 evidence digest and a matching revision.
 - Project state is owner-only under `<project>/.omcu/`. Installation receipts and immutable release stages live separately under `~/.local/state/oh-my-cursor/` by default.
-- Notification delivery is disabled by default, generation-fenced, and has no configured network transport in `0.1.0`.
+- Notification delivery is disabled by default, generation-fenced, and has no configured network transport.
 
 See [Cursor CLI parameters](https://cursor.com/docs/cli/reference/parameters), [Cursor hooks](https://cursor.com/docs/hooks), and [Cursor MCP](https://cursor.com/docs/mcp) for host behavior. Cursor's sandbox and approval controls remain Cursor features and must be configured independently.

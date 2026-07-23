@@ -1,6 +1,6 @@
 # Test readiness
 
-This file is the release verification checklist for `0.1.0`. Record fresh results; do not convert planned checks into claims.
+This file is the release verification checklist for `0.2.1`. Record fresh results; do not convert planned checks into claims.
 
 ## Automated gate
 
@@ -11,7 +11,7 @@ node dist/bin/omcu.js --version
 node dist/bin/omcu.js --help
 ```
 
-Expected version: `0.1.0`. `npm run check` must compile TypeScript and pass every Vitest suite.
+Expected version: `0.2.1`. `npm run check` must compile TypeScript and pass every Vitest suite.
 
 ## Live Cursor gate
 
@@ -54,7 +54,7 @@ RECEIPT="$(node -e 'const fs=require("fs"); const x=JSON.parse(fs.readFileSync(p
 rm -rf "$TMP_ROOT"
 ```
 
-The readback must print `0.1.0`; uninstall must report `uninstalled` without collisions. Project `.omcu/` is preserved unless `--purge-project-state` is supplied, and even then removal occurs only when it is still empty.
+The readback must print `0.2.1`; uninstall must report `uninstalled` without collisions. Project `.omcu/` is preserved unless `--purge-project-state` is supplied, and even then removal occurs only when it is still empty.
 
 ## Documentation gate
 
@@ -70,12 +70,12 @@ Verified locally on 2026-07-23 (Asia/Taipei) from an unborn repository with no c
 | Check | Result |
 | --- | --- |
 | `npm run check` | PASS: TypeScript build, 21 test files / 100 tests, CLI smoke, and CLI parity |
-| `npm pack --dry-run --json` | PASS: `iml1s-oh-my-cursor-0.1.0.tgz`, 270 entries; all 13 README-reachable Markdown files are included |
+| `npm pack --dry-run --json` | PASS: `iml1s-oh-my-cursor-0.2.1.tgz`, 270 entries; all 13 README-reachable Markdown files are included |
 | `cursor-agent --version` | PASS: `2026.07.20-8cc9c0b` |
 | `omcu capabilities discover` | PASS: exact version/help match, `verified: true` |
 | `omcu doctor` | PASS WITH HONEST WARNING: exit `2`, capability tier 3; local plugin/config checks pass while `--help` alone leaves runtime plugin activation explicitly unproven |
-| Isolated source install/update/readback/uninstall | PASS: `0.1.0`, receipt removal without collisions; project state preserved |
-| Offline `.tgz` checksum/bootstrap/install/readback/uninstall | PASS: basename-only `SHA256SUMS` entry verified twice, `0.1.0`, receipt removal without collisions |
+| Isolated source install/update/readback/uninstall | PASS: `0.2.1`, receipt removal without collisions; project state preserved |
+| Offline `.tgz` checksum/bootstrap/install/readback/uninstall | PASS: basename-only `SHA256SUMS` entry verified twice, `0.2.1`, receipt removal without collisions |
 | CLI state, workflow-definition, recovery, MCP, memory, and notification examples | PASS in temporary projects |
 | Documentation relative links and repository paths | PASS |
 | Eleven official `cursor.com/docs` links | PASS: HTTP 200 with redirects followed |

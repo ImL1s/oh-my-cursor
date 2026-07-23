@@ -13,7 +13,7 @@ node -p "require('./.cursor-plugin/plugin.json').version"
 node dist/bin/omcu.js --version
 ```
 
-For `0.1.0`, all three version values must be `0.1.0`.
+All three version values (package.json, .cursor-plugin/plugin.json, and the CLI) must match the release version.
 
 Review `CHANGELOG.md`, `PROJECT.md`, `SECURITY.md`, and `TEST_READY.md`. Confirm the capability lock names the intended Cursor Agent baseline.
 
@@ -54,7 +54,7 @@ CHECKSUMS="release/SHA256SUMS"
 
 Expected assets:
 
-- `release/iml1s-oh-my-cursor-0.1.0.tgz`
+- `release/iml1s-oh-my-cursor-0.2.1.tgz`
 - `release/SHA256SUMS` with a basename-only archive entry
 
 ## 5. Test the archive offline

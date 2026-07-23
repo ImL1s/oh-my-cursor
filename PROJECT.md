@@ -1,6 +1,6 @@
 # Project status
 
-Oh My Cursor (`omcu`) is a capability-grounded orchestration foundation for Cursor Agent. Version `0.1.0` prioritizes honest feature detection, bounded local state, repeatable evidence, and conservative recovery over claims of native orchestration.
+Oh My Cursor (`omcu`) is a capability-grounded orchestration foundation for Cursor Agent. Version `0.2.1` prioritizes honest feature detection, bounded local state, repeatable evidence, and conservative recovery over claims of native orchestration.
 
 ## Goals
 
@@ -11,7 +11,7 @@ Oh My Cursor (`omcu`) is a capability-grounded orchestration foundation for Curs
 - Separate Cursor-backed behavior, experimental local coordination, and unsupported native primitives.
 - Make install, update, readback, and uninstall receipt-driven and collision-aware.
 
-## Version 0.1.0 scope
+## Version scope
 
 | Area | Status | Authority |
 | --- | --- | --- |

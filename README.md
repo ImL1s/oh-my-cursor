@@ -4,7 +4,7 @@ Capability-grounded orchestration for Cursor Agent.
 
 - Package: `@iml1s/oh-my-cursor`
 - CLI: `omcu`
-- Version: `0.1.0`
+- Version: `0.2.1`
 - Node.js: 20+
 - Pinned Cursor Agent: `2026.07.20-8cc9c0b`
 - Project state: `.omcu/` (owner-only, CLI-authored)
@@ -34,7 +34,7 @@ The last command loads the plugin for one Cursor invocation and does not modify 
 curl -fsSL https://raw.githubusercontent.com/ImL1s/oh-my-cursor/main/scripts/bootstrap.sh | bash
 ```
 
-Pin a version with `OMCU_TAG=v0.2.0`, and/or initialize a project during
+Pin a version with `OMCU_TAG=v0.2.1`, and/or initialize a project during
 install with `OMCU_PROJECT=/absolute/path`. The bootstrap downloads the release
 archive and `SHA256SUMS`, verifies the checksum before anything executes, then
 runs the packaged receipt-based installer (which re-verifies the archive and
@@ -56,7 +56,7 @@ With an existing checkout or extracted release:
 
 ```sh
 ./scripts/install.sh \
-  --archive /absolute/path/to/iml1s-oh-my-cursor-0.1.0.tgz \
+  --archive /absolute/path/to/iml1s-oh-my-cursor-0.2.1.tgz \
   --checksums /absolute/path/to/SHA256SUMS \
   --project /absolute/path/to/project
 ```

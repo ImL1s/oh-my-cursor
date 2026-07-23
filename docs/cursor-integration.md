@@ -2,7 +2,7 @@
 
 ## Verified host surface
 
-Version `0.1.0` pins Cursor Agent `2026.07.20-8cc9c0b`. Run:
+OMCU pins Cursor Agent `2026.07.20-8cc9c0b`. Run:
 
 ```sh
 omcu capabilities discover
@@ -98,4 +98,4 @@ These are OMCU local implementations. They are not native Cursor team authority,
 
 ## No native memory or notification claim
 
-Cursor documentation cited above does not define a Cursor Agent memory-management CLI or notification-delivery CLI. OMCU's `memory` and `notify` modules are project-local services under `.omcu/`. Notifications are disabled by default and `0.1.0` includes only a refusing transport, so no message is sent until an application supplies and enables a transport.
+Cursor documentation cited above does not define a Cursor Agent memory-management CLI or notification-delivery CLI. OMCU's `memory` and `notify` modules are project-local services under `.omcu/`. Notifications are disabled by default and OMCU includes only a refusing transport, so no message is sent until an application supplies and enables a transport.

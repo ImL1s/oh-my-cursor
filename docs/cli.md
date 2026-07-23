@@ -100,7 +100,7 @@ omcu notify show --id <id>
 omcu notify dispatch --id <id> --generation <n> --nonce <nonce>
 ```
 
-Notifications start disabled. `0.1.0` wires a refusing transport in the CLI, so dispatch remains unsupported even after enabling a destination. Queueing and inspection are local only.
+Notifications start disabled. OMCU wires a refusing transport in the CLI, so dispatch remains unsupported even after enabling a destination. Queueing and inspection are local only.
 
 ## Tracker and wiki
 

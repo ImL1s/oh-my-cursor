@@ -52,7 +52,7 @@ If you already have a source checkout or an earlier extracted release:
 
 ```sh
 ./scripts/install.sh \
-  --archive /absolute/path/to/iml1s-oh-my-cursor-0.1.0.tgz \
+  --archive /absolute/path/to/iml1s-oh-my-cursor-0.2.1.tgz \
   --checksums /absolute/path/to/SHA256SUMS \
   --project /absolute/path/to/project
 ```
@@ -60,7 +60,7 @@ If you already have a source checkout or an earlier extracted release:
 For a first offline install, verify and extract the release only to bootstrap its installer, then let that installer verify the archive again:
 
 ```sh
-ASSET=/absolute/path/to/iml1s-oh-my-cursor-0.1.0.tgz
+ASSET=/absolute/path/to/iml1s-oh-my-cursor-0.2.1.tgz
 CHECKSUMS=/absolute/path/to/SHA256SUMS
 (cd "$(dirname "$ASSET")" && shasum -a 256 -c "$CHECKSUMS")
 BOOTSTRAP="$(mktemp -d)"
@@ -107,7 +107,7 @@ From offline release assets:
 
 ```sh
 node dist/src/setup/script-entry.js update \
-  --archive /absolute/path/to/iml1s-oh-my-cursor-0.1.0.tgz \
+  --archive /absolute/path/to/iml1s-oh-my-cursor-0.2.1.tgz \
   --checksums /absolute/path/to/SHA256SUMS \
   --project /absolute/path/to/project
 ```

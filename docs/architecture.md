@@ -57,6 +57,6 @@ Workflow receipts, mode results, team collection, hooks, and MCP proposals delib
 
 ### Plugin surfaces
 
-`.cursor-plugin/plugin.json` connects slash commands, skills, custom agents, rules, hooks, and `.mcp.json`. The hook implementation validates and redacts input but returns neutral policy responses. The shipped MCP manifest is empty in `0.1.0`; loading a server requires explicit project configuration.
+`.cursor-plugin/plugin.json` connects slash commands, skills, custom agents, rules, hooks, and `.mcp.json`. The hook implementation validates and redacts input but returns neutral policy responses. The shipped MCP manifest is empty; loading a server requires explicit project configuration.
 
 See [Cursor integration](cursor-integration.md) and [Security policy](../SECURITY.md).
