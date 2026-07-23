@@ -1,0 +1,16 @@
+{
+  "name": "oh-my-cursor",
+  "owner": {
+    "name": "ImL1s"
+  },
+  "metadata": {
+    "description": "Capability-grounded Cursor Agent workflow plugins."
+  },
+  "plugins": [
+    {
+      "name": "oh-my-cursor",
+      "source": ".",
+      "description": "Capability-grounded workflows, roles, and lifecycle checks for Cursor Agent."
+    }
+  ]
+}

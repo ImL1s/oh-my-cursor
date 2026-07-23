@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      { "command": "node ${CURSOR_PLUGIN_ROOT}/hooks/omcu-hook.mjs sessionStart" }
+    ],
+    "preToolUse": [
+      { "command": "node ${CURSOR_PLUGIN_ROOT}/hooks/omcu-hook.mjs preToolUse", "matcher": "Shell" }
+    ],
+    "beforeSubmitPrompt": [
+      { "command": "node ${CURSOR_PLUGIN_ROOT}/hooks/omcu-hook.mjs beforeSubmitPrompt" }
+    ],
+    "preCompact": [
+      { "command": "node ${CURSOR_PLUGIN_ROOT}/hooks/omcu-hook.mjs preCompact" }
+    ],
+    "stop": [
+      { "command": "node ${CURSOR_PLUGIN_ROOT}/hooks/omcu-hook.mjs stop" }
+    ],
+    "subagentStop": [
+      { "command": "node ${CURSOR_PLUGIN_ROOT}/hooks/omcu-hook.mjs subagentStop" }
+    ]
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "name": "oh-my-cursor",
+  "displayName": "Oh My Cursor",
+  "version": "0.1.0",
+  "description": "Capability-grounded workflows, roles, and lifecycle checks for Cursor Agent.",
+  "author": {
+    "name": "ImL1s"
+  },
+  "publisher": "ImL1s",
+  "license": "MIT",
+  "keywords": [
+    "cursor-agent",
+    "orchestration",
+    "workflows",
+    "verification"
+  ],
+  "category": "developer-tools",
+  "tags": [
+    "workflow",
+    "quality",
+    "recovery",
+    "subagents"
+  ],
+  "commands": "./commands/",
+  "agents": "./agents/",
+  "skills": "./skills/",
+  "rules": "./.cursor/rules/",
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json"
+}

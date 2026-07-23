@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.omc/
+.omcu/
+.omcu-worktrees/
+coverage/
+*.log
+.DS_Store

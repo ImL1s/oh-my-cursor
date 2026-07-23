@@ -1,0 +1,14 @@
+---
+description: Truthful, capability-grounded execution contract for Oh My Cursor
+alwaysApply: true
+---
+# Oh My Cursor runtime contract
+
+- Treat `.omcu/` as CLI-owned state. Mutate run state only through documented `omcu` commands.
+- Do not write or infer `passes`, `verified`, completion, or acceptance. Verification requires fresh evidence and the CLI-owned verification transition.
+- Probe current capabilities before relying on host-specific behavior. Missing or drifting capabilities are blockers, not implied support.
+- Cursor read-only modes reduce tool access; they do not prove security isolation. Hooks provide lifecycle policy and diagnostics, not a sandbox boundary.
+- Use Cursor's native Task/subagent surface only when it is present. Custom subagents are one level deep; never launch another agent CLI as the default worker path.
+- Keep local, external, and manual evidence separate. Report unverified seams explicitly.
+- Redact secrets, tokens, credentials, private keys, authorization headers, and sensitive environment values from logs and handoffs.
+- Prefer the smallest reversible change, targeted validation, and an evidence-backed stop condition.

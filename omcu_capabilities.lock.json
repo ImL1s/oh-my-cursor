@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "host": "cursor-agent",
+  "host_version": "2026.07.20-8cc9c0b",
+  "observed_at": "2026-07-23T00:00:00.000Z",
+  "capabilities": {
+    "json_output": { "verified": true, "argv": ["--print", "--output-format", "json"] },
+    "stream_json_output": { "verified": true, "argv": ["--print", "--output-format", "stream-json"] },
+    "session_create": { "verified": true, "argv": ["create-chat"] },
+    "session_list_selector": { "verified": true, "argv": ["ls"] },
+    "session_resume": { "verified": true, "argv": ["--resume", "<chat-id>"] },
+    "session_continue": { "verified": true, "argv": ["--continue"] },
+    "read_only_plan_mode": { "verified": true, "argv": ["--mode", "plan"] },
+    "read_only_ask_mode": { "verified": true, "argv": ["--mode", "ask"] },
+    "native_team_orchestration": { "verified": false, "reason": "not advertised by pinned host help" },
+    "native_workflow_engine": { "verified": false, "reason": "not advertised by pinned host help" },
+    "security_isolation_boundary": { "verified": false, "reason": "host sandbox and approval flags do not prove isolation" }
+  }
+}

@@ -1,0 +1,26 @@
+name: release-verify
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run release:archive
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-release-archive
+          path: |
+            release/*.tgz
+            release/SHA256SUMS
+          if-no-files-found: error

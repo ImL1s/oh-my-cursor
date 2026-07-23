@@ -1,0 +1,10 @@
+<!-- OMCU:AGENTS:START -->
+## Oh My Cursor
+
+- `.omcu/` is CLI-owned state; use documented `omcu` commands for mutations.
+- Never mark a run complete or verified without fresh evidence and the CLI-owned transition.
+- Hooks are lifecycle checks, not a sandbox or security boundary.
+- Use Cursor-native subagents only when the Task surface is available; subagents must not spawn nested workers.
+- Do not use another agent CLI as the default worker mechanism.
+- Redact secrets from diagnostics, handoffs, and artifacts.
+<!-- OMCU:AGENTS:END -->
