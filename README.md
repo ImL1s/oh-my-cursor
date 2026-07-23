@@ -28,6 +28,18 @@ The last command loads the plugin for one Cursor invocation and does not modify 
 
 ## Install
 
+### Convenient (latest release)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ImL1s/oh-my-cursor/main/scripts/bootstrap.sh | bash
+```
+
+Pin a version with `OMCU_TAG=v0.2.0`, and/or initialize a project during
+install with `OMCU_PROJECT=/absolute/path`. The bootstrap downloads the release
+archive and `SHA256SUMS`, verifies the checksum before anything executes, then
+runs the packaged receipt-based installer (which re-verifies the archive and
+rejects unsafe archive paths before its managed extraction).
+
 ### From source
 
 ```sh
