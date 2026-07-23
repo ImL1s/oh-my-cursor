@@ -86,7 +86,7 @@ describe('release archive lifecycle', () => {
     expect(readback.source.realpath).toBe(generated.archive);
     expect(readback.source.sha256).toBe(generated.sha256);
     expect(fs.realpathSync(path.join(home, '.local', 'bin', 'omcu'))).toBe(fs.realpathSync(path.join(installed.receipt.installed.stage, 'dist', 'bin', 'omcu.js')));
-    expect(run(path.join(home, '.local', 'bin', 'omcu'), ['--version'], project, { ...process.env, HOME: home }).trim()).toBe('0.2.0');
+    expect(run(path.join(home, '.local', 'bin', 'omcu'), ['--version'], project, { ...process.env, HOME: home }).trim()).toBe('0.2.1');
     expectPackagedDocumentationLinks(installed.receipt.installed.stage);
 
     const uninstallOutput = run('bash', [

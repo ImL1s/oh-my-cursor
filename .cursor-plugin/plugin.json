@@ -1,7 +1,7 @@
 {
   "name": "oh-my-cursor",
   "displayName": "Oh My Cursor",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Capability-grounded workflows, roles, and lifecycle checks for Cursor Agent.",
   "author": {
     "name": "ImL1s"

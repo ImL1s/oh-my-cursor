@@ -50,7 +50,7 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
   const context = { cwd, packageRoot, adapter, root: projectStateRoot(cwd), io, homeDir: path.resolve(dependencies.homeDir ?? os.homedir()) };
   try {
     if (parsed.command === 'help') { io.stdout(HELP); return 0; }
-    if (parsed.command === 'version') { io.stdout(`${dependencies.version ?? '0.2.0'}\n`); return 0; }
+    if (parsed.command === 'version') { io.stdout(`${dependencies.version ?? '0.2.1'}\n`); return 0; }
     if (parsed.command === 'capabilities' && parsed.action === 'discover') {
       const result = await discoverCursorCapabilities(adapter, dependencies.capabilityLock ?? defaultLock(packageRoot), cwd);
       printJson(io, result); return result.verified ? 0 : 1;

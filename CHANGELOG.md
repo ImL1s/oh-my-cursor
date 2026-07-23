@@ -8,6 +8,24 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - No unreleased changes recorded.
 
+## 0.2.1 - 2026-07-24
+
+Release-hygiene patch: no product/runtime changes from 0.2.0 — the tag now
+includes the convenience installer and hardened CI that landed on `main` after
+0.2.0 was cut.
+
+### Added
+
+- One-line bootstrap installer (`scripts/bootstrap.sh`): `curl -fsSL
+  .../scripts/bootstrap.sh | bash` resolves the latest release (or `OMCU_TAG`),
+  verifies the checksum before anything executes, and hands off to the packaged
+  receipt-based installer.
+
+### Changed
+
+- CI runs a Node 20/22 matrix with read-only permissions, concurrency
+  cancellation, and package-surface + version-sync gates.
+
 ## 0.2.0 - 2026-07-23
 
 ### Added
