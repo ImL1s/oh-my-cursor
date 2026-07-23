@@ -26,11 +26,21 @@ All notable changes to this project are documented here. The format follows [Kee
     only authority. The hook is pure read + decide and fails open to a normal
     stop on any missing/malformed state or CLI problem.
 
+### Fixed
+
+- Hook entrypoint detection now compares realpaths, so the hook still fires
+  when invoked through a symlinked path (macOS `/tmp` → `/private/tmp`, npm's
+  package symlinks, symlinked homes). The previous `import.meta.url` string
+  match silently no-op'd the entire hook in those installs.
+
 ### Security
 
 - The persist hook never mutates state: Cursor owns the loop budget and the
   `omcu` CLI owns the goal/ceiling/deadline/done flag. State reads refuse
   symlinks and out-of-bounds or wrong-schema objects (fail-safe = inactive).
+- Persist continues ONLY on an explicit `status === 'completed'`; a missing or
+  non-string status is treated as a non-completed turn and halts, so an
+  incomplete Cursor payload can never re-arm the loop after an abort/error.
 
 ## 0.1.0 - 2026-07-23
 

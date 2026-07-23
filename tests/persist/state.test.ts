@@ -34,9 +34,10 @@ describe('CLI-owned persist state', () => {
 
   it('applies safe defaults and validates bounds', () => {
     const root = projectStateRoot(workspace());
-    const started = startPersist(root, { goal: 'default budgets', nowMs: 0 });
+    const started = startPersist(root, { goal: 'default budgets', nowMs: 1 });
     expect(started.max_loops).toBe(25);
-    expect(started.deadline_ms).toBe(120 * 60_000);
+    expect(started.deadline_ms).toBe(1 + 120 * 60_000);
+    expect(() => startPersist(root, { goal: 'bad clock', nowMs: 0 })).toThrow('E_PERSIST_CLOCK_INVALID');
     expect(() => startPersist(root, { goal: '   ' })).toThrow('E_PERSIST_GOAL_INVALID');
     expect(() => startPersist(root, { goal: 'x', maxLoops: 0 })).toThrow('E_PERSIST_MAX_LOOPS_INVALID');
     expect(() => startPersist(root, { goal: 'x', maxLoops: MAX_PERSIST_LOOPS + 1 })).toThrow('E_PERSIST_MAX_LOOPS_INVALID');

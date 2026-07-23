@@ -48,6 +48,13 @@ describe('persist decision core', () => {
     }
   });
 
+  it('fail-safe: a missing or non-string status never continues', () => {
+    expect(decidePersist(active(), { loop_count: 1 }, NOW)).toEqual({ continue: false, reason: 'status_missing' });
+    expect(decidePersist(active(), { status: 1, loop_count: 1 }, NOW).continue).toBe(false);
+    expect(decidePersist(active(), { status: null }, NOW).continue).toBe(false);
+    expect(decidePersist(active(), {}, NOW)).toEqual({ continue: false, reason: 'status_missing' });
+  });
+
   it('halts once the goal is marked done', () => {
     expect(decidePersist(active({ done: true }), { status: 'completed', loop_count: 1 }, NOW)).toEqual({
       continue: false, reason: 'goal_marked_done',
@@ -70,10 +77,10 @@ describe('persist decision core', () => {
       .toBe(true);
   });
 
-  it('treats malformed hook input as an empty completed turn', () => {
-    expect(decidePersist(active(), null, NOW).continue).toBe(true);
-    expect(decidePersist(active(), 'garbage', NOW).continue).toBe(true);
-    expect(decidePersist(active(), [], NOW).continue).toBe(true);
+  it('fail-safe: malformed hook input (missing status) never continues', () => {
+    expect(decidePersist(active(), null, NOW).continue).toBe(false);
+    expect(decidePersist(active(), 'garbage', NOW).continue).toBe(false);
+    expect(decidePersist(active(), [], NOW).continue).toBe(false);
   });
 
   it('builds a follow-up that never fabricates completion', () => {

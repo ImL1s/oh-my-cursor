@@ -2,7 +2,7 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 export const SUPPORTED_EVENTS = new Set([
   'sessionStart',
@@ -134,4 +134,21 @@ async function main() {
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) await main();
+/**
+ * True when this module is the process entrypoint. Compares realpaths so a
+ * symlinked invocation path (macOS /tmp -> /private/tmp, npm's package
+ * symlinks, symlinked homes) still matches Node's canonicalized import.meta.url
+ * — otherwise the hook would silently do nothing in a real install.
+ */
+export function isMainEntry(metaUrl, argv1) {
+  if (typeof argv1 !== 'string' || argv1 === '') return false;
+  const modulePath = fileURLToPath(metaUrl);
+  if (path.resolve(modulePath) === path.resolve(argv1)) return true;
+  try {
+    return fs.realpathSync(modulePath) === fs.realpathSync(argv1);
+  } catch {
+    return false;
+  }
+}
+
+if (isMainEntry(import.meta.url, process.argv[1])) await main();

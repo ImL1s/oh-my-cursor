@@ -2,8 +2,10 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  isMainEntry,
   parseHookInput,
   persistFollowup,
   redactHookValue,
@@ -101,6 +103,40 @@ describe('persist follow-up wiring (anti idle-stop)', () => {
     expect(await runHook('beforeSubmitPrompt', '{}', env, cont)).toEqual({ continue: true });
     const declined = fakeRunner(JSON.stringify({ continue: false, reason: 'goal_marked_done' }));
     expect(await runHook('stop', '{"status":"completed"}', env, declined)).toEqual({});
+  });
+
+  it('detects the process entrypoint through a symlinked invocation path', () => {
+    const hookFile = path.join(root, 'hooks', 'omcu-hook.mjs');
+    const metaUrl = pathToFileURL(hookFile).href;
+    expect(isMainEntry(metaUrl, hookFile)).toBe(true);
+    expect(isMainEntry(metaUrl, '')).toBe(false);
+    expect(isMainEntry(metaUrl, path.join(root, 'package.json'))).toBe(false);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-hook-symlink-'));
+    try {
+      const link = path.join(dir, 'linked-hook.mjs');
+      fs.symlinkSync(hookFile, link);
+      // A symlinked argv[1] must still resolve as the entrypoint (macOS
+      // /tmp -> /private/tmp is itself a symlink), or the hook is dead on install.
+      expect(isMainEntry(metaUrl, link)).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('the installed hook fires through a symlinked plugin path and continues persist', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-hook-symrun-'));
+    try {
+      const omcu = path.join(root, 'dist', 'bin', 'omcu.js');
+      execFileSync(process.execPath, [omcu, 'persist', 'start', '--goal', 'symlink run', '--max-loops', '4'], { cwd: dir });
+      const link = path.join(dir, 'hook.mjs');
+      fs.symlinkSync(path.join(root, 'hooks', 'omcu-hook.mjs'), link);
+      const output = execFileSync(process.execPath, [link, 'stop'], {
+        cwd: dir, env: { ...process.env, CURSOR_PLUGIN_ROOT: root }, input: '{"status":"completed","loop_count":1}', encoding: 'utf8',
+      });
+      expect(JSON.parse(output).followup_message).toContain('boulder never stops');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('end-to-end through the real CLI: active persist continues, done halts', () => {

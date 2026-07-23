@@ -29,8 +29,13 @@ export function decidePersist(rawState: unknown, hookInput: unknown, nowMs: numb
   const input = (hookInput && typeof hookInput === 'object' && !Array.isArray(hookInput)
     ? hookInput : {}) as PersistHookInput;
 
-  const status = typeof input.status === 'string' ? input.status : 'completed';
-  if (status !== 'completed') return { continue: false, reason: `status_${status}` };
+  // Fail-safe: continue ONLY on an explicit clean 'completed'. A missing or
+  // non-string status is treated as a non-completed turn (abort/error/unknown)
+  // and halts — never default an incomplete payload into a continuation.
+  if (input.status !== 'completed') {
+    const label = typeof input.status === 'string' ? input.status : 'missing';
+    return { continue: false, reason: `status_${label}` };
+  }
 
   if (state.done === true) return { continue: false, reason: 'goal_marked_done' };
 

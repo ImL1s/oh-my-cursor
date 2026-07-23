@@ -81,6 +81,7 @@ export function startPersist(root: StateRoot, input: StartPersistInput): Persist
     throw new Error('E_PERSIST_DEADLINE_INVALID');
   }
   const nowMs = input.nowMs ?? Date.now();
+  if (!Number.isSafeInteger(nowMs) || nowMs <= 0) throw new Error('E_PERSIST_CLOCK_INVALID');
   const state: PersistState = {
     schema_version: PERSIST_SCHEMA_VERSION,
     active: true,
