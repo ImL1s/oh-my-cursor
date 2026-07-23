@@ -130,6 +130,7 @@ node dist/bin/omcu.js capabilities discover
 - [Architecture](docs/architecture.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security](SECURITY.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
 - [Project status](PROJECT.md)
 - [Test readiness](TEST_READY.md)
 - [Live verification](docs/live-verification.md)
