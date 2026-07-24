@@ -1,6 +1,6 @@
 {
   "name": "@iml1s/oh-my-cursor",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "A capability-grounded orchestration foundation for Cursor Agent",
   "type": "module",
   "main": "./dist/src/index.js",
@@ -26,17 +26,50 @@
       "types": "./dist/src/runtime/state-root.d.ts",
       "import": "./dist/src/runtime/state-root.js"
     },
-    "./setup": { "types": "./dist/src/setup/index.d.ts", "import": "./dist/src/setup/index.js" },
-    "./recovery": { "types": "./dist/src/recovery/index.d.ts", "import": "./dist/src/recovery/index.js" },
-    "./compaction": { "types": "./dist/src/compaction/index.d.ts", "import": "./dist/src/compaction/index.js" },
-    "./memory": { "types": "./dist/src/memory/index.d.ts", "import": "./dist/src/memory/index.js" },
-    "./notify": { "types": "./dist/src/notify/index.d.ts", "import": "./dist/src/notify/index.js" },
-    "./tracker": { "types": "./dist/src/tracker/index.d.ts", "import": "./dist/src/tracker/index.js" },
-    "./wiki": { "types": "./dist/src/wiki/index.d.ts", "import": "./dist/src/wiki/index.js" },
-    "./mcp": { "types": "./dist/src/mcp/index.d.ts", "import": "./dist/src/mcp/index.js" },
-    "./workflows": { "types": "./dist/src/workflows/index.d.ts", "import": "./dist/src/workflows/index.js" },
-    "./modes": { "types": "./dist/src/modes/index.d.ts", "import": "./dist/src/modes/index.js" },
-    "./team": { "types": "./dist/src/team/index.d.ts", "import": "./dist/src/team/index.js" },
+    "./setup": {
+      "types": "./dist/src/setup/index.d.ts",
+      "import": "./dist/src/setup/index.js"
+    },
+    "./recovery": {
+      "types": "./dist/src/recovery/index.d.ts",
+      "import": "./dist/src/recovery/index.js"
+    },
+    "./compaction": {
+      "types": "./dist/src/compaction/index.d.ts",
+      "import": "./dist/src/compaction/index.js"
+    },
+    "./memory": {
+      "types": "./dist/src/memory/index.d.ts",
+      "import": "./dist/src/memory/index.js"
+    },
+    "./notify": {
+      "types": "./dist/src/notify/index.d.ts",
+      "import": "./dist/src/notify/index.js"
+    },
+    "./tracker": {
+      "types": "./dist/src/tracker/index.d.ts",
+      "import": "./dist/src/tracker/index.js"
+    },
+    "./wiki": {
+      "types": "./dist/src/wiki/index.d.ts",
+      "import": "./dist/src/wiki/index.js"
+    },
+    "./mcp": {
+      "types": "./dist/src/mcp/index.d.ts",
+      "import": "./dist/src/mcp/index.js"
+    },
+    "./workflows": {
+      "types": "./dist/src/workflows/index.d.ts",
+      "import": "./dist/src/workflows/index.js"
+    },
+    "./modes": {
+      "types": "./dist/src/modes/index.d.ts",
+      "import": "./dist/src/modes/index.js"
+    },
+    "./team": {
+      "types": "./dist/src/team/index.d.ts",
+      "import": "./dist/src/team/index.js"
+    },
     "./package.json": "./package.json"
   },
   "bin": {
@@ -77,9 +110,16 @@
     "release:archive": "node ./scripts/release-archive.mjs",
     "check": "npm run build && npm test && npm run smoke && npm run parity"
   },
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "license": "MIT",
-  "keywords": ["cursor", "cursor-agent", "orchestration", "cli"] ,
+  "keywords": [
+    "cursor",
+    "cursor-agent",
+    "orchestration",
+    "cli"
+  ],
   "devDependencies": {
     "@types/node": "^20.17.0",
     "typescript": "^5.7.0",

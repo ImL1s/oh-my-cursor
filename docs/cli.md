@@ -16,12 +16,12 @@ OMX-aligned entry:
 ```sh
 omcu                         # interactive cursor-agent (+ --plugin-dir)
 omcu "fix the failing tests" # interactive with initial prompt
-omcu --madmax                # full-open break-glass
+omcu --madmax                # break-glass: --yolo --sandbox disabled
 omcu --madmax --direct …     # never wrap tmux
 omcu --madmax --tmux …       # require tmux (fail closed if missing)
 ```
 
-`--madmax` maps to Cursor `--force --sandbox disabled` and always loads this package via `--plugin-dir`. `--approve-mcps` / `--trust` remain opt-in when you pass them explicitly. It is a host launcher, not a mode FSM, and never stamps `verified`. Default transport is detached tmux then attach (like OMX/OMG); auto policy may fall back to direct if tmux is missing; explicit `--tmux` does not.
+`--madmax` maps to Cursor `--yolo --sandbox disabled` and always loads this package via `--plugin-dir`. Explicit deny rules still apply; `--approve-mcps` / `--trust` remain opt-in when you pass them explicitly (before `--`). Arguments after `--` are opaque. Launch policy: `OMCU_LAUNCH_POLICY` / `--direct` / `--tmux` (auto falls back; explicit `--tmux` fails closed). It is a host launcher, not a mode FSM, and never stamps `verified`.
 
 ## Lifecycle and capabilities
 

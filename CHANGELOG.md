@@ -4,13 +4,18 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## Unreleased
 
+## 0.3.0 - 2026-07-24
+
+Host-launch parity release (OMX/Sol GRAM/POL/LIFE/SAFE/OBS).
+
+
 ### Added
 
 - OMX-aligned host launch: bare `omcu` / `omcu "<prompt>"` opens interactive
-  `cursor-agent` with `--plugin-dir`; `omcu --madmax` is break-glass full-open
-  (`--force --sandbox disabled`; `--approve-mcps`/`--trust` remain opt-in) with
-  detached-tmux-then-attach auto policy (`--direct` / `--tmux`; explicit `--tmux`
-  fails closed).
+  `cursor-agent` with `--plugin-dir`; `omcu --madmax` maps to
+  `--yolo --sandbox disabled` (Cursor explicit deny rules remain;
+  `--approve-mcps`/`--trust` stay opt-in) with detached-tmux-then-attach auto
+  policy (`--direct` / `--tmux`; explicit `--tmux` fails closed).
 
 ### Changed
 

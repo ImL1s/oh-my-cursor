@@ -28,7 +28,8 @@ export const HELP = `oh-my-cursor (omcu)
 Host launch (OMX-aligned):
   omcu                         interactive cursor-agent (+ --plugin-dir)
   omcu "prompt"                interactive with initial prompt
-  omcu --madmax [args…]        full-open break-glass (--force --sandbox disabled)
+  omcu --madmax [args…]        break-glass: --yolo --sandbox disabled
+                               (explicit deny rules remain; --approve-mcps/--trust opt-in)
   omcu --direct|--tmux …       launch policy (auto falls back; --tmux fails closed)
 
 Lifecycle / orchestration:
@@ -90,7 +91,7 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
       return 0;
     }
     if (argv.length === 1 && ['version', '--version', '-v'].includes(argv[0] ?? '')) {
-      io.stdout(`${dependencies.version ?? '0.2.1'}\n`);
+      io.stdout(`${dependencies.version ?? '0.3.0'}\n`);
       return 0;
     }
     if (shouldHostLaunch(argv)) {
@@ -98,7 +99,7 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
     }
     const parsed = parseCli(argv);
     if (parsed.command === 'help') { io.stdout(HELP); return 0; }
-    if (parsed.command === 'version') { io.stdout(`${dependencies.version ?? '0.2.1'}\n`); return 0; }
+    if (parsed.command === 'version') { io.stdout(`${dependencies.version ?? '0.3.0'}\n`); return 0; }
     if (parsed.command === 'capabilities' && parsed.action === 'discover') {
       const result = await discoverCursorCapabilities(adapter, dependencies.capabilityLock ?? defaultLock(packageRoot), cwd);
       printJson(io, result); return result.verified ? 0 : 1;
