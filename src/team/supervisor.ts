@@ -1,6 +1,8 @@
 import { buildPrintArgv } from '../host/cursor-agent.js';
 import { assertExclusivePathClaims } from '../modes/path-claims.js';
+import type { StateRoot } from '../runtime/state-root.js';
 import type { TeamManifestRepository } from './manifest.js';
+import { initializeTeamState, removeTeamState, teamExists } from './state-root.js';
 import type { ProcessGroupKiller, TeamCollection, TeamCommandRunner, TeamManifest, TeamWorkerManifest, TeamWorkerSpec } from './types.js';
 
 const STOP_POLLS = 5;
@@ -13,12 +15,41 @@ export class ExperimentalTmuxTeamSupervisor {
     private readonly now: () => Date = () => new Date(),
     private readonly killGroup: ProcessGroupKiller = (pgid, signal) => process.kill(-pgid, signal),
     private readonly sleep: (milliseconds: number) => Promise<void> = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+    private readonly coordinationRoot: StateRoot | null = null,
   ) {}
 
   async start(teamId: string, workers: readonly TeamWorkerSpec[]): Promise<TeamManifest> {
     if (this.manifests.exists(teamId)) throw new Error('E_TEAM_EXISTS');
+    if (this.coordinationRoot !== null && teamExists(this.coordinationRoot, teamId)) throw new Error('E_TEAM_STATE_EXISTS');
     validateWorkers(workers);
     const session = `omcu-${teamId}`;
+    const createdAt = this.now().toISOString();
+    let coordinationInitialized = false;
+    if (this.coordinationRoot !== null) {
+      const inboxContents: Record<string, string> = {};
+      for (const worker of workers) {
+        inboxContents[worker.id] = [
+          `# Worker inbox — ${worker.id}`,
+          '',
+          `Team: ${teamId}`,
+          `Objective: ${worker.objective}`,
+          `Owned paths: ${worker.owned_paths.join(', ')}`,
+          '',
+          'Experimental local tmux coordination (`omcu team`), not a native Cursor team.',
+          'Use `omcu team api` for mailbox/tasks. Never stamp verified.',
+          '',
+        ].join('\n');
+      }
+      initializeTeamState(this.coordinationRoot, {
+        teamName: teamId,
+        task: workers.map((worker) => worker.objective).join(' | '),
+        workers: workers.map((worker) => ({ name: worker.id, owned_paths: worker.owned_paths })),
+        createdAt,
+        tmuxSession: session,
+        inboxContents,
+      });
+      coordinationInitialized = true;
+    }
     const workerManifests: TeamWorkerManifest[] = [];
     let sessionStarted = false;
     try {
@@ -40,10 +71,13 @@ export class ExperimentalTmuxTeamSupervisor {
         const pgid = await this.observeProcessGroup(panePid, worker.cwd);
         workerManifests.push({ id: worker.id, cwd: worker.cwd, owned_paths: [...worker.owned_paths], pane_target: paneTarget, pane_pid: panePid, process_group_id: pgid, argv });
       }
-      const manifest: TeamManifest = { schema_version: 1, team_id: teamId, tmux_session: session, capability_tier: 'experimental-local', native_cursor_team: false, workers: workerManifests, created_at: this.now().toISOString(), stopping_at: null, stopping_worker_ids: null, stopped_at: null };
+      const manifest: TeamManifest = { schema_version: 1, team_id: teamId, tmux_session: session, capability_tier: 'experimental-local', native_cursor_team: false, workers: workerManifests, created_at: createdAt, stopping_at: null, stopping_worker_ids: null, stopped_at: null };
       this.manifests.write(manifest);
       return manifest;
     } catch (error) {
+      if (coordinationInitialized && this.coordinationRoot !== null) {
+        try { removeTeamState(this.coordinationRoot, teamId); } catch { /* best-effort rollback */ }
+      }
       if (sessionStarted) await this.cleanupFailedStart(session, workerManifests, workers[0]?.cwd ?? process.cwd(), error);
       throw error;
     }

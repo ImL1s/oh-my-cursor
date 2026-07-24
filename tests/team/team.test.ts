@@ -157,6 +157,26 @@ describe('experimental tmux team supervisor', () => {
     expect(invoked).toBe(false);
   });
 
+  it('initializes mailbox and worker inboxes on start when coordination root is provided', async () => {
+    const state = fixture();
+    const root = projectStateRoot(state.workspace);
+    const supervisor = new ExperimentalTmuxTeamSupervisor(
+      new TeamManifestStore(root),
+      state.runner,
+      () => new Date('2026-07-24T12:00:00.000Z'),
+      (pgid) => state.aliveGroups.delete(pgid),
+      async () => undefined,
+      root,
+    );
+    const manifest = await supervisor.start('team-coord', workers(state.workspace));
+    expect(manifest.native_cursor_team).toBe(false);
+    expect(fs.existsSync(path.join(state.workspace, '.omcu/state/team/team-coord/config.json'))).toBe(true);
+    expect(fs.existsSync(path.join(state.workspace, '.omcu/state/team/team-coord/mailbox/one.json'))).toBe(true);
+    expect(fs.existsSync(path.join(state.workspace, '.omcu/state/team/team-coord/mailbox/leader-fixed.json'))).toBe(true);
+    expect(fs.readFileSync(path.join(state.workspace, '.omcu/state/team/team-coord/workers/one/inbox.md'), 'utf8')).toContain('Never stamp verified');
+    expect(JSON.parse(fs.readFileSync(path.join(state.workspace, '.omcu/state/team/team-coord/manifest.v2.json'), 'utf8')).native_cursor_team).toBe(false);
+  });
+
   it('rejects non-canonical and case-equivalent team owned paths before tmux', async () => {
     const state = fixture();
     let invoked = false;

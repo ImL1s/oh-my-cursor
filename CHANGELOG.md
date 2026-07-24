@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## Unreleased
 
+### Added
+
+- Experimental `omcu team api` (P0 OMX-shaped ops): `send-message`,
+  `mailbox-list`, `mailbox-mark-delivered`, `create-task`, `list-tasks`,
+  `claim-task`, `transition-task-status`, `release-task-claim`, `get-summary`,
+  `write-worker-inbox`. Durable state under `.omcu/state/team/<team>/`
+  (mailbox, tasks, workers/inbox.md). `team start` initializes inboxes.
+  Claim/transition/release failures are outer `ok:false` (non-zero exit).
+  Still experimental local tmux — `native_cursor_team: false`; never stamps
+  `verified`. Remaining OMX ops / dispatch / heartbeats are P1+.
+
 ## 0.3.0 - 2026-07-24
 
 Host-launch parity release (OMX/Sol GRAM/POL/LIFE/SAFE/OBS).

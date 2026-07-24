@@ -46,7 +46,7 @@ Workflow receipts, mode results, team collection, hooks, and MCP proposals delib
 
 `src/modes/` contains RALPLAN, Ralph, worktree-based ULW, and advisory plan/review/QA/acceptance gates. These are OMCU implementations, not documented native Cursor workflow commands.
 
-`src/team/` supervises an experimental tmux session. It records pane process groups, rejects overlapping path ownership, captures output, and reports `native_cursor_team: false`. Cursor's documented subagent surface remains the preferred in-agent parallelism mechanism.
+`src/team/` supervises an experimental tmux session and an OMX-shaped coordination data plane under `.omcu/state/team/<team>/` (mailbox, tasks, worker inboxes) exposed via `omcu team api` (P0). It records pane process groups, rejects overlapping path ownership, captures output, and reports `native_cursor_team: false`. Team collect/api never stamp `verified`. Cursor's documented subagent surface remains the preferred in-agent parallelism mechanism.
 
 ### Project services
 

@@ -52,12 +52,14 @@ Lifecycle / orchestration:
   omcu autopilot|pipeline ...                        experimental advisory pipeline
   omcu persist start|status|done|stop ...            opt-in boulder-never-stops loop (hooks)
   omcu team start|run|status|collect|stop ...        experimental local tmux; not native
+  omcu team api <op> --input '<json>'                OMX-shaped mailbox/tasks (P0)
   omcu review|qa|accept|integrate|ask ...             Cursor-backed role prompts
 
 Truth markers:
   Host launch / --madmax is not a mode FSM and never stamps verified.
   Workflow, mode, team, and MCP outputs never self-assert verified state.
   Team is experimental local tmux orchestration, not a native Cursor team.
+  Team api never stamps verified; native_cursor_team remains false.
   Notification dispatch is unsupported until an explicit transport is configured in code.
 `;
 

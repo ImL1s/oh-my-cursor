@@ -1,5 +1,10 @@
 # oh-my-cursor README translations
 
+<p align="center">
+  <img src="../../assets/omcu-character.png" alt="oh-my-cursor character" width="300">
+</p>
+
+
 English | [简体中文](./README.zh.md) | [繁體中文](./README.zh-TW.md)
 
 Localized copies of the repository README and selected docs. **English is canonical** for behavior, CLI flags, and release truth.

@@ -1,9 +1,9 @@
 import crypto from 'node:crypto';
 import { buildPrintArgv } from '../host/cursor-agent.js';
 import { AutopilotPipeline, CursorWorktreeUlw, evaluateGate, runRalph, runRalplan, type AdvisoryGate, type UlwWorkerSpec } from '../modes/index.js';
-import { ExperimentalTmuxTeamSupervisor, TeamManifestStore, type TeamWorkerSpec } from '../team/index.js';
+import { executeTeamApiOperation, ExperimentalTmuxTeamSupervisor, TEAM_API_HELP, TeamManifestStore, type TeamWorkerSpec } from '../team/index.js';
 import { planWorkflow, replayWorkflow, validateWorkflowDefinition, WorkflowPersistenceStore, WorkflowRunner, type WorkflowDefinition, type WorkflowExecutionLease } from '../workflows/index.js';
-import { integerOption, jsonOption, option, requiredOption } from './parser.js';
+import { hasFlag, integerOption, jsonOption, option, requiredOption } from './parser.js';
 import { commandRunner, printJson, readJsonFile, type CliContext } from './shared.js';
 
 export async function handleOrchestration(command: string, action: string | null, args: readonly string[], context: CliContext): Promise<number | null> {
@@ -77,8 +77,21 @@ async function handleUlw(args: readonly string[], context: CliContext): Promise<
 }
 
 async function handleTeam(action: string | null, args: readonly string[], context: CliContext): Promise<number> {
+  if (action === 'api') {
+    if (hasFlag(args, '--help') || hasFlag(args, '-h') || args[0] === 'help') {
+      context.io.stdout(TEAM_API_HELP);
+      return 0;
+    }
+    const operation = option(args, '--op') ?? teamApiPositionalOperation(args);
+    if (operation === undefined) throw new Error('E_TEAM_API_OPERATION_REQUIRED');
+    const input = (jsonOption(args, '--input', {}) ?? {}) as Record<string, unknown>;
+    if (input === null || typeof input !== 'object' || Array.isArray(input)) throw new Error('E_TEAM_API_INPUT_INVALID');
+    const envelope = await executeTeamApiOperation(operation, input, context.root);
+    printJson(context.io, envelope);
+    return envelope.ok ? 0 : 1;
+  }
   const store = new TeamManifestStore(context.root);
-  const supervisor = new ExperimentalTmuxTeamSupervisor(store, commandRunner);
+  const supervisor = new ExperimentalTmuxTeamSupervisor(store, commandRunner, undefined, undefined, undefined, context.root);
   const id = requiredOption(args, '--id');
   if (action === 'start' || action === 'run') {
     const raw = jsonOption(args, '--workers-json') as readonly Omit<TeamWorkerSpec, 'cwd'>[];
@@ -120,4 +133,14 @@ async function handlePrompt(command: string, args: readonly string[], context: C
   if (result.stdout) context.io.stdout(result.stdout.endsWith('\n') ? result.stdout : `${result.stdout}\n`);
   if (result.stderr) context.io.stderr(result.stderr.endsWith('\n') ? result.stderr : `${result.stderr}\n`);
   return result.code;
+}
+
+function teamApiPositionalOperation(args: readonly string[]): string | undefined {
+  for (let index = 0; index < args.length; index += 1) {
+    const value = args[index]!;
+    if (value === '--input' || value === '--op') { index += 1; continue; }
+    if (value.startsWith('--')) continue;
+    return value;
+  }
+  return undefined;
 }

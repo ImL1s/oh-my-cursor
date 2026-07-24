@@ -211,6 +211,10 @@ omcu team start --id <team-id> --workers-json '<json-array>'
 omcu team status --id <team-id>
 omcu team collect --id <team-id>
 omcu team stop --id <team-id>
+omcu team api <operation> --input '<json>'
+omcu team api --help
 ```
 
-`team run` is an alias for `team start`; it does not collect or verify results. The supervisor creates `cursor-agent --print --mode ask` processes, records pane process groups, and reports `native_cursor_team: false`.
+`team run` is an alias for `team start`; it does not collect or verify results. The supervisor creates `cursor-agent --print --mode ask` processes, records pane process groups, initializes `.omcu/state/team/<id>/` (mailbox, tasks, worker `inbox.md`), and reports `native_cursor_team: false`.
+
+`omcu team api` is the OMX-shaped coordination data plane (P0): send/list/ack mailbox messages, create/list/claim/transition/release tasks, get-summary, and write-worker-inbox. It never stamps `verified`. It is not a native Cursor team product — prefer Cursor-native subagents for in-agent parallelism when available.

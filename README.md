@@ -1,5 +1,10 @@
 # oh-my-cursor
 
+<p align="center">
+  <img src="assets/omcu-character.png" alt="oh-my-cursor character" width="300">
+</p>
+
+
 English | [简体中文](docs/readme/README.zh.md) | [繁體中文](docs/readme/README.zh-TW.md)
 
 Capability-grounded orchestration for Cursor Agent.
