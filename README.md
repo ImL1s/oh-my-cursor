@@ -8,7 +8,7 @@ Capability-grounded orchestration for Cursor Agent.
 - CLI: `omcu`
 - Version: `0.2.1`
 - Node.js: 20+
-- Pinned Cursor Agent: `2026.07.20-8cc9c0b`
+- Pinned Cursor Agent: `2026.07.23-e383d2b`
 - Project state: `.omcu/` (owner-only, CLI-authored)
 
 Oh My Cursor wraps documented Cursor Agent capabilities and labels everything else honestly. It supports interactive and headless sessions, Ask/Plan modes, resume/continue, plugins, skills, hooks, MCP, subagents, workflow evidence, and local recovery. It does **not** claim a documented native Cursor team/workflow command, a native memory/notification CLI, or a security-isolation boundary.

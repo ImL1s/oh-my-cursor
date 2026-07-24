@@ -124,7 +124,13 @@ node dist/src/setup/script-entry.js doctor \
   --project /absolute/path/to/project
 ```
 
-Doctor checks the plugin manifest, Cursor version/status/help, whether Cursor accepts the `--plugin-dir` argument, rules, hooks, MCP configuration, and project state. Cursor currently returns success for `--plugin-dir … --help` even when a directory does not exist, so that probe is reported as an honest warning and never claimed as runtime activation proof. Exit `0` is clean, `2` contains warnings only, and `1` contains a failure.
+Doctor checks the plugin manifest, Cursor version/status/help, whether Cursor
+accepts the `--plugin-dir` argument (pass when accepted; the message still notes
+that session skill activation is **not** proven by `--help`), rules, hooks, MCP
+configuration, and project state. Soft warnings do **not** fail a successful
+install/bootstrap exit code: the installer exits `0` after writing a receipt
+even when doctor reports warnings. Standalone `omcu doctor` still exits `0`
+when clean, `2` for warnings only, and `1` for failures.
 
 For an installed copy, use the current receipt to verify immutable stage bytes and CLI link identity through the setup library or repeat doctor against the installed stage printed in the receipt.
 

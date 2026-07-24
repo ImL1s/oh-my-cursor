@@ -4,7 +4,7 @@ English | [简体中文](./cursor-integration.zh.md) | [繁體中文](./cursor-i
 
 ## Verified host surface
 
-OMCU pins Cursor Agent `2026.07.20-8cc9c0b`. Run:
+OMCU pins Cursor Agent `2026.07.23-e383d2b`. Run:
 
 ```sh
 omcu capabilities discover

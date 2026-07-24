@@ -26,7 +26,7 @@ function objective(args: readonly string[]): string {
     if (VALUE_OPTIONS.has(value)) { index += 1; continue; }
     if (!value.startsWith('--')) return value;
   }
-  throw new Error('E_OBJECTIVE_REQUIRED');
+  throw new Error('E_OBJECTIVE_REQUIRED: pass --objective <text> (or a bare goal argument)');
 }
 function readDefinition(store: WorkflowPersistenceStore, args: readonly string[]): WorkflowDefinition {
   return store.readDefinition(requiredOption(args, '--name'), option(args, '--version') ?? '1');

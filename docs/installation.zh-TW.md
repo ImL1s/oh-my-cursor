@@ -124,7 +124,11 @@ node dist/src/setup/script-entry.js doctor \
   --project /absolute/path/to/project
 ```
 
-Doctor 會檢查外掛 manifest、Cursor 版本/狀態/help、Cursor 是否接受 `--plugin-dir` 參數、rules、hooks、MCP 設定與專案狀態。目前 Cursor 對不存在的目錄執行 `--plugin-dir … --help` 仍回傳成功，因此該探測會如實回報為警告，絕不宣稱為執行時啟用證明。結束碼 `0` 為乾淨，`2` 僅警告，`1` 為失敗。
+Doctor 會檢查外掛 manifest、Cursor 版本/狀態/help、Cursor 是否接受 `--plugin-dir`
+參數（接受即為 pass；文案仍註明 session skill 啟用**不能**靠 `--help` 證明）、
+rules、hooks、MCP 設定與專案狀態。軟警告**不會**讓成功的安裝/bootstrap 以非零
+結束：寫入收據後安裝程式仍結束碼 `0`。單獨執行 `omcu doctor` 時仍是：乾淨 `0`、
+僅警告 `2`、失敗 `1`。
 
 對已安裝副本，使用目前收據透過 setup 函式庫驗證不可變階段位元組與 CLI 連結身分，或對收據列印的已安裝階段重複 doctor。
 

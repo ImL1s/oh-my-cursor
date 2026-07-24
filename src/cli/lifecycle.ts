@@ -58,5 +58,12 @@ export function uninstallExitCode(status: string): number {
 }
 
 export function installExitCode(result: Pick<InstallResult, 'doctor'>): number {
-  return result.doctor?.exit_code ?? 0;
+  // Successful installs must exit 0 even when post-install doctor only warns.
+  // Doctor soft-warns (exit 2) are advisory; failures (ok=false / exit 1) fail
+  // the install path. Returning 2 here made `curl | bash` bootstrap look broken
+  // after a receipt was already written.
+  const doctor = result.doctor;
+  if (doctor === null || doctor === undefined) return 0;
+  if (!doctor.ok || doctor.exit_code === 1) return 1;
+  return 0;
 }

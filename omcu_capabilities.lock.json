@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "host": "cursor-agent",
-  "host_version": "2026.07.20-8cc9c0b",
-  "observed_at": "2026-07-23T00:00:00.000Z",
+  "host_version": "2026.07.23-e383d2b",
+  "observed_at": "2026-07-24T00:00:00.000Z",
   "capabilities": {
     "json_output": { "verified": true, "argv": ["--print", "--output-format", "json"] },
     "stream_json_output": { "verified": true, "argv": ["--print", "--output-format", "stream-json"] },

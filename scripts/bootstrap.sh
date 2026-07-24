@@ -60,6 +60,19 @@ if [[ -n "${OMCU_PROJECT:-}" ]]; then
 fi
 
 log "running receipt-based installer"
+set +e
 bash "$WORK/package/scripts/install.sh" "${INSTALL_ARGS[@]}"
+INSTALL_RC=$?
+set -e
+# 0 = success (including doctor soft-warnings on current installers).
+# 2 = legacy installers that propagated doctor warn exit codes after writing a
+#     receipt; treat as success so `curl | bash` does not look failed.
+if [[ "$INSTALL_RC" -eq 0 ]]; then
+  :
+elif [[ "$INSTALL_RC" -eq 2 ]]; then
+  log "installer reported doctor warnings (exit 2); install receipt was still written"
+else
+  fail "installer failed (exit ${INSTALL_RC})"
+fi
 
-log "installed. Ensure ~/.local/bin is on PATH, then run: omcu --version"
+log "installed. Ensure ~/.local/bin is on PATH, then run: omcu --version && omcu doctor"

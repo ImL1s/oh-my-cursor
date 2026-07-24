@@ -6,7 +6,18 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
-- No unreleased changes recorded.
+- Capability lock refreshed to Cursor Agent `2026.07.23-e383d2b` (help surfaces
+  unchanged; prior pin `2026.07.20-8cc9c0b` would fail `verified` on current hosts).
+
+### Fixed
+
+- Install / bootstrap no longer exit `2` when post-install doctor only soft-warns.
+  A written receipt is treated as success (`curl | bash` no longer looks failed).
+  `omcu doctor` still exits `2` for warnings when run on its own.
+- `plugin_dir` doctor check: accepting `--plugin-dir` is a **pass** with an
+  explicit note that session skill activation is not proven by `--help` (was a
+  permanent warn on every healthy install).
+- Clearer `E_OBJECTIVE_REQUIRED` usage hint for `omcu autopilot` / related modes.
 
 ## 0.2.1 - 2026-07-24
 

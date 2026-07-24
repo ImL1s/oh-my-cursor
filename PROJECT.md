@@ -29,7 +29,7 @@ Oh My Cursor (`omcu`) is a capability-grounded orchestration foundation for Curs
 
 ## Host baseline
 
-The repository pins Cursor Agent `2026.07.20-8cc9c0b`. A different version is not automatically unsafe, but every locked capability is downgraded until the lock is deliberately refreshed and tested.
+The repository pins Cursor Agent `2026.07.23-e383d2b`. A different version is not automatically unsafe, but every locked capability is downgraded until the lock is deliberately refreshed and tested.
 
 Cursor documentation confirms interactive and non-interactive CLI operation, session resume, Ask/Plan modes, plugins, rules, skills, hooks, MCP, subagents, and terminal tools. It does not document a native `team` or general workflow-engine command in the pinned CLI surface. OMCU therefore labels worktree and tmux coordination as local implementations.
 

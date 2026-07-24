@@ -20,7 +20,7 @@ cursor-agent --version
 node dist/bin/omcu.js capabilities discover
 ```
 
-The live host must exactly match `2026.07.20-8cc9c0b`, and discovery must return `"verified": true`. A version or help mismatch is capability drift, not a soft success.
+The live host must exactly match `2026.07.23-e383d2b`, and discovery must return `"verified": true`. A version or help mismatch is capability drift, not a soft success.
 
 Then run the setup doctor from the source checkout:
 
@@ -71,7 +71,7 @@ Verified locally on 2026-07-23 (Asia/Taipei) from an unborn repository with no c
 | --- | --- |
 | `npm run check` | PASS: TypeScript build, 21 test files / 100 tests, CLI smoke, and CLI parity |
 | `npm pack --dry-run --json` | PASS: `iml1s-oh-my-cursor-0.2.1.tgz`, 270 entries; all 13 README-reachable Markdown files are included |
-| `cursor-agent --version` | PASS: `2026.07.20-8cc9c0b` |
+| `cursor-agent --version` | PASS: `2026.07.23-e383d2b` |
 | `omcu capabilities discover` | PASS: exact version/help match, `verified: true` |
 | `omcu doctor` | PASS WITH HONEST WARNING: exit `2`, capability tier 3; local plugin/config checks pass while `--help` alone leaves runtime plugin activation explicitly unproven |
 | Isolated source install/update/readback/uninstall | PASS: `0.2.1`, receipt removal without collisions; project state preserved |

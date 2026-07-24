@@ -124,7 +124,11 @@ node dist/src/setup/script-entry.js doctor \
   --project /absolute/path/to/project
 ```
 
-Doctor 会检查插件 manifest、Cursor 版本/状态/help、Cursor 是否接受 `--plugin-dir` 参数、rules、hooks、MCP 配置与项目状态。目前 Cursor 对不存在的目录执行 `--plugin-dir … --help` 仍返回成功，因此该探测会如实报告为警告，绝不声称运行时启用证明。退出码 `0` 为干净，`2` 仅警告，`1` 为失败。
+Doctor 会检查插件 manifest、Cursor 版本/状态/help、Cursor 是否接受 `--plugin-dir`
+参数（接受即为 pass；文案仍注明 session skill 启用**不能**靠 `--help` 证明）、
+rules、hooks、MCP 配置与项目状态。软警告**不会**让成功的安装/bootstrap 以非零
+退出：写入收据后安装程序仍退出 `0`。单独运行 `omcu doctor` 时仍是：干净 `0`、
+仅警告 `2`、失败 `1`。
 
 对已安装副本，使用当前收据通过 setup 库验证不可变阶段字节与 CLI 链接身份，或对收据打印的已安装阶段重复 doctor。
 

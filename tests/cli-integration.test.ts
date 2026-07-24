@@ -97,9 +97,10 @@ describe('integrated CLI surface', () => {
     expect(uninstallExitCode('completed_with_collisions')).toBe(2);
   });
 
-  it('propagates post-install doctor warning and failure exit codes', () => {
+  it('exits 0 for post-install doctor soft-warnings and fails only on hard doctor failure', () => {
     expect(installExitCode({ doctor: null })).toBe(0);
-    expect(installExitCode({ doctor: { ok: true, exit_code: 2, checks: [] } })).toBe(2);
+    expect(installExitCode({ doctor: { ok: true, exit_code: 2, checks: [] } })).toBe(0);
+    expect(installExitCode({ doctor: { ok: true, exit_code: 0, checks: [] } })).toBe(0);
     expect(installExitCode({ doctor: { ok: false, exit_code: 1, checks: [] } })).toBe(1);
   });
 

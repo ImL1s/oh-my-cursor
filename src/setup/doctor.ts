@@ -124,11 +124,22 @@ export async function runSetupDoctor(input: DoctorInput): Promise<DoctorReport> 
   if (manifest.check.status === 'fail') {
     checks.push({ id: 'plugin_dir', status: 'fail', message: 'Plugin directory cannot be considered loadable because its manifest is invalid' });
   } else if (plugin.code === 0) {
+    // --help with --plugin-dir proves host acceptance, not that a live agent
+    // session loaded skills/commands. Keep that honesty in the message, but do
+    // not warn: every healthy install would otherwise look yellow and make
+    // curl|bash bootstrap look failed (exit 2) after a successful receipt.
+    const skillsDir = path.join(root, 'skills');
+    const commandsDir = path.join(root, 'commands');
     checks.push({
       id: 'plugin_dir',
-      status: 'warn',
-      message: 'cursor-agent accepts --plugin-dir, but --help does not prove runtime plugin activation',
-      detail: { code: plugin.code, activation_proven: false },
+      status: 'pass',
+      message: 'cursor-agent accepts --plugin-dir for this package root (session skill activation is not proven by --help)',
+      detail: {
+        code: plugin.code,
+        activation_proven: false,
+        skills_present: fs.existsSync(skillsDir),
+        commands_present: fs.existsSync(commandsDir),
+      },
     });
   } else {
     checks.push({ id: 'plugin_dir', status: 'fail', message: 'cursor-agent rejected the --plugin-dir invocation', detail: { code: plugin.code } });

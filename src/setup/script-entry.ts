@@ -86,7 +86,16 @@ async function main(argv: readonly string[]): Promise<number> {
       runDoctor: !argv.includes('--no-doctor'),
     });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-    return result.doctor?.exit_code === 2 ? 2 : 0;
+    const doctor = result.doctor;
+    if (doctor !== null && doctor.exit_code === 2) {
+      process.stderr.write(
+        'omcu install: completed with doctor warnings (CLI is ready; run `omcu doctor` for details)\n',
+      );
+    }
+    // Exit 0 on soft doctor warnings so bootstrap (`curl | bash`) and automation
+    // treat a written receipt as success. Hard doctor failures already throw
+    // E_POST_INSTALL_DOCTOR_FAILED before this point.
+    return doctor !== null && !doctor.ok ? 1 : 0;
   } finally {
     cleanup();
   }

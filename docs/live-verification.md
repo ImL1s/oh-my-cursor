@@ -13,7 +13,7 @@ cursor-agent --version
 cursor-agent status
 ```
 
-Node must be 20 or newer. The pinned Cursor version is `2026.07.20-8cc9c0b`. Authentication status may expose account information; do not paste unredacted output into public logs.
+Node must be 20 or newer. The pinned Cursor version is `2026.07.23-e383d2b`. Authentication status may expose account information; do not paste unredacted output into public logs.
 
 ## Capability probe
 

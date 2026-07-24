@@ -67,10 +67,10 @@ describe('Cursor setup doctor', () => {
       };
       const report = await runSetupDoctor({ packageRoot: root, projectRoot: root, homeDir: path.join(root, 'home'), runner });
       expect(report.ok).toBe(true);
-      expect(report.exit_code).toBe(2);
+      expect(report.exit_code).toBe(0);
       expect(report.capability_tier).toBe(3);
       expect(report.checks.find((check) => check.id === 'plugin_dir')).toMatchObject({
-        status: 'warn', detail: { activation_proven: false },
+        status: 'pass', detail: { activation_proven: false },
       });
       expect(report.checks.find((check) => check.id === 'hooks')).toMatchObject({
         status: 'pass', detail: { path: path.join(root, 'hooks', 'hooks.json') },

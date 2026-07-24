@@ -4,7 +4,7 @@ English: [cursor-integration.md](./cursor-integration.md) · [简体中文](./cu
 
 ## 已驗證的主機表面
 
-OMCU 釘選 Cursor Agent `2026.07.20-8cc9c0b`。執行：
+OMCU 釘選 Cursor Agent `2026.07.23-e383d2b`。執行：
 
 ```sh
 omcu capabilities discover
