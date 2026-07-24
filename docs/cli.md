@@ -9,6 +9,20 @@ omcu --help
 omcu --version
 ```
 
+## Host launch (interactive / madmax)
+
+OMX-aligned entry:
+
+```sh
+omcu                         # interactive cursor-agent (+ --plugin-dir)
+omcu "fix the failing tests" # interactive with initial prompt
+omcu --madmax                # full-open break-glass
+omcu --madmax --direct …     # never wrap tmux
+omcu --madmax --tmux …       # require tmux (fail closed if missing)
+```
+
+`--madmax` maps to Cursor `--force --sandbox disabled --approve-mcps --trust` and always loads this package via `--plugin-dir`. It is a host launcher, not a mode FSM, and never stamps `verified`. Default transport is detached tmux then attach (like OMX/OMG); auto policy may fall back to direct if tmux is missing; explicit `--tmux` does not.
+
 ## Lifecycle and capabilities
 
 | Command | Purpose |

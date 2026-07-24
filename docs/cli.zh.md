@@ -9,6 +9,20 @@ omcu --help
 omcu --version
 ```
 
+## Host 启动（交互 / madmax）
+
+与 OMX 对齐的入口：
+
+```sh
+omcu                         # 交互式 cursor-agent（含 --plugin-dir）
+omcu "修复失败测试"            # 带初始 prompt 的交互
+omcu --madmax                # full-open break-glass
+omcu --madmax --direct …     # 不包 tmux
+omcu --madmax --tmux …       # 强制 tmux（缺失则失败）
+```
+
+`--madmax` 映射为 Cursor `--force --sandbox disabled --approve-mcps --trust`，并始终通过 `--plugin-dir` 加载本包。它是 host launcher，不是 mode FSM，也不会盖 `verified`。默认传输为 detached tmux 再 attach；auto 在无 tmux 时可回退 direct；显式 `--tmux` 不会回退。
+
 ## 生命周期与能力
 
 | 命令 | 用途 |

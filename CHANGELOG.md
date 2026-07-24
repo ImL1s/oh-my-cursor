@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## Unreleased
 
+### Added
+
+- OMX-aligned host launch: bare `omcu` / `omcu "<prompt>"` opens interactive
+  `cursor-agent` with `--plugin-dir`; `omcu --madmax` is break-glass full-open
+  (`--force --sandbox disabled --approve-mcps --trust`) with detached-tmux-then-attach
+  auto policy (`--direct` / `--tmux`; explicit `--tmux` fails closed).
+
 ### Changed
 
 - Capability lock refreshed to Cursor Agent `2026.07.23-e383d2b` (help surfaces
