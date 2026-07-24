@@ -24,6 +24,23 @@ export interface TeamMailbox {
   readonly messages: readonly TeamMailboxMessage[];
 }
 
+function assertMailboxMessage(raw: unknown): TeamMailboxMessage {
+  if (raw === null || typeof raw !== 'object') throw new Error('E_TEAM_MAILBOX_CORRUPT');
+  const row = raw as Partial<TeamMailboxMessage>;
+  if (
+    typeof row.message_id !== 'string' || row.message_id.trim() === ''
+    || typeof row.from_worker !== 'string' || row.from_worker.trim() === ''
+    || typeof row.to_worker !== 'string' || row.to_worker.trim() === ''
+    || typeof row.body !== 'string'
+    || typeof row.created_at !== 'string' || row.created_at.trim() === ''
+  ) {
+    throw new Error('E_TEAM_MAILBOX_CORRUPT');
+  }
+  if (row.notified_at !== undefined && typeof row.notified_at !== 'string') throw new Error('E_TEAM_MAILBOX_CORRUPT');
+  if (row.delivered_at !== undefined && typeof row.delivered_at !== 'string') throw new Error('E_TEAM_MAILBOX_CORRUPT');
+  return row as TeamMailboxMessage;
+}
+
 function readMailboxUnlocked(root: StateRoot, teamName: string, workerName: string): TeamMailbox {
   const name = assertSafeWorkerName(workerName);
   const file = teamMailboxPath(root, teamName, name);
@@ -31,7 +48,7 @@ function readMailboxUnlocked(root: StateRoot, teamName: string, workerName: stri
   try {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<TeamMailbox>;
     if (parsed.worker !== name || !Array.isArray(parsed.messages)) throw new Error('E_TEAM_MAILBOX_CORRUPT');
-    return { worker: name, messages: parsed.messages as TeamMailboxMessage[] };
+    return { worker: name, messages: parsed.messages.map(assertMailboxMessage) };
   } catch (error) {
     if ((error as Error).message === 'E_TEAM_MAILBOX_CORRUPT') throw error;
     throw new Error('E_TEAM_MAILBOX_CORRUPT');
@@ -68,6 +85,9 @@ export async function sendDirectMessage(
 
   const config = readTeamConfig(root, teamName);
   if (config === null) throw new Error('E_TEAM_NOT_FOUND');
+  if (from !== LEADER_MAILBOX && !config.workers.some((worker) => worker.name === from)) {
+    throw new Error('E_TEAM_WORKER_NOT_FOUND');
+  }
   if (to !== LEADER_MAILBOX && !config.workers.some((worker) => worker.name === to)) {
     throw new Error('E_TEAM_WORKER_NOT_FOUND');
   }

@@ -175,6 +175,9 @@ export async function createTask(
     }
 
     const nextId = String(config.next_task_id);
+    if (readTaskUnlocked(root, teamName, nextId) !== null) {
+      throw new Error('E_TEAM_TASK_ID_COLLISION');
+    }
     const task: TeamTask = {
       id: nextId,
       subject,

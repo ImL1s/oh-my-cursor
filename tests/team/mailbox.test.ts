@@ -86,5 +86,14 @@ describe('team mailbox primitives', () => {
 
     fs.writeFileSync(teamMailboxPath(root, 'mail', 'two'), '{not-json', 'utf8');
     await expect(listMailboxMessages(root, 'mail', 'two')).rejects.toThrow('E_TEAM_MAILBOX_CORRUPT');
+
+    fs.writeFileSync(
+      teamMailboxPath(root, 'mail', 'one'),
+      JSON.stringify({ worker: 'one', messages: [{}] }),
+      'utf8',
+    );
+    await expect(listMailboxMessages(root, 'mail', 'one')).rejects.toThrow('E_TEAM_MAILBOX_CORRUPT');
+
+    await expect(sendDirectMessage(root, 'mail', 'ghost', 'two', 'nope')).rejects.toThrow('E_TEAM_WORKER_NOT_FOUND');
   });
 });

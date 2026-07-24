@@ -126,6 +126,14 @@ export async function executeTeamApiOperation(
         const subject = String(args.subject ?? '').trim();
         const description = String(args.description ?? '').trim();
         if (!teamName || !subject || !description) return fail(operation, 'invalid_input', 'team_name, subject, description are required');
+        if (args.owner !== undefined && typeof args.owner !== 'string') {
+          return fail(operation, 'invalid_input', 'owner must be a string when provided');
+        }
+        if (args.blocked_by !== undefined) {
+          if (!Array.isArray(args.blocked_by) || !args.blocked_by.every((entry) => typeof entry === 'string')) {
+            return fail(operation, 'invalid_input', 'blocked_by must be an array of strings when provided');
+          }
+        }
         const owner = typeof args.owner === 'string' ? args.owner : undefined;
         const blockedBy = Array.isArray(args.blocked_by) ? args.blocked_by.map(String) : undefined;
         const task = await createTask(root, teamName, {

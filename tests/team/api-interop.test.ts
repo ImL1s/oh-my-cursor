@@ -181,6 +181,27 @@ describe('team api interop (P0)', () => {
     expect(result.error.code).toBe('E_TEAM_WORKER_NOT_FOUND');
   });
 
+  it('rejects create-task when owner/blocked_by have wrong types', async () => {
+    const { root, teamName } = workspace('bad-types');
+    const badOwner = await executeTeamApiOperation('create-task', {
+      team_name: teamName,
+      subject: 'x',
+      description: 'y',
+      owner: 7 as unknown as string,
+    }, root);
+    expect(badOwner.ok).toBe(false);
+    if (!badOwner.ok) expect(badOwner.error.code).toBe('invalid_input');
+
+    const badBlocked = await executeTeamApiOperation('create-task', {
+      team_name: teamName,
+      subject: 'x',
+      description: 'y',
+      blocked_by: '1' as unknown as string[],
+    }, root);
+    expect(badBlocked.ok).toBe(false);
+    if (!badBlocked.ok) expect(badBlocked.error.code).toBe('invalid_input');
+  });
+
   it('returns message_not_found when marking unknown message delivered', async () => {
     const { root, teamName } = workspace('missing-msg');
     const result = await executeTeamApiOperation('mailbox-mark-delivered', {

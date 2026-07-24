@@ -99,6 +99,13 @@ export function readTeamConfig(root: StateRoot, teamName: string): TeamCoordinat
     if (parsed.schema_version !== 1 || parsed.name !== teamName || parsed.native_cursor_team !== false) {
       throw new Error('E_TEAM_CONFIG_INVALID');
     }
+    if (
+      typeof parsed.next_task_id !== 'number'
+      || !Number.isSafeInteger(parsed.next_task_id)
+      || parsed.next_task_id < 1
+    ) {
+      throw new Error('E_TEAM_CONFIG_INVALID');
+    }
     return parsed;
   } catch (error) {
     if ((error as Error).message === 'E_TEAM_CONFIG_INVALID') throw error;
