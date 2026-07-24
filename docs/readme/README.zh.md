@@ -132,3 +132,14 @@ node dist/bin/omcu.js capabilities discover
 - [变更记录](../../CHANGELOG.md)
 
 许可：[MIT](../../LICENSE)。
+
+## 语言
+
+| 语言 | README |
+| --- | --- |
+| English | [../../README.md](../../README.md) |
+| 简体中文 | [README.zh.md](./README.zh.md) |
+| 繁體中文 | [README.zh-TW.md](./README.zh-TW.md) |
+
+翻译文档索引与维护规则：[README.md](./README.md)。
+

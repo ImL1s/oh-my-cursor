@@ -86,7 +86,7 @@ ULW 在呼叫 worker 後保留每個 worktree，以便未提交變更與 detache
 <project>/.omcu/               runs、證據、workflows、復原、本機服務
 ```
 
-已完成的工作流程或子代理回應**不算** verified。權威序列为：
+已完成的工作流程或子代理回應**不算** verified。權威序列為：
 
 ```sh
 omcu state create --id release-0.1.0 --objective "verify release"
@@ -130,5 +130,16 @@ node dist/bin/omcu.js capabilities discover
 - [即時驗證](../live-verification.md)（僅英文）
 - [發布流程與產物](../releasing.zh-TW.md)
 - [變更紀錄](../../CHANGELOG.md)
+
+
+## 語言
+
+| 語言 | README |
+| --- | --- |
+| English | [../../README.md](../../README.md) |
+| 简体中文 | [README.zh.md](./README.zh.md) |
+| 繁體中文 | [README.zh-TW.md](./README.zh-TW.md) |
+
+翻譯文件索引與維護規則：[README.md](./README.md)。
 
 授權：[MIT](../../LICENSE)。
