@@ -1,5 +1,7 @@
 # Session recovery
 
+English | [简体中文](./recovery.zh.md) | [繁體中文](./recovery.zh-TW.md)
+
 Use Cursor's native session commands first:
 
 ```sh

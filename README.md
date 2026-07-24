@@ -1,5 +1,7 @@
 # oh-my-cursor
 
+English | [简体中文](docs/readme/README.zh.md) | [繁體中文](docs/readme/README.zh-TW.md)
+
 Capability-grounded orchestration for Cursor Agent.
 
 - Package: `@iml1s/oh-my-cursor`
@@ -136,5 +138,15 @@ node dist/bin/omcu.js capabilities discover
 - [Live verification](docs/live-verification.md)
 - [Release process and assets](docs/releasing.md)
 - [Changelog](CHANGELOG.md)
+
+## Languages
+
+| Language | README |
+| --- | --- |
+| English | [README.md](README.md) |
+| 简体中文 | [docs/readme/README.zh.md](docs/readme/README.zh.md) |
+| 繁體中文 | [docs/readme/README.zh-TW.md](docs/readme/README.zh-TW.md) |
+
+Translated docs index and maintenance rules: [docs/readme/README.md](docs/readme/README.md).
 
 License: [MIT](LICENSE).

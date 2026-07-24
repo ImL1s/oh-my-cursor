@@ -1,5 +1,7 @@
 # Release process
 
+English | [简体中文](./releasing.zh.md) | [繁體中文](./releasing.zh-TW.md)
+
 This process creates release assets without publishing them. Tagging, pushing, package publication, and marketplace submission are separate authorized actions.
 
 ## 1. Prepare

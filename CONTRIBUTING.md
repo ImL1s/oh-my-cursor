@@ -53,6 +53,10 @@ node dist/bin/omcu.js --version
 
 For host-facing changes, run `node dist/bin/omcu.js capabilities discover` against the pinned Cursor Agent and record the exact version. For lifecycle changes, use temporary `--home`, `--state-root`, and project directories. Never test installers against a developer's real home by default.
 
+## Locale / translations
+
+User-facing README copies and selected docs live under [`docs/readme/`](docs/readme/README.md). English is canonical; update English first, then mirror changes in `*.zh.md` and `*.zh-TW.md` twins. Keep identifiers literal (`omcu`, `cursor-agent`, `.omcu/`, package names). See the maintenance rules in [`docs/readme/README.md`](docs/readme/README.md).
+
 ## Documentation
 
 Document only commands present in the compiled CLI or lifecycle scripts. Test every example. Link host claims to official `cursor.com/docs` pages. State when a check could not run.

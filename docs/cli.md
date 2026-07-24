@@ -1,5 +1,7 @@
 # CLI reference
 
+English | [简体中文](./cli.zh.md) | [繁體中文](./cli.zh-TW.md)
+
 All commands operate on the current working directory unless a path option says otherwise. Project services write under `<cwd>/.omcu/`. Output is JSON except interactive Cursor sessions, rendered checkpoint text, and direct Cursor output.
 
 ```sh

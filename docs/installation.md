@@ -1,5 +1,7 @@
 # Installation and lifecycle
 
+English | [简体中文](./installation.zh.md) | [繁體中文](./installation.zh-TW.md)
+
 ## Requirements
 
 - Node.js 20 or newer

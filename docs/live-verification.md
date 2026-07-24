@@ -1,5 +1,7 @@
 # Live verification
 
+English | 繁中／简体尚未提供，請看英文
+
 Live verification proves only the environment and command that were actually tested. Keep host, project, install, and external publication proof separate.
 
 ## Environment

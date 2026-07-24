@@ -1,5 +1,7 @@
 # Cursor integration
 
+English | [简体中文](./cursor-integration.zh.md) | [繁體中文](./cursor-integration.zh-TW.md)
+
 ## Verified host surface
 
 OMCU pins Cursor Agent `2026.07.20-8cc9c0b`. Run:

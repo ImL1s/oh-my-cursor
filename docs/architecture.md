@@ -1,5 +1,7 @@
 # Architecture
 
+English | [简体中文](./architecture.zh.md) | [繁體中文](./architecture.zh-TW.md)
+
 Oh My Cursor is a local TypeScript package and Cursor plugin. It delegates agent behavior to Cursor Agent, but keeps its own evidence and lifecycle state separate.
 
 ## Boundaries
