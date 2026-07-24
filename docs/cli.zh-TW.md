@@ -21,7 +21,7 @@ omcu --madmax --direct …     # 不包 tmux
 omcu --madmax --tmux …       # 強制 tmux（缺失則失敗）
 ```
 
-`--madmax` 對應 Cursor `--force --sandbox disabled --approve-mcps --trust`，並一律以 `--plugin-dir` 載入本套件。這是 host launcher，不是 mode FSM，也不會蓋 `verified`。預設傳輸為 detached tmux 再 attach；auto 在無 tmux 時可回退 direct；顯式 `--tmux` 不會回退。
+`--madmax` 對應 Cursor `--force --sandbox disabled`，並一律以 `--plugin-dir` 載入本套件。`--approve-mcps` / `--trust` 僅在你顯式傳入時生效。這是 host launcher，不是 mode FSM，也不會蓋 `verified`。預設傳輸為 detached tmux 再 attach；auto 在無 tmux 時可回退 direct；顯式 `--tmux` 不會回退。
 
 ## 生命週期與能力
 

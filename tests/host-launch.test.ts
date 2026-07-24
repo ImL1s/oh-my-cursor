@@ -38,8 +38,6 @@ describe('OMCU host launch contract', () => {
       '--force',
       '--sandbox', 'disabled',
       'ship',
-      '--approve-mcps',
-      '--trust',
     ]);
   });
 
@@ -50,8 +48,6 @@ describe('OMCU host launch contract', () => {
       '--plugin-dir', '/pkg',
       '--force',
       '--sandbox', 'disabled',
-      '--approve-mcps',
-      '--trust',
     ]);
   });
 
@@ -70,8 +66,6 @@ describe('OMCU host launch contract', () => {
       '--plugin-dir', '/pkg',
       '--force',
       '--sandbox', 'disabled',
-      '--approve-mcps',
-      '--trust',
     ]);
   });
 });

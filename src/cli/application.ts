@@ -28,7 +28,7 @@ export const HELP = `oh-my-cursor (omcu)
 Host launch (OMX-aligned):
   omcu                         interactive cursor-agent (+ --plugin-dir)
   omcu "prompt"                interactive with initial prompt
-  omcu --madmax [args…]        full-open break-glass (--force --sandbox disabled …)
+  omcu --madmax [args…]        full-open break-glass (--force --sandbox disabled)
   omcu --direct|--tmux …       launch policy (auto falls back; --tmux fails closed)
 
 Lifecycle / orchestration:

@@ -199,12 +199,11 @@ export function normalizeCursorArgs(argv: readonly string[], options: {
   if (options.madmax) {
     if (!sawForce) out.unshift('--force');
     if (!sawSandbox) {
-      // Insert after force so help/banner stay readable.
       const forceAt = out.indexOf('--force');
       out.splice(forceAt + 1, 0, '--sandbox', 'disabled');
     }
-    if (!sawApproveMcps) out.push('--approve-mcps');
-    if (!sawTrust) out.push('--trust');
+    // --approve-mcps / --trust stay host-owned opt-ins (Sol SAFE/OBS): only when
+    // the operator supplied them explicitly before `--`.
   }
 
   if (!sawPluginDir) {
