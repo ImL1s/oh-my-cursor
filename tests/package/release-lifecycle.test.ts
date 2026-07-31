@@ -80,6 +80,7 @@ describe('release archive lifecycle', () => {
       '--no-doctor',
     ], repository, { ...process.env, HOME: home });
     const installed = JSON.parse(installOutput) as { receiptPath: string; receipt: { receipt_sha256: string; installed: { stage: string } } };
+    expect(fs.existsSync(path.join(project, '.omcu'))).toBe(false);
 
     const readback = readCurrentInstall(state);
     expect(readback.receipt_sha256).toBe(installed.receipt.receipt_sha256);

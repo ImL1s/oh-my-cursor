@@ -1,14 +1,19 @@
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { projectStateRoot } from '../../src/runtime/state-root.js';
 import {
+  createTask,
   executeTeamApiOperation,
   initializeTeamState,
   resolveTeamApiOperation,
   TEAM_API_OPERATIONS,
+  listTasks,
+  readTeamConfig,
   teamWorkerInboxPath,
+  validateTeamApiOperationInput,
 } from '../../src/team/index.js';
 
 const roots: string[] = [];
@@ -131,14 +136,36 @@ describe('team api interop (P0)', () => {
       team_name: teamName,
       worker: 'two',
       content: 'next assignment',
+      expected_sha256: crypto.createHash('sha256')
+        .update(fs.readFileSync(teamWorkerInboxPath(root, teamName, 'two'))).digest('hex'),
     }, root);
     expect(inbox.ok).toBe(true);
-    expect(fs.readFileSync(teamWorkerInboxPath(root, teamName, 'two'), 'utf8')).toContain('next assignment');
+    expect(fs.readFileSync(teamWorkerInboxPath(root, teamName, 'two'), 'utf8')).toBe('next assignment\n');
+    expect(fs.readdirSync(path.dirname(teamWorkerInboxPath(root, teamName, 'two')))
+      .filter((name) => name.includes('.tmp-'))).toEqual([]);
 
     const listedTasks = await executeTeamApiOperation('list-tasks', { team_name: teamName }, root);
     expect(listedTasks.ok).toBe(true);
     if (!listedTasks.ok) return;
     expect(listedTasks.data.count).toBe(1);
+  });
+
+  it('fences concurrent whole-inbox replacements by expected digest', async () => {
+    const { root, teamName } = workspace('inbox-fence');
+    const file = teamWorkerInboxPath(root, teamName, 'one');
+    const expected = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+    const [left, right] = await Promise.all([
+      executeTeamApiOperation('write-worker-inbox', {
+        team_name: teamName, worker: 'one', content: 'left', expected_sha256: expected,
+      }, root),
+      executeTeamApiOperation('write-worker-inbox', {
+        team_name: teamName, worker: 'one', content: 'right', expected_sha256: expected,
+      }, root),
+    ]);
+    expect([left.ok, right.ok].filter(Boolean)).toHaveLength(1);
+    const rejected = left.ok ? right : left;
+    if (!rejected.ok) expect(rejected.error.code).toBe('E_TEAM_INBOX_CONFLICT');
+    expect(['left\n', 'right\n']).toContain(fs.readFileSync(file, 'utf8'));
   });
 
   it('supports release-task-claim back to pending', async () => {
@@ -158,6 +185,141 @@ describe('team api interop (P0)', () => {
     if (!released.ok) return;
     expect(released.data).toMatchObject({ ok: true });
     expect((released.data as { task: { status: string } }).task.status).toBe('pending');
+  });
+
+  it('rejects task ids beyond the persisted 20-digit limit', async () => {
+    const { root, teamName } = workspace('task-id-limit');
+    const taskId = '1'.repeat(21);
+    for (const [operation, input] of [
+      ['claim-task', { team_name: teamName, task_id: taskId, worker: 'one' }],
+      ['transition-task-status', {
+        team_name: teamName, task_id: taskId, from: 'pending', to: 'in_progress', claim_token: 'token',
+      }],
+      ['release-task-claim', { team_name: teamName, task_id: taskId, worker: 'one', claim_token: 'token' }],
+    ] as const) {
+      const result = await executeTeamApiOperation(operation, input, root);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('invalid_input');
+    }
+  });
+
+  it('rejects blocked_by task ids beyond the persisted 20-digit limit during preflight', () => {
+    expect(() => validateTeamApiOperationInput('create-task', {
+      team_name: 'task-id-limit',
+      subject: 'blocked task',
+      description: 'wait for dependency',
+      blocked_by: ['1'.repeat(21)],
+    })).toThrow('E_TEAM_API_INPUT_INVALID: blocked_by must be an array of task ids');
+  });
+
+  it('recovers task-first publication without holes and serializes concurrent creators', async () => {
+    const { root, teamName } = workspace('task-transaction');
+    const request = { subject: 'recover me', description: 'same request' };
+    await expect(createTask(root, teamName, request, () => new Date('2026-07-31T00:00:00.000Z'), {
+      configWriteOptions: { helperFaults: ['rename'] },
+    })).rejects.toMatchObject({ phase: 'not_committed' });
+    expect(readTeamConfig(root, teamName)?.next_task_id).toBe(1);
+    expect((await listTasks(root, teamName)).map((task) => task.id)).toEqual(['1']);
+
+    const recovered = await createTask(root, teamName, request, () => new Date('2026-07-31T00:00:01.000Z'));
+    expect(recovered.id).toBe('1');
+    expect(readTeamConfig(root, teamName)?.next_task_id).toBe(2);
+
+    const created = await Promise.all(Array.from({ length: 6 }, (_, index) => createTask(root, teamName, {
+      subject: `concurrent-${index}`,
+      description: `task-${index}`,
+    })));
+    expect(created.map((task) => Number(task.id)).sort((a, b) => a - b)).toEqual([2, 3, 4, 5, 6, 7]);
+    expect((await listTasks(root, teamName)).map((task) => Number(task.id))).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(readTeamConfig(root, teamName)?.next_task_id).toBe(8);
+  });
+
+  it('deduplicates create-task by request_id and rejects a conflicting canonical payload', async () => {
+    const { root, teamName } = workspace('task-idempotency');
+    const first = await executeTeamApiOperation('create-task', {
+      team_name: teamName,
+      subject: ' ship ',
+      description: ' once ',
+      blocked_by: [],
+      request_id: 'request-42',
+    }, root);
+    const retry = await executeTeamApiOperation('create-task', {
+      team_name: teamName,
+      subject: 'ship',
+      description: 'once',
+      blocked_by: [],
+      request_id: 'request-42',
+    }, root);
+    expect(first.ok).toBe(true);
+    expect(retry.ok).toBe(true);
+    if (!first.ok || !retry.ok) return;
+    expect((retry.data.task as { id: string }).id).toBe((first.data.task as { id: string }).id);
+    expect((retry.data.task as { request_id: string }).request_id).toBe('request-42');
+    expect(await listTasks(root, teamName)).toHaveLength(1);
+
+    const claimed = await executeTeamApiOperation('claim-task', {
+      team_name: teamName, task_id: '1', worker: 'one',
+    }, root);
+    expect(claimed.ok).toBe(true);
+    const afterClaimRetry = await executeTeamApiOperation('create-task', {
+      team_name: teamName,
+      subject: 'ship',
+      description: 'once',
+      blocked_by: [],
+      request_id: 'request-42',
+    }, root);
+    expect(afterClaimRetry.ok).toBe(true);
+    if (afterClaimRetry.ok) {
+      expect(afterClaimRetry.data.task).toMatchObject({ id: '1', status: 'in_progress', request_id: 'request-42' });
+    }
+
+    const conflict = await executeTeamApiOperation('create-task', {
+      team_name: teamName,
+      subject: 'different',
+      description: 'once',
+      blocked_by: [],
+      request_id: 'request-42',
+    }, root);
+    expect(conflict.ok).toBe(false);
+    if (!conflict.ok) expect(conflict.error.code).toBe('E_TEAM_TASK_IDEMPOTENCY_CONFLICT');
+  });
+
+  it('retries safely after task and config commit but before the response', async () => {
+    const { root, teamName } = workspace('task-response-crash');
+    const request = { subject: 'durable', description: 'retry me', request_id: 'response-crash-1' };
+    await expect(createTask(root, teamName, request, undefined, {
+      faultInjector: () => { throw new Error('E_TEST_RESPONSE_CRASH'); },
+    })).rejects.toThrow('E_TEST_RESPONSE_CRASH');
+    expect(readTeamConfig(root, teamName)?.next_task_id).toBe(2);
+    expect(await listTasks(root, teamName)).toHaveLength(1);
+
+    const retry = await createTask(root, teamName, request);
+    expect(retry.id).toBe('1');
+    expect(retry.request_id).toBe('response-crash-1');
+    expect(readTeamConfig(root, teamName)?.next_task_id).toBe(2);
+    expect(await listTasks(root, teamName)).toHaveLength(1);
+  });
+
+  it('rejects an idempotent retry when the persisted payload no longer matches its digest', async () => {
+    const { root, teamName } = workspace('task-idempotency-corrupt');
+    await createTask(root, teamName, {
+      subject: 'original',
+      description: 'payload',
+      request_id: 'request-corrupt-1',
+    });
+    const file = path.join(root.path, 'state', 'team', teamName, 'tasks', 'task-1.json');
+    const tampered = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
+    fs.chmodSync(file, 0o600);
+    fs.writeFileSync(file, `${JSON.stringify({ ...tampered, subject: 'tampered' }, null, 2)}\n`);
+
+    const retry = await executeTeamApiOperation('create-task', {
+      team_name: teamName,
+      subject: 'original',
+      description: 'payload',
+      request_id: 'request-corrupt-1',
+    }, root);
+    expect(retry.ok).toBe(false);
+    if (!retry.ok) expect(retry.error.code).toBe('E_TEAM_TASK_IDEMPOTENCY_CORRUPT');
   });
 
   it('rejects unknown ops without inventing success', async () => {
@@ -200,6 +362,15 @@ describe('team api interop (P0)', () => {
     }, root);
     expect(badBlocked.ok).toBe(false);
     if (!badBlocked.ok) expect(badBlocked.error.code).toBe('invalid_input');
+
+    const badRequestId = await executeTeamApiOperation('create-task', {
+      team_name: teamName,
+      subject: 'x',
+      description: 'y',
+      request_id: 7 as unknown as string,
+    }, root);
+    expect(badRequestId.ok).toBe(false);
+    if (!badRequestId.ok) expect(badRequestId.error.code).toBe('invalid_input');
   });
 
   it('returns message_not_found when marking unknown message delivered', async () => {

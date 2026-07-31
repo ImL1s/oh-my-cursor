@@ -42,7 +42,9 @@ npm run build
 
 - 安裝狀態：`~/.local/state/oh-my-cursor/`
 - CLI 連結：`~/.local/bin/omcu`
-- 專案狀態：`/absolute/path/to/project/.omcu/`
+- 專案狀態：除非傳入 `--init-project-state`，否則不會檢查或建立。
+
+若要初始化或安全採用僅限擁有者的專案狀態根，請加入 `--init-project-state`。既有根必須是目前使用者擁有、權限為 `0700` 的非符號連結目錄；既有 `owner.json`（若有）必須符合 CLI authority schema。
 
 安裝狀態與專案狀態擁有不同的擁有者與生命週期。切勿將安裝收據複製到 `.omcu/`，也切勿手動編輯 `.omcu/`。
 

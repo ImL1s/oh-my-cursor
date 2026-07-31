@@ -17,6 +17,8 @@ function fixture() {
   const panePids = new Map<string, number>();
   const deadPanes = new Set<string>();
   const aliveGroups = new Set<number>();
+  const groupProbes: number[] = [];
+  const startIdentities = new Map<number, string>();
   const commands: string[][] = [];
   const runner = async (_executable: string, argv: readonly string[]) => {
     commands.push([...argv]);
@@ -24,20 +26,24 @@ function fixture() {
     if (argv[0] === 'display-message') {
       const target = argv[argv.indexOf('-t') + 1]!;
       let pid = panePids.get(target);
-      if (pid === undefined) { pid = nextPid++; panePids.set(target, pid); aliveGroups.add(pid); }
+      if (pid === undefined) { pid = nextPid++; panePids.set(target, pid); aliveGroups.add(pid); startIdentities.set(pid, `start-${pid}`); }
       return { code: 0, stdout: argv.at(-1)?.includes('pane_dead') ? `${pid} ${deadPanes.has(target) ? 1 : 0}\n` : `${pid}\n`, stderr: '' };
     }
     if (argv[0] === '-o' && argv[1] === 'pgid=') return { code: 0, stdout: `${argv.at(-1)}\n`, stderr: '' };
-    if (argv[0] === '-o' && argv[1] === 'pid=') {
-      const pgid = Number(argv.at(-1));
-      return { code: aliveGroups.has(pgid) ? 0 : 1, stdout: aliveGroups.has(pgid) ? `${pgid}\n` : '', stderr: '' };
-    }
     if (argv[0] === 'capture-pane') return { code: 0, stdout: `output:${argv.at(-1)}`, stderr: '' };
     if (argv[0] === 'kill-session') { sessionAlive = false; return { code: 0, stdout: '', stderr: '' }; }
     if (argv[0] === 'has-session') return { code: sessionAlive ? 0 : 1, stdout: '', stderr: '' };
     return { code: 0, stdout: '', stderr: '' };
   };
-  return { workspace, panePids, deadPanes, aliveGroups, commands, runner };
+  const identityObserver = (pid: number) => ({ value: startIdentities.get(pid) ?? `missing-${pid}`, proven: startIdentities.has(pid), source: startIdentities.has(pid) ? 'linux-proc' as const : 'unavailable' as const });
+  const groupProbe = (pgid: number) => {
+    groupProbes.push(pgid);
+    if (aliveGroups.has(pgid)) return;
+    const error = new Error('process group absent') as NodeJS.ErrnoException;
+    error.code = 'ESRCH';
+    throw error;
+  };
+  return { workspace, panePids, deadPanes, aliveGroups, groupProbes, startIdentities, commands, runner, identityObserver, groupProbe };
 }
 
 const workers = (cwd: string) => [
@@ -55,6 +61,9 @@ describe('experimental tmux team supervisor', () => {
       () => new Date('2026-07-23T00:00:00.000Z'),
       (pgid, signal) => { killed.push([pgid, signal]); state.aliveGroups.delete(pgid); },
       async () => undefined,
+      null,
+      state.identityObserver,
+      state.groupProbe,
     );
     const manifest = await supervisor.start('team-1', workers(state.workspace));
     expect(manifest.workers.map((worker) => worker.process_group_id)).toEqual([4000, 4001]);
@@ -72,7 +81,7 @@ describe('experimental tmux team supervisor', () => {
     const runner = async (executable: string, argv: readonly string[], cwd: string) => argv[0] === 'kill-session'
       ? { code: 1, stdout: '', stderr: 'denied' }
       : baseRunner(executable, argv, cwd);
-    const supervisor = new ExperimentalTmuxTeamSupervisor(store, runner, undefined, (pgid) => state.aliveGroups.delete(pgid), async () => undefined);
+    const supervisor = new ExperimentalTmuxTeamSupervisor(store, runner, undefined, (pgid) => state.aliveGroups.delete(pgid), async () => undefined, null, state.identityObserver, state.groupProbe);
     await supervisor.start('team-stop-fails', workers(state.workspace));
     await expect(supervisor.stop('team-stop-fails')).rejects.toThrow('E_TEAM_TMUX_STOP');
     expect(store.read('team-stop-fails').stopped_at).toBeNull();
@@ -87,10 +96,15 @@ describe('experimental tmux team supervisor', () => {
       undefined,
       (pgid, signal) => { signals.push(signal); if (signal === 'SIGKILL') state.aliveGroups.delete(pgid); },
       async () => undefined,
+      null,
+      state.identityObserver,
+      state.groupProbe,
     );
     await supervisor.start('team-escalate', [workers(state.workspace)[0]]);
     await supervisor.stop('team-escalate');
     expect(signals).toEqual(['SIGTERM', 'SIGKILL']);
+    expect(state.groupProbes).toContain(4000);
+    expect(state.commands.some((argv) => argv.includes('-g'))).toBe(false);
   });
 
   it('never signals a live PGID after its recorded pane identity is dead', async () => {
@@ -102,6 +116,9 @@ describe('experimental tmux team supervisor', () => {
       undefined,
       (_pgid, signal) => { signals.push(signal); },
       async () => undefined,
+      null,
+      state.identityObserver,
+      state.groupProbe,
     );
     const manifest = await supervisor.start('team-stale-pgid', [workers(state.workspace)[0]]);
     state.deadPanes.add(manifest.workers[0]!.pane_target);
@@ -118,7 +135,7 @@ describe('experimental tmux team supervisor', () => {
       write: (manifest) => { saved = manifest; throw new Error('disk full'); },
     };
     const killed: number[] = [];
-    const supervisor = new ExperimentalTmuxTeamSupervisor(failing, state.runner, undefined, (pgid) => { killed.push(pgid); state.aliveGroups.delete(pgid); }, async () => undefined);
+    const supervisor = new ExperimentalTmuxTeamSupervisor(failing, state.runner, undefined, (pgid) => { killed.push(pgid); state.aliveGroups.delete(pgid); }, async () => undefined, null, state.identityObserver, state.groupProbe);
     await expect(supervisor.start('team-write-fails', [workers(state.workspace)[0]])).rejects.toThrow('disk full');
     expect(state.commands.some((argv) => argv[0] === 'kill-session')).toBe(true);
     expect(killed).toEqual([4000]);
@@ -137,7 +154,7 @@ describe('experimental tmux team supervisor', () => {
         backing.write(manifest);
       },
     };
-    const supervisor = new ExperimentalTmuxTeamSupervisor(flaky, state.runner, undefined, (pgid) => state.aliveGroups.delete(pgid), async () => undefined);
+    const supervisor = new ExperimentalTmuxTeamSupervisor(flaky, state.runner, undefined, (pgid) => state.aliveGroups.delete(pgid), async () => undefined, null, state.identityObserver, state.groupProbe);
     await supervisor.start('team-stop-retry', [workers(state.workspace)[0]]);
     await expect(supervisor.stop('team-stop-retry')).rejects.toThrow('final write crashed');
     expect(backing.read('team-stop-retry')).toMatchObject({ stopping_at: expect.any(String), stopped_at: null });
@@ -167,6 +184,8 @@ describe('experimental tmux team supervisor', () => {
       (pgid) => state.aliveGroups.delete(pgid),
       async () => undefined,
       root,
+      state.identityObserver,
+      state.groupProbe,
     );
     const manifest = await supervisor.start('team-coord', workers(state.workspace));
     expect(manifest.native_cursor_team).toBe(false);
@@ -175,6 +194,164 @@ describe('experimental tmux team supervisor', () => {
     expect(fs.existsSync(path.join(state.workspace, '.omcu/state/team/team-coord/mailbox/leader-fixed.json'))).toBe(true);
     expect(fs.readFileSync(path.join(state.workspace, '.omcu/state/team/team-coord/workers/one/inbox.md'), 'utf8')).toContain('Never stamp verified');
     expect(JSON.parse(fs.readFileSync(path.join(state.workspace, '.omcu/state/team/team-coord/manifest.v2.json'), 'utf8')).native_cursor_team).toBe(false);
+  });
+
+  it('refuses to signal a reused pane PID with a different start identity', async () => {
+    const state = fixture();
+    const signals: NodeJS.Signals[] = [];
+    const supervisor = new ExperimentalTmuxTeamSupervisor(
+      new TeamManifestStore(projectStateRoot(state.workspace)),
+      state.runner,
+      undefined,
+      (_pgid, signal) => { signals.push(signal); },
+      async () => undefined,
+      null,
+      state.identityObserver,
+      state.groupProbe,
+    );
+    const manifest = await supervisor.start('team-pid-reuse', [workers(state.workspace)[0]]);
+    state.startIdentities.set(manifest.workers[0]!.pane_pid, 'reused-process-start');
+    await expect(supervisor.stop('team-pid-reuse')).rejects.toThrow('E_TEAM_PROCESS_IDENTITY_MISMATCH');
+    expect(signals).toEqual([]);
+  });
+
+  it('signals a verified group when tmux stop removes the pane leader identity but descendants remain', async () => {
+    const state = fixture();
+    const signals: NodeJS.Signals[] = [];
+    const runner = async (executable: string, argv: readonly string[], cwd: string) => {
+      const result = await state.runner(executable, argv, cwd);
+      if (argv[0] === 'kill-session') state.startIdentities.delete(4000);
+      return result;
+    };
+    const supervisor = new ExperimentalTmuxTeamSupervisor(
+      new TeamManifestStore(projectStateRoot(state.workspace)),
+      runner,
+      undefined,
+      (pgid, signal) => { signals.push(signal); state.aliveGroups.delete(pgid); },
+      async () => undefined,
+      null,
+      state.identityObserver,
+      state.groupProbe,
+    );
+    await supervisor.start('team-pid-race', [workers(state.workspace)[0]]);
+    await expect(supervisor.stop('team-pid-race')).resolves.toMatchObject({ stopped_at: expect.any(String) });
+    expect(signals).toEqual(['SIGTERM']);
+    expect(state.groupProbes).toContain(4000);
+    expect(state.commands.some((argv) => argv.includes('-g'))).toBe(false);
+  });
+
+  it('treats an ESRCH signal-zero probe as an absent group without sending a signal', async () => {
+    const state = fixture();
+    const signals: NodeJS.Signals[] = [];
+    const runner = async (executable: string, argv: readonly string[], cwd: string) => {
+      const result = await state.runner(executable, argv, cwd);
+      if (argv[0] === 'kill-session') state.aliveGroups.delete(4000);
+      return result;
+    };
+    const supervisor = new ExperimentalTmuxTeamSupervisor(
+      new TeamManifestStore(projectStateRoot(state.workspace)),
+      runner,
+      undefined,
+      (_pgid, signal) => { signals.push(signal); },
+      async () => undefined,
+      null,
+      state.identityObserver,
+      state.groupProbe,
+    );
+    await supervisor.start('team-probe-esrch', [workers(state.workspace)[0]]);
+    await expect(supervisor.stop('team-probe-esrch')).resolves.toMatchObject({ stopped_at: expect.any(String) });
+    expect(signals).toEqual([]);
+    expect(state.commands.some((argv) => argv.includes('-g'))).toBe(false);
+  });
+
+  it('treats an EPERM signal-zero probe as live and fails closed after termination attempts', async () => {
+    const state = fixture();
+    const signals: NodeJS.Signals[] = [];
+    const deniedProbe = () => {
+      const error = new Error('permission denied') as NodeJS.ErrnoException;
+      error.code = 'EPERM';
+      throw error;
+    };
+    const supervisor = new ExperimentalTmuxTeamSupervisor(
+      new TeamManifestStore(projectStateRoot(state.workspace)),
+      state.runner,
+      undefined,
+      (pgid, signal) => { signals.push(signal); state.aliveGroups.delete(pgid); },
+      async () => undefined,
+      null,
+      state.identityObserver,
+      deniedProbe,
+    );
+    await supervisor.start('team-probe-eperm', [workers(state.workspace)[0]]);
+    await expect(supervisor.stop('team-probe-eperm')).rejects.toThrow('E_TEAM_STOP_INCOMPLETE:groups_alive:4000');
+    expect(signals).toEqual(['SIGTERM', 'SIGKILL']);
+  });
+
+  it('wraps unexpected signal-zero probe errors with the stable liveness error', async () => {
+    const state = fixture();
+    const failingProbe = () => {
+      const error = new Error('probe failed') as NodeJS.ErrnoException;
+      error.code = 'EIO';
+      throw error;
+    };
+    const supervisor = new ExperimentalTmuxTeamSupervisor(
+      new TeamManifestStore(projectStateRoot(state.workspace)),
+      state.runner,
+      undefined,
+      () => undefined,
+      async () => undefined,
+      null,
+      state.identityObserver,
+      failingProbe,
+    );
+    await supervisor.start('team-probe-error', [workers(state.workspace)[0]]);
+    await expect(supervisor.stop('team-probe-error')).rejects.toThrow('E_TEAM_LIVENESS_PROBE:EIO');
+  });
+
+  it('recomputes TERM survivors and sends KILL only to groups still alive', async () => {
+    const state = fixture();
+    const signals: Array<[number, NodeJS.Signals]> = [];
+    const supervisor = new ExperimentalTmuxTeamSupervisor(
+      new TeamManifestStore(projectStateRoot(state.workspace)),
+      state.runner,
+      undefined,
+      (pgid, signal) => {
+        signals.push([pgid, signal]);
+        if ((signal === 'SIGTERM' && pgid === 4000) || signal === 'SIGKILL') state.aliveGroups.delete(pgid);
+      },
+      async () => undefined,
+      null,
+      state.identityObserver,
+      state.groupProbe,
+    );
+    await supervisor.start('team-survivors', workers(state.workspace));
+    await supervisor.stop('team-survivors');
+    expect(signals).toEqual([[4000, 'SIGTERM'], [4001, 'SIGTERM'], [4001, 'SIGKILL']]);
+  });
+
+  it('migrates legacy manifests and rejects absent or corrupt observations with stable errors', async () => {
+    const state = fixture();
+    const root = projectStateRoot(state.workspace);
+    const store = new TeamManifestStore(root);
+    expect(() => store.read('missing-team')).toThrow(/^E_TEAM_MANIFEST_ABSENT$/);
+    const file = path.join(state.workspace, '.omcu', 'teams', 'legacy-team', 'manifest.json');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({
+      schema_version: 1,
+      team_id: 'legacy-team',
+      tmux_session: 'omcu-legacy-team',
+      capability_tier: 'experimental-local',
+      native_cursor_team: false,
+      workers: [{ id: 'one', cwd: state.workspace, owned_paths: ['src/one'], pane_target: '%1', pane_pid: 4000, process_group_id: 4000, argv: ['--print'] }],
+      created_at: '2026-07-23T00:00:00.000Z',
+    }));
+    expect(store.read('legacy-team')).toMatchObject({
+      schema_version: 2,
+      stopping_at: null,
+      workers: [{ pane_start_identity: 'legacy-unproven:4000', pane_start_identity_proven: false }],
+    });
+    fs.writeFileSync(file, '{raw-secret');
+    expect(() => store.read('legacy-team')).toThrow(/^E_TEAM_MANIFEST_CORRUPT$/);
   });
 
   it('rejects non-canonical and case-equivalent team owned paths before tmux', async () => {

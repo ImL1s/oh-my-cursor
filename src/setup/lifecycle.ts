@@ -2,8 +2,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { atomicWriteJson } from '../runtime/atomic.js';
+import { atomicCreateText, atomicWriteJson } from '../runtime/atomic.js';
 import { ensureExternalStateRoot } from '../runtime/state-root.js';
+import { openProjectStateRoot } from '../runtime/state-root.js';
+import { validateExistingCliOwnerRecord } from '../state/authority.js';
 import { copyPackableDirectory, digestDirectory, digestPackableDirectory, verifySha256Sums } from './digest.js';
 import { createInstallReceipt, readInstallReceipt, writeInstallReceipt, type InstallReceipt, type OwnedInstallPath } from './receipt.js';
 import { runSetupDoctor, type DoctorReport } from './doctor.js';
@@ -23,6 +25,8 @@ export interface InstallInput {
   readonly cursorCommand?: string;
   readonly runner?: CommandRunner;
   readonly runDoctor?: boolean;
+  /** Project-local state initialization is opt-in for setup/update. */
+  readonly initializeProjectState?: boolean;
   readonly lock?: InstallLockOptions;
 }
 
@@ -59,8 +63,8 @@ interface InstallTransactionJournal {
   readonly stage: string;
   readonly stage_existed: boolean;
   readonly temporary_stage: string;
-  readonly project_state: string;
-  readonly project_state_existed: boolean;
+  readonly project_state: string | null;
+  readonly project_state_ownership_marker: string | null;
 }
 
 interface UninstallTransactionJournal {
@@ -191,6 +195,59 @@ function removeWritable(target: string): void {
   fs.rmSync(target, { recursive: true, force: true });
 }
 
+function createTransactionOwnedProjectState(projectState: string, marker: string, proof: string): void {
+  try {
+    fs.mkdirSync(projectState, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error('E_PROJECT_STATE_RACE', { cause: error });
+    throw error;
+  }
+  atomicCreateText(marker, `${proof}\n`, { maxBytes: 128, mode: 0o600 });
+}
+
+function ownsProjectState(journal: InstallTransactionJournal): boolean {
+  if (journal.project_state === null || journal.project_state_ownership_marker === null) return false;
+  if (path.dirname(journal.project_state_ownership_marker) !== journal.project_state) return false;
+  try {
+    const receipt = readInstallReceipt(journal.receipt_path);
+    const projectStateInventory = receipt.owned_inventory.filter((owned) => owned.kind === 'project_state');
+    const expectedMarker = path.join(
+      journal.project_state,
+      `.install-owner-${crypto.createHash('sha256').update(receipt.transaction_id).digest('hex')}`,
+    );
+    if (receipt.receipt_sha256 !== journal.receipt_sha256
+      || receipt.installed.stage !== journal.stage
+      || receipt.installed.cli !== journal.cli
+      || journal.candidate_target !== path.join(receipt.installed.stage, 'dist', 'bin', 'omcu.js')
+      || path.basename(journal.receipt_path) !== `${receipt.transaction_id}.json`
+      || projectStateInventory.length !== 1
+      || projectStateInventory[0]?.path !== journal.project_state
+      || projectStateInventory[0]?.identity !== path.resolve(path.dirname(journal.project_state))
+      || journal.project_state_ownership_marker !== expectedMarker) return false;
+    const directory = fs.lstatSync(journal.project_state);
+    const marker = fs.lstatSync(journal.project_state_ownership_marker);
+    return directory.isDirectory() && !directory.isSymbolicLink()
+      && marker.isFile() && !marker.isSymbolicLink()
+      && fs.readFileSync(journal.project_state_ownership_marker, 'utf8') === `${journal.receipt_sha256}\n`;
+  } catch {
+    return false;
+  }
+}
+
+function removeTransactionOwnedProjectState(journal: InstallTransactionJournal): void {
+  if (!ownsProjectState(journal) || journal.project_state === null || journal.project_state_ownership_marker === null) return;
+  const entries = fs.readdirSync(journal.project_state);
+  fs.unlinkSync(journal.project_state_ownership_marker);
+  if (entries.length === 1 && entries[0] === path.basename(journal.project_state_ownership_marker)) {
+    fs.rmdirSync(journal.project_state);
+  }
+}
+
+function clearProjectStateOwnershipMarker(journal: InstallTransactionJournal): void {
+  if (!ownsProjectState(journal) || journal.project_state_ownership_marker === null) return;
+  fs.unlinkSync(journal.project_state_ownership_marker);
+}
+
 function readJournal(file: string): InstallTransactionJournal {
   const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<InstallTransactionJournal>;
   if (parsed.store_kind !== 'omcu_install_transaction' || parsed.schema_version !== 1
@@ -200,12 +257,17 @@ function readJournal(file: string): InstallTransactionJournal {
     || !(typeof parsed.prior_pointer_base64 === 'string' || parsed.prior_pointer_base64 === null)
     || typeof parsed.receipt_path !== 'string' || typeof parsed.receipt_sha256 !== 'string'
     || typeof parsed.stage !== 'string' || typeof parsed.stage_existed !== 'boolean'
-    || typeof parsed.temporary_stage !== 'string' || typeof parsed.project_state !== 'string'
-    || typeof parsed.project_state_existed !== 'boolean') throw new Error('E_INSTALL_TRANSACTION_INVALID');
-  return parsed as InstallTransactionJournal;
+    || typeof parsed.temporary_stage !== 'string'
+    || !(typeof parsed.project_state === 'string' || parsed.project_state === null)
+    || !(typeof parsed.project_state_ownership_marker === 'string'
+      || parsed.project_state_ownership_marker === null
+      || parsed.project_state_ownership_marker === undefined)) {
+    throw new Error('E_INSTALL_TRANSACTION_INVALID');
+  }
+  return { ...parsed, project_state_ownership_marker: parsed.project_state_ownership_marker ?? null } as InstallTransactionJournal;
 }
 
-function reconcileInstallTransaction(stateRoot: string, home: string): void {
+function reconcileInstallTransaction(stateRoot: string, home: string, allowProjectStateCleanup = true): void {
   const journalPath = transactionJournal(stateRoot);
   if (!fs.existsSync(journalPath)) return;
   const material = JSON.parse(fs.readFileSync(journalPath, 'utf8')) as { store_kind?: unknown };
@@ -256,12 +318,11 @@ function reconcileInstallTransaction(stateRoot: string, home: string): void {
       const previousPointer = JSON.parse(Buffer.from(journal.prior_pointer_base64, 'base64').toString('utf8')) as unknown;
       atomicWriteJson(journal.current_pointer, previousPointer);
     }
+    if (allowProjectStateCleanup) removeTransactionOwnedProjectState(journal);
     removeWritable(journal.receipt_path);
     if (!journal.stage_existed) removeWritable(journal.stage);
-    if (!journal.project_state_existed && fs.existsSync(journal.project_state)
-      && fs.lstatSync(journal.project_state).isDirectory()
-      && !fs.lstatSync(journal.project_state).isSymbolicLink()
-      && fs.readdirSync(journal.project_state).length === 0) fs.rmdirSync(journal.project_state);
+  } else {
+    clearProjectStateOwnershipMarker(journal);
   }
   fs.rmSync(journalPath, { force: true });
 }
@@ -282,14 +343,20 @@ async function installOrUpdateUnlocked(input: InstallInput): Promise<InstallResu
   const sourceRoot = path.resolve(input.sourceRoot);
   const home = path.resolve(input.homeDir ?? os.homedir());
   const state = ensureExternalStateRoot(path.resolve(input.stateRoot ?? defaultStateRoot(home)));
-  reconcileInstallTransaction(state.path, home);
   const project = path.resolve(input.projectRoot ?? process.cwd());
+  const initializeProjectState = input.initializeProjectState ?? false;
+  reconcileInstallTransaction(state.path, home, initializeProjectState);
   const transactionId = input.transactionId ?? `${Date.now()}-${crypto.randomBytes(6).toString('hex')}`;
-  const sourceDigest = input.sourceArchive === undefined
-    ? digestPackableDirectory(sourceRoot)
-    : input.checksumsFile === undefined
-      ? (() => { throw new Error('E_SHA256SUMS_REQUIRED'); })()
-      : verifySha256Sums(path.resolve(input.sourceArchive), path.resolve(input.checksumsFile));
+  const resolvedProjectState = path.join(project, '.omcu');
+  const projectStatePreexisting = initializeProjectState && pathEntryExists(resolvedProjectState);
+  if (projectStatePreexisting) validateExistingCliOwnerRecord(openProjectStateRoot(project));
+  let sourceDigest: string;
+  if (input.sourceArchive === undefined) {
+    sourceDigest = digestPackableDirectory(sourceRoot);
+  } else {
+    if (input.checksumsFile === undefined) throw new Error('E_SHA256SUMS_REQUIRED');
+    sourceDigest = verifySha256Sums(path.resolve(input.sourceArchive), path.resolve(input.checksumsFile));
+  }
   const installedDigest = digestPackableDirectory(sourceRoot);
   const version = releaseVersion(sourceRoot);
   const stage = path.join(state.path, 'install', 'releases', `${version}-${installedDigest.slice(0, 16)}`);
@@ -298,8 +365,10 @@ async function installOrUpdateUnlocked(input: InstallInput): Promise<InstallResu
   const priorTarget = currentTarget(cli);
   const priorPointer = path.join(state.path, 'install', 'current.json');
   const priorPointerBytes = fs.existsSync(priorPointer) ? fs.readFileSync(priorPointer) : null;
-  const projectState = path.join(project, '.omcu');
-  const projectStateExisted = fs.existsSync(projectState);
+  const projectState = initializeProjectState ? resolvedProjectState : null;
+  const projectStateOwnershipMarker = projectState === null || projectStatePreexisting
+    ? null
+    : path.join(projectState, `.install-owner-${crypto.createHash('sha256').update(transactionId).digest('hex')}`);
   const stageExisted = fs.existsSync(stage);
   const entrypoint = path.join(stage, 'dist', 'bin', 'omcu.js');
   const receipt = createInstallReceipt({
@@ -318,7 +387,7 @@ async function installOrUpdateUnlocked(input: InstallInput): Promise<InstallResu
     owned_inventory: [
       { path: stage, kind: 'release_stage', identity: installedDigest },
       { path: cli, kind: 'cli_symlink', identity: entrypoint },
-      { path: projectState, kind: 'project_state', identity: path.resolve(project) },
+      ...(projectState === null || projectStatePreexisting ? [] : [{ path: projectState, kind: 'project_state' as const, identity: path.resolve(project) }]),
     ],
     created_at: (input.now ?? (() => new Date()))().toISOString(),
   });
@@ -338,7 +407,7 @@ async function installOrUpdateUnlocked(input: InstallInput): Promise<InstallResu
     stage_existed: stageExisted,
     temporary_stage: temporaryStage,
     project_state: projectState,
-    project_state_existed: projectStateExisted,
+    project_state_ownership_marker: projectStateOwnershipMarker,
   } satisfies InstallTransactionJournal);
 
   try {
@@ -355,21 +424,31 @@ async function installOrUpdateUnlocked(input: InstallInput): Promise<InstallResu
     writeInstallReceipt(receiptPath, receipt);
     replaceSymlink(cli, entrypoint);
 
-    fs.mkdirSync(projectState, { recursive: true, mode: 0o700 });
-    fs.chmodSync(projectState, 0o700);
+    if (projectState !== null && projectStateOwnershipMarker !== null) {
+      createTransactionOwnedProjectState(projectState, projectStateOwnershipMarker, receipt.receipt_sha256);
+    }
 
     const doctor = input.runDoctor === false ? null : await runSetupDoctor({
       packageRoot: stage, projectRoot: project, homeDir: home,
       ...(input.cursorCommand === undefined ? {} : { cursorCommand: input.cursorCommand }),
       ...(input.runner === undefined ? {} : { runner: input.runner }),
+      inspectProjectState: initializeProjectState,
     });
     if (doctor !== null && !doctor.ok) throw new Error('E_POST_INSTALL_DOCTOR_FAILED');
 
     atomicWriteJson(priorPointer, { schema_version: 1, receipt_path: receiptPath, receipt_sha256: receipt.receipt_sha256 });
+    clearProjectStateOwnershipMarker({
+      store_kind: 'omcu_install_transaction', schema_version: 1, cli, candidate_target: entrypoint,
+      prior_cli_target: priorTarget, current_pointer: priorPointer,
+      prior_pointer_base64: priorPointerBytes?.toString('base64') ?? null,
+      receipt_path: receiptPath, receipt_sha256: receipt.receipt_sha256, stage,
+      stage_existed: stageExisted, temporary_stage: temporaryStage,
+      project_state: projectState, project_state_ownership_marker: projectStateOwnershipMarker,
+    });
     fs.rmSync(journalPath, { force: true });
     return { receiptPath, receipt, doctor };
   } catch (error) {
-    reconcileInstallTransaction(state.path, home);
+    reconcileInstallTransaction(state.path, home, initializeProjectState);
     throw error;
   }
 }

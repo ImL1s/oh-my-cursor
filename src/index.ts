@@ -5,8 +5,24 @@ export { discoverCursorCapabilities, validateCapabilityLock } from './capabiliti
 export type { CapabilityClaim, CapabilityDiscovery, CapabilityLock } from './capabilities/types.js';
 export { routeSessionCommand } from './sessions/router.js';
 export type { SessionCommand } from './sessions/router.js';
-export { ensureExternalStateRoot, projectStateRoot, withinStateRoot, PROJECT_STATE_DIRECTORY } from './runtime/state-root.js';
+export {
+  ensureExternalStateRoot,
+  openProjectStateRoot,
+  projectStateRoot,
+  resolveProjectStatePath,
+  withinStateRoot,
+  PROJECT_STATE_DIRECTORY,
+} from './runtime/state-root.js';
 export type { StateRoot } from './runtime/state-root.js';
+export { atomicWriteJson, withDirectoryLock, AtomicWriteError } from './runtime/atomic.js';
+export type { AtomicWritePhase, DirectoryLockOptions } from './runtime/atomic.js';
+export {
+  classifyProcessLiveness,
+  currentProcessIdentity,
+  observeStartIdentity,
+  processAlive,
+} from './runtime/process-identity.js';
+export type { ProcessIdentity, ProcessLiveness } from './runtime/process-identity.js';
 export { redact, redactText } from './runtime/redaction.js';
 export type { RedactionLimits } from './runtime/redaction.js';
 export type { LeaseV1, MutationProof, RunEventV1, RunStateV1, RunStatus, VerificationRecord } from './state/types.js';

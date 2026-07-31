@@ -7,6 +7,7 @@ English: [cli.md](./cli.md) · [简体中文](./cli.zh.md) · [繁體中文](./c
 ```sh
 omcu --help
 omcu --version
+omcu --json-errors <命令> ... # 結構化 stderr：code、command_path、token、message、usage
 ```
 
 ## Host 啟動（互動 / madmax）
@@ -16,10 +17,14 @@ omcu --version
 ```sh
 omcu                         # 互動式 cursor-agent（含 --plugin-dir）
 omcu "修復失敗測試"            # 帶初始 prompt 的互動
+omcu prompt "workflow"       # 明確的單字提示詞
+omcu --prompt "workflow"     # 明確的提示詞參數形式
 omcu --madmax                # break-glass: --yolo --sandbox disabled
 omcu --madmax --direct …     # 不包 tmux
 omcu --madmax --tmux …       # 強制 tmux（缺失則失敗）
 ```
+
+只有當單一 token 與所有已知 OMCU 命令的編輯距離都大於二時，才使用提示詞簡寫。類似命令的拼字錯誤會由 CLI parser fail closed；單字提示詞請使用 `prompt` 或 `--prompt`。
 
 `--madmax` 對應 Cursor `--yolo --sandbox disabled`，並一律以 `--plugin-dir` 載入本套件。顯式 deny 規則仍生效；`--approve-mcps` / `--trust` 僅在你顯式傳入時生效。這是 host launcher，不是 mode FSM，也不會蓋 `verified`。預設傳輸為 detached tmux 再 attach；auto 在無 tmux 時可回退 direct；顯式 `--tmux` 不會回退。
 
@@ -27,9 +32,9 @@ omcu --madmax --tmux …       # 強制 tmux（缺失則失敗）
 
 | 命令 | 用途 |
 | --- | --- |
-| `omcu setup [--source <dir>] [--state-root <dir>]` | 安裝套件來源、建立目前專案的 `.omcu/`，並執行 doctor。 |
-| `omcu update [--source <dir>] [--state-root <dir>]` | 暫存並切換至來源位元組；失敗時回滾。 |
-| `omcu doctor` | 檢查 Cursor、外掛可載入性與本機設定。結束碼 `0`、`2`（警告）或 `1`（失敗）。 |
+| `omcu setup [--source <dir>] [--state-root <dir>] [--init-project-state]` | 安裝套件來源並執行 doctor；專案 `.omcu/` 必須明確要求才初始化。 |
+| `omcu update [--source <dir>] [--state-root <dir>] [--init-project-state]` | 暫存並切換至來源位元組；失敗時回滾。 |
+| `omcu doctor [--repair-owner]` | 檢查 Cursor、外掛可載入性與本機設定；只有明確旗標才隔離損壞 owner 記錄。 |
 | `omcu uninstall [--receipt <file>] [--state-root <dir>] [--purge-project-state]` | 移除收據擁有的路徑；預設為目前收據。 |
 | `omcu capabilities discover` | 比對即時 Cursor 版本/help 與釘選 lock。 |
 | `omcu capabilities native-status` | 執行 `cursor-agent status` 並回傳 JSON 封套。 |
@@ -154,9 +159,13 @@ omcu workflow plan --name delivery [--version 1] --id run-1 --objective "ship sa
 omcu workflow run --id run-1
 omcu workflow status --id run-1
 omcu workflow replay --id run-1
+omcu workflow lease-status --id run-1
+omcu workflow lease-reconcile --id run-1 --revision <n> --credential-json '<不含秘密的確認 JSON>'
 ```
 
 定義依 name/version/digest 不可變。計畫與摘要鏈收據位於 `.omcu/workflows/`。已完成的工作流程仍回報 `verified: false`；僅 run 狀態驗證命令具權威。
+
+`lease-reconcile` 使用 `lease-status` 回傳的精確脫敏租約中繼資料、預期的 `ambiguous` 狀態/原因，以及 `operator_confirmation: "owner-dead-side-effects-reviewed"`。不要把原始 owner nonce 放進命令列；它不會持久化，崩潰協調也不需要它。
 
 每次 Cursor 呼叫前，CLI 會持久化 `task_started` 意圖。若程序在對應收據變為持久之前結束，`status` 與 `replay` 會回報 `ambiguous`。OMCU 不會自動重跑該任務，因為其編輯或 shell 副作用可能已發生。檢查 run 記錄與儲存庫、手動對帳不確定效果後，若需明確重跑請建立新 run ID。刻意**沒有**自動 `ambiguous`→重試轉換。
 
@@ -195,9 +204,112 @@ omcu ulw --id <run-id> --workers-json '[
 
 ```sh
 omcu team start --id <team-id> --workers-json '<json-array>'
+omcu team run --id <team-id> --workers-json '<json-array>'
 omcu team status --id <team-id>
 omcu team collect --id <team-id>
 omcu team stop --id <team-id>
 ```
 
 `team run` 為 `team start` 的別名；不會 collect 或驗證結果。supervisor 建立 `cursor-agent --print --mode ask` 程序、記錄 pane 程序群組，並回報 `native_cursor_team: false`。
+
+<!-- OMCU:CLI-REFERENCE:START -->
+## Generated CLI reference
+
+Do not edit this block manually; it is generated from `COMMAND_SCHEMAS`.
+
+- `omcu help` | options: none | positionals: command; action
+- `omcu version` | options: none | positionals: none
+- `omcu setup` | options: --source:string; --state-root:string; --init-project-state:flag | positionals: none
+- `omcu update` | options: --source:string; --state-root:string; --init-project-state:flag | positionals: none
+- `omcu doctor` | options: --repair-owner:flag | positionals: none
+- `omcu uninstall` | options: --receipt:string; --state-root:string; --purge-project-state:flag | positionals: none
+- `omcu capabilities` | options: none | positionals: none
+- `omcu capabilities discover` | options: none | positionals: none
+- `omcu capabilities native-status` | options: none | positionals: none
+- `omcu native-status` | options: none | positionals: none
+- `omcu mcp-server` | options: none | positionals: none
+- `omcu mcp-install` | options: --file:string | positionals: none
+- `omcu session` | options: none | positionals: none
+- `omcu session create` | options: none | positionals: none
+- `omcu session list` | options: none | positionals: none
+- `omcu session resume` | options: --id:string required; --prompt:string | positionals: none
+- `omcu session continue` | options: --prompt:string | positionals: none
+- `omcu resume` | options: --id:string required; --prompt:string | positionals: none
+- `omcu state` | options: none | positionals: none
+- `omcu state create` | options: --id:string required; --objective:string required | positionals: none
+- `omcu state status` | options: --id:string required | positionals: none
+- `omcu state transition` | options: --id:string required; --revision:integer required; --status:string required | positionals: none
+- `omcu state verify` | options: --id:string required; --revision:integer required; --evidence-sha256:string required | positionals: none
+- `omcu state event` | options: --id:string required; --type:string required; --payload-json:json default={} | positionals: none
+- `omcu run` | options: none | positionals: none
+- `omcu run create` | options: --id:string required; --objective:string required | positionals: none
+- `omcu run status` | options: --id:string required | positionals: none
+- `omcu run transition` | options: --id:string required; --revision:integer required; --status:string required | positionals: none
+- `omcu run verify` | options: --id:string required; --revision:integer required; --evidence-sha256:string required | positionals: none
+- `omcu run event` | options: --id:string required; --type:string required; --payload-json:json default={} | positionals: none
+- `omcu lease` | options: none | positionals: none
+- `omcu lease status` | options: --run:string required; --name:string required | positionals: none
+- `omcu lease acquire` | options: --run:string required; --name:string required; --owner:string required; --ttl-ms:integer default=30000 | positionals: none
+- `omcu lease release` | options: --run:string required; --name:string required; --owner:string required; --generation:integer required | positionals: none
+- `omcu cancel` | options: --id:string required | positionals: none
+- `omcu recover` | options: none | positionals: none
+- `omcu recover show` | options: --id:string required | positionals: none
+- `omcu recover create` | options: --transcript:string; --project-jsonl:string; --id:string | positionals: none
+- `omcu compact` | options: none | positionals: none
+- `omcu compact checkpoint` | options: --id:string required; --generation:integer required; --payload-json:json required | positionals: none
+- `omcu compact show` | options: --id:string required | positionals: none
+- `omcu compact render` | options: --id:string required; --generation:integer required | positionals: none
+- `omcu memory` | options: none | positionals: none
+- `omcu memory put` | options: --text:string required; --id:string; --metadata-json:json default={} | positionals: none
+- `omcu memory list` | options: none | positionals: none
+- `omcu memory show` | options: --id:string required | positionals: none
+- `omcu memory search` | options: --query:string required; --limit:integer default=20 | positionals: none
+- `omcu memory export` | options: none | positionals: none
+- `omcu memory import` | options: --file:string required | positionals: none
+- `omcu memory rescan` | options: none | positionals: none
+- `omcu notify` | options: none | positionals: none
+- `omcu notify status` | options: none | positionals: none
+- `omcu notify configure` | options: --generation:integer required; --enable:flag; --destination:string | positionals: none
+- `omcu notify enqueue` | options: --payload-json:json required; --id:string | positionals: none
+- `omcu notify show` | options: --id:string required | positionals: none
+- `omcu notify dispatch` | options: --id:string required; --generation:integer required; --nonce:string required | positionals: none
+- `omcu tracker` | options: none | positionals: none
+- `omcu tracker record` | options: --id:string required; --phase:string required; --detail-json:json default={} | positionals: none
+- `omcu tracker history` | options: --id:string required | positionals: none
+- `omcu wiki` | options: none | positionals: none
+- `omcu wiki render` | options: --slug:string required; --tracker:string required; --generation:integer required; --title:string required | positionals: none
+- `omcu wiki show` | options: --slug:string required | positionals: none
+- `omcu workflow` | options: none | positionals: none
+- `omcu workflow install` | options: --file:string required | positionals: none
+- `omcu workflow list` | options: none | positionals: none
+- `omcu workflow show` | options: --name:string required; --version:string default="1" | positionals: none
+- `omcu workflow plan` | options: --name:string required; --version:string default="1"; --id:string required; --objective:string; --prompt:string | positionals: objective
+- `omcu workflow run` | options: --id:string required | positionals: none
+- `omcu workflow status` | options: --id:string required | positionals: none
+- `omcu workflow replay` | options: --id:string required | positionals: none
+- `omcu workflow lease-status` | options: --id:string required | positionals: none
+- `omcu workflow lease-reconcile` | options: --id:string required; --revision:integer required; --credential-json:json required | positionals: none
+- `omcu team` | options: none | positionals: none
+- `omcu team start` | options: --id:string required; --workers-json:json required | positionals: none
+- `omcu team run` | options: --id:string required; --workers-json:json required | positionals: none
+- `omcu team status` | options: --id:string required | positionals: none
+- `omcu team collect` | options: --id:string required | positionals: none
+- `omcu team stop` | options: --id:string required | positionals: none
+- `omcu team api` | options: --op:string; --input:json default={}; --help:flag aliases=-h | positionals: operation
+- `omcu persist` | options: none | positionals: none
+- `omcu persist start` | options: --goal:string required; --max-loops:integer default=25; --deadline-min:integer default=120 | positionals: none
+- `omcu persist stop` | options: none | positionals: none
+- `omcu persist done` | options: none | positionals: none
+- `omcu persist status` | options: none | positionals: none
+- `omcu persist decide` | options: --input:json | positionals: none
+- `omcu ralplan` | options: --objective:string; --prompt:string; --rounds:integer default=3 | positionals: objective
+- `omcu ralph` | options: --objective:string; --prompt:string; --iterations:integer default=5 | positionals: objective
+- `omcu ulw` | options: --id:string required; --workers-json:json required | positionals: none
+- `omcu autopilot` | options: --objective:string; --prompt:string; --gates-json:json | positionals: objective
+- `omcu pipeline` | options: --objective:string; --prompt:string; --gates-json:json | positionals: objective
+- `omcu review` | options: --objective:string; --prompt:string; --format:string default="json" | positionals: objective
+- `omcu qa` | options: --objective:string; --prompt:string; --format:string default="json" | positionals: objective
+- `omcu accept` | options: --objective:string; --prompt:string; --format:string default="json" | positionals: objective
+- `omcu integrate` | options: --objective:string; --prompt:string; --format:string default="json" | positionals: objective
+- `omcu ask` | options: --objective:string; --prompt:string; --format:string default="json" | positionals: objective
+<!-- OMCU:CLI-REFERENCE:END -->

@@ -65,7 +65,7 @@ export async function listMailboxMessages(
   workerName: string,
   options: { readonly includeDelivered?: boolean } = {},
 ): Promise<readonly TeamMailboxMessage[]> {
-  const mailbox = await withDirectoryLock(teamMailboxPath(root, teamName, workerName), () => readMailboxUnlocked(root, teamName, workerName));
+  const mailbox = readMailboxUnlocked(root, teamName, workerName);
   if (options.includeDelivered === false) return mailbox.messages.filter((message) => message.delivered_at === undefined);
   return mailbox.messages;
 }

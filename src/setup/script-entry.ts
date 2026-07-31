@@ -84,6 +84,7 @@ async function main(argv: readonly string[]): Promise<number> {
       ...(option(argv, '--project') === undefined ? {} : { projectRoot: option(argv, '--project')! }),
       ...(option(argv, '--cursor-command') === undefined ? {} : { cursorCommand: option(argv, '--cursor-command')! }),
       runDoctor: !argv.includes('--no-doctor'),
+      initializeProjectState: argv.includes('--init-project-state'),
     });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     const doctor = result.doctor;

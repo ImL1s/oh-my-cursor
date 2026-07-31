@@ -10,6 +10,8 @@ export interface DoctorInput {
   readonly homeDir?: string;
   readonly cursorCommand?: string;
   readonly runner?: CommandRunner;
+  /** Setup/update opt-out must not even inspect project-local `.omcu`. */
+  readonly inspectProjectState?: boolean;
 }
 
 export interface DoctorReport {
@@ -90,7 +92,14 @@ function configTier(root: string, projectRoot: string, resources: PluginInspecti
   checks.push(mcp === undefined
     ? { id: 'mcp', status: 'warn', message: 'No MCP configuration is claimed' }
     : { id: 'mcp', status: 'pass', message: 'MCP configuration is present', detail: { path: mcp } });
-  const tier: 0 | 1 | 2 | 3 = rule === undefined ? 0 : hook === undefined ? 1 : mcp === undefined ? 2 : 3;
+  let tier: 0 | 1 | 2 | 3 = 0;
+  if (rule !== undefined) {
+    tier = 1;
+    if (hook !== undefined) {
+      tier = 2;
+      if (mcp !== undefined) tier = 3;
+    }
+  }
   return { checks, tier };
 }
 
@@ -147,14 +156,22 @@ export async function runSetupDoctor(input: DoctorInput): Promise<DoctorReport> 
 
   const tiers = configTier(root, projectRoot, manifest.resources);
   checks.push(...tiers.checks);
-  checks.push(fileCheck('project_state', path.join(projectRoot, '.omcu'), 'warn'));
+  if (input.inspectProjectState !== false) {
+    checks.push(fileCheck('project_state', path.join(projectRoot, '.omcu'), 'warn'));
+  }
 
   const hasFail = checks.some((check) => check.status === 'fail');
   const hasWarn = checks.some((check) => check.status === 'warn');
+  let exitCode: 0 | 1 | 2 = 0;
+  if (hasFail) {
+    exitCode = 1;
+  } else if (hasWarn) {
+    exitCode = 2;
+  }
   return {
     schema_version: 1,
     ok: !hasFail,
-    exit_code: hasFail ? 1 : hasWarn ? 2 : 0,
+    exit_code: exitCode,
     capability_tier: tiers.tier,
     checks,
   };

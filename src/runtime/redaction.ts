@@ -2,6 +2,7 @@ const REDACTED = '<redacted>';
 const SENSITIVE_KEY = /(?:authorization|cookie|token|secret|password|passwd|api[_-]?key|prompt|command|argv|stdin|body)/i;
 const ASSIGNMENT = /\b(authorization|cookie|token|secret|password|passwd|api[_-]?key)\s*([=:])\s*(?:bearer\s+)?[^\s,;]+/gi;
 const BEARER = /\bbearer\s+[^\s,;]+/gi;
+const TOKEN_PREFIX = /\b(?:github_pat_|gh[pousr]_|sk-)[A-Za-z0-9_-]{8,}\b/gi;
 
 export interface RedactionLimits {
   readonly maxDepth?: number;
@@ -20,7 +21,10 @@ export function redact(value: unknown, limits: RedactionLimits = {}): unknown {
     if (depth > maxDepth) return '<truncated:depth>';
     if (typeof input === 'string') {
       const bounded = input.length > maxStringLength ? `${input.slice(0, maxStringLength)}<truncated>` : input;
-      return bounded.replace(BEARER, 'Bearer <redacted>').replace(ASSIGNMENT, '$1$2<redacted>');
+      return bounded
+        .replace(BEARER, 'Bearer <redacted>')
+        .replace(ASSIGNMENT, '$1$2<redacted>')
+        .replace(TOKEN_PREFIX, '<redacted>');
     }
     if (input === null || typeof input !== 'object') return input;
     if (Array.isArray(input)) {

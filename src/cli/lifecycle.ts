@@ -1,36 +1,44 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { atomicWriteJson } from '../runtime/atomic.js';
+import { quarantineInvalidCliOwnerRecord } from '../state/authority.js';
 import { installOrUpdate, runSetupDoctor, uninstall, type InstallResult } from '../setup/index.js';
-import { option } from './parser.js';
-import { externalStateRoot, printJson, type CliContext } from './shared.js';
+import { externalStateRoot, flagValue, optionValue, printJson, type CliContext } from './shared.js';
 
-export async function handleLifecycle(command: string, action: string | null, args: readonly string[], context: CliContext): Promise<number | null> {
-  const stateRoot = option(args, '--state-root') ?? externalStateRoot(context.homeDir);
+export async function handleLifecycle(context: CliContext): Promise<number | null> {
+  const { command, action } = context.parsed;
+  const stateRoot = optionValue<string>(context, '--state-root') ?? externalStateRoot(context.homeDir);
   if (command === 'setup' || command === 'update') {
     const result = await installOrUpdate({
-      sourceRoot: option(args, '--source') ?? context.packageRoot,
+      sourceRoot: optionValue<string>(context, '--source') ?? context.packageRoot,
       action: command === 'update' ? 'update' : 'install',
       homeDir: context.homeDir,
       stateRoot,
       projectRoot: context.cwd,
+      initializeProjectState: flagValue(context, '--init-project-state'),
     });
     printJson(context.io, result);
     return installExitCode(result);
   }
   if (command === 'doctor') {
+    const repairOwner = flagValue(context, '--repair-owner');
+    const quarantinedOwner = repairOwner
+      ? quarantineInvalidCliOwnerRecord(context.root)
+      : null;
     const report = await runSetupDoctor({ packageRoot: context.packageRoot, projectRoot: context.cwd, homeDir: context.homeDir });
-    printJson(context.io, report);
+    printJson(context.io, repairOwner
+      ? { ...report, owner_repair: { repaired: quarantinedOwner !== null, quarantine_path: quarantinedOwner } }
+      : report);
     return report.exit_code;
   }
   if (command === 'uninstall') {
-    const receiptPath = option(args, '--receipt') ?? (JSON.parse(fs.readFileSync(path.join(stateRoot, 'install', 'current.json'), 'utf8')) as { receipt_path: string }).receipt_path;
-    const result = uninstall({ receiptPath, homeDir: context.homeDir, stateRoot, purgeProjectState: args.includes('--purge-project-state') });
+    const receiptPath = optionValue<string>(context, '--receipt') ?? (JSON.parse(fs.readFileSync(path.join(stateRoot, 'install', 'current.json'), 'utf8')) as { receipt_path: string }).receipt_path;
+    const result = uninstall({ receiptPath, homeDir: context.homeDir, stateRoot, purgeProjectState: flagValue(context, '--purge-project-state') });
     printJson(context.io, result);
     return uninstallExitCode(result.status);
   }
   if (command === 'mcp-install') {
-    const target = path.resolve(option(args, '--file') ?? path.join(context.cwd, '.cursor', 'mcp.json'));
+    const target = path.resolve(optionValue<string>(context, '--file') ?? path.join(context.cwd, '.cursor', 'mcp.json'));
     const parsed: unknown = fs.existsSync(target) ? JSON.parse(fs.readFileSync(target, 'utf8')) : {};
     if (!isPlainObject(parsed)) throw new Error('E_MCP_CONFIG_INVALID');
     const servers = parsed.mcpServers;

@@ -60,18 +60,19 @@ describe('CLI-owned persist state', () => {
     expect(persistStatus(root)).toEqual({ present: false, state: null });
   });
 
-  it('reads back null for malformed, wrong-version, or symlinked state', () => {
+  it('distinguishes absent state from malformed, wrong-version, or symlinked corruption', () => {
     const root = projectStateRoot(workspace());
     const file = path.join(root.path, 'persist.json');
+    expect(readPersistState(root)).toBeNull();
     fs.writeFileSync(file, 'not json', { mode: 0o600 });
-    expect(readPersistState(root)).toBeNull();
+    expect(() => readPersistState(root)).toThrow('E_STATE_CORRUPT');
     fs.writeFileSync(file, JSON.stringify({ schema_version: 2, active: true, goal: 'g', max_loops: 1, deadline_ms: 1, created_at_ms: 1, done: false }), { mode: 0o600 });
-    expect(readPersistState(root)).toBeNull();
+    expect(() => readPersistState(root)).toThrow('E_STATE_CORRUPT');
     fs.rmSync(file);
     const target = path.join(root.path, 'elsewhere.json');
     fs.writeFileSync(target, JSON.stringify({ schema_version: 1, active: true, goal: 'g', max_loops: 1, deadline_ms: 1, created_at_ms: 1, done: false }), { mode: 0o600 });
     fs.symlinkSync(target, file);
-    expect(readPersistState(root)).toBeNull();
+    expect(() => readPersistState(root)).toThrow('E_STATE_CORRUPT');
   });
 
   it('normalizes only complete, in-bounds objects', () => {

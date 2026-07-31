@@ -7,6 +7,7 @@ export const MAX_PERSIST_LOOPS = 500;
 export const DEFAULT_PERSIST_LOOPS = 25;
 export const DEFAULT_PERSIST_DEADLINE_MINUTES = 120;
 export const MAX_PERSIST_DEADLINE_MINUTES = 24 * 60;
+const MAX_PERSIST_STATE_BYTES = 64 * 1024;
 
 export interface PersistState {
   readonly schema_version: 1;
@@ -22,23 +23,38 @@ function persistFile(root: StateRoot): string {
   return withinStateRoot(root, 'persist.json');
 }
 
-/** Read current persist state, or null when absent/malformed (fail-safe = inactive). */
+/** Read current persist state. Absence is optional; corruption fails closed. */
 export function readPersistState(root: StateRoot): PersistState | null {
   const file = persistFile(root);
-  let raw: string;
+  let descriptor: number | undefined;
   try {
-    if (fs.lstatSync(file).isSymbolicLink()) return null;
-    raw = fs.readFileSync(file, 'utf8');
-  } catch {
-    return null;
+    const before = fs.lstatSync(file);
+    if (!before.isFile() || before.isSymbolicLink() || before.size > MAX_PERSIST_STATE_BYTES) {
+      throw new Error('E_PERSIST_STATE_INVALID');
+    }
+    if (typeof process.getuid === 'function' && before.uid !== process.getuid()) {
+      throw new Error('E_PERSIST_STATE_OWNER_INVALID');
+    }
+    if ((before.mode & 0o077) !== 0) throw new Error('E_PERSIST_STATE_MODE_UNSAFE');
+    descriptor = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+    const opened = fs.fstatSync(descriptor);
+    if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino
+      || opened.size > MAX_PERSIST_STATE_BYTES) {
+      throw new Error('E_PERSIST_STATE_CHANGED');
+    }
+    const value = JSON.parse(fs.readFileSync(descriptor, 'utf8')) as unknown;
+    const state = normalizePersistState(value);
+    if (state === null) throw new Error('E_PERSIST_STATE_INVALID');
+    return state;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    if (error instanceof Error && error.message === 'E_STATE_CORRUPT') throw error;
+    throw new Error('E_STATE_CORRUPT', { cause: error });
+  } finally {
+    if (descriptor !== undefined) {
+      try { fs.closeSync(descriptor); } catch { /* a read failure is already surfaced above */ }
+    }
   }
-  let value: unknown;
-  try {
-    value = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  return normalizePersistState(value);
 }
 
 export function normalizePersistState(value: unknown): PersistState | null {

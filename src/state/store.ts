@@ -20,6 +20,89 @@ function readJson<T>(file: string): T {
   return JSON.parse(fs.readFileSync(file, 'utf8')) as T;
 }
 
+function stateCorrupt(error: unknown): Error {
+  return new Error('E_STATE_CORRUPT', { cause: error });
+}
+function validDate(value: unknown): value is string {
+  return typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
+}
+function validMutation(value: unknown): value is MutationProof {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const mutation = value as Partial<MutationProof>;
+  return mutation.source === 'omcu-cli'
+    && typeof mutation.owner_token_sha256 === 'string' && /^[a-f0-9]{64}$/.test(mutation.owner_token_sha256)
+    && Number.isInteger(mutation.writer_pid) && (mutation.writer_pid as number) > 0
+    && validDate(mutation.mutated_at);
+}
+function validRunState(state: RunStateV1, runId: string): boolean {
+  const verificationConsistent = state.verification !== null && typeof state.verification === 'object'
+    && typeof state.verification.verified === 'boolean'
+    && (state.verification.verified
+      ? state.status !== 'active'
+        && typeof state.verification.evidence_sha256 === 'string'
+        && /^[a-f0-9]{64}$/.test(state.verification.evidence_sha256)
+        && validDate(state.verification.verified_at)
+      : state.verification.evidence_sha256 === null && state.verification.verified_at === null);
+  return state.store_kind === 'run_state' && state.schema_version === 1 && state.repository_id === 'OMCU'
+    && state.run_id === runId && Number.isInteger(state.revision) && state.revision >= 1
+    && ['active', 'complete', 'failed', 'cancelled'].includes(state.status)
+    && typeof state.objective === 'string' && state.objective.trim() !== '' && state.objective.length <= 16_384
+    && validDate(state.created_at) && validDate(state.updated_at)
+    && verificationConsistent
+    && validMutation(state.last_mutation);
+}
+function validLease(lease: LeaseV1, runId: string, leaseName: string): boolean {
+  return lease.store_kind === 'run_lease' && lease.schema_version === 1 && lease.repository_id === 'OMCU'
+    && lease.run_id === runId && lease.lease_name === leaseName
+    && SAFE_KEY.test(lease.owner) && Number.isInteger(lease.generation) && lease.generation >= 1
+    && validDate(lease.expires_at) && validMutation(lease.mutation);
+}
+
+/** Read a run without creating CLI authority or acquiring a mutation lock. */
+export function observeRunState(root: StateRoot, runId: string): RunStateV1 {
+  const safeRunId = safeKey(runId, 'run_id');
+  const file = withinStateRoot(root, 'runs', safeRunId, 'state.json');
+  try {
+    const state = readJson<RunStateV1>(file);
+    if (!validRunState(state, runId)) {
+      throw new Error('E_RUN_STATE_INVALID');
+    }
+    return state;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('E_STATE_ABSENT', { cause: error });
+    throw stateCorrupt(error);
+  }
+}
+
+/** Read a lease without creating CLI authority or acquiring a mutation lock. */
+export function observeLease(root: StateRoot, runId: string, leaseName: string): LeaseV1 {
+  const lease = readLease(root, runId, leaseName, false);
+  if (lease === null) throw new Error('E_STATE_ABSENT');
+  return lease;
+}
+
+function readLease(root: StateRoot, runId: string, leaseName: string, absentAsNull: boolean): LeaseV1 | null {
+  const file = withinStateRoot(
+    root,
+    'leases',
+    safeKey(runId, 'run_id'),
+    `${safeKey(leaseName, 'lease_name')}.json`,
+  );
+  try {
+    const lease = readJson<LeaseV1>(file);
+    if (!validLease(lease, runId, leaseName)) {
+      throw new Error('E_LEASE_INVALID');
+    }
+    return lease;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      if (absentAsNull) return null;
+      throw new Error('E_STATE_ABSENT', { cause: error });
+    }
+    throw stateCorrupt(error);
+  }
+}
+
 export class RunStateStore {
   constructor(private readonly root: StateRoot, private readonly authority: CliMutationAuthority, private readonly now: () => Date = () => new Date()) {
     assertCliMutationAuthority(authority);
@@ -29,9 +112,7 @@ export class RunStateStore {
   private runFile(runId: string): string { return path.join(this.runDir(runId), 'state.json'); }
 
   read(runId: string): RunStateV1 {
-    const state = readJson<RunStateV1>(this.runFile(runId));
-    if (state.store_kind !== 'run_state' || state.schema_version !== 1 || state.run_id !== runId) throw new Error('E_RUN_STATE_INVALID');
-    return state;
+    return observeRunState(this.root, runId);
   }
 
   async create(runId: string, objective: string): Promise<RunStateV1> {
@@ -107,11 +188,7 @@ export class LeaseStore {
     return withinStateRoot(this.root, 'leases', safeKey(runId, 'run_id'), `${safeKey(leaseName, 'lease_name')}.json`);
   }
   read(runId: string, leaseName: string): LeaseV1 | null {
-    const file = this.file(runId, leaseName);
-    if (!fs.existsSync(file)) return null;
-    const lease = readJson<LeaseV1>(file);
-    if (lease.run_id !== runId || lease.lease_name !== leaseName) throw new Error('E_LEASE_INVALID');
-    return lease;
+    return readLease(this.root, runId, leaseName, true);
   }
   async acquire(runId: string, leaseName: string, owner: string, ttlMs: number): Promise<LeaseV1> {
     safeKey(owner, 'lease_owner');
