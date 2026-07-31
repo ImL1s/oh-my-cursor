@@ -259,6 +259,33 @@ describe('team worker inbox atomic publication', () => {
 });
 
 describe('team mailbox primitives', () => {
+  it.each(['missing directory', 'missing file'] as const)(
+    'lists an empty mailbox without mutating an existing team tree when the mailbox has a %s',
+    async (missing) => {
+      const { root } = workspace();
+      initializeTeamState(root, {
+        teamName: 'read-only',
+        task: 'snapshot reads',
+        workers: [{ name: 'one', owned_paths: ['a'] }],
+      });
+
+      const mailbox = teamMailboxPath(root, 'read-only', 'one');
+      const mailboxDir = path.dirname(mailbox);
+      const observedParent = missing === 'missing directory' ? teamStateDir(root, 'read-only') : mailboxDir;
+      if (missing === 'missing directory') fs.rmSync(mailboxDir, { recursive: true });
+      else fs.rmSync(mailbox);
+      const entriesBefore = fs.readdirSync(observedParent);
+      const mtimeBefore = fs.statSync(observedParent).mtimeMs;
+
+      await expect(listMailboxMessages(root, 'read-only', 'one')).resolves.toEqual([]);
+
+      expect(fs.readdirSync(observedParent)).toEqual(entriesBefore);
+      expect(fs.statSync(observedParent).mtimeMs).toBe(mtimeBefore);
+      expect(fs.existsSync(mailbox)).toBe(false);
+      if (missing === 'missing directory') expect(fs.existsSync(mailboxDir)).toBe(false);
+    },
+  );
+
   it('roundtrips send / list / mark-delivered and fails closed on corrupt mailbox', async () => {
     const { root } = workspace();
     initializeTeamState(root, {

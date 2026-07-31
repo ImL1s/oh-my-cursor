@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 import { digestDirectory } from '../../src/setup/digest.js';
@@ -526,7 +527,10 @@ describe('receipt-backed lifecycle', () => {
       initializeProjectState: true,
     });
     const projectState = path.join(project, '.omcu');
-    const ownershipMarker = path.join(projectState, '.install-owner-interrupted');
+    const ownershipMarker = path.join(
+      projectState,
+      `.install-owner-${crypto.createHash('sha256').update(installed.receipt.transaction_id).digest('hex')}`,
+    );
     const cli = path.join(home, '.local', 'bin', 'omcu');
     fs.writeFileSync(ownershipMarker, `${installed.receipt.receipt_sha256}\n`, { mode: 0o600 });
     fs.writeFileSync(path.join(state, 'install', 'transaction.json'), `${JSON.stringify({
@@ -554,6 +558,55 @@ describe('receipt-backed lifecycle', () => {
     });
 
     expect(fs.existsSync(ownershipMarker)).toBe(false);
+    expect(fs.existsSync(path.join(state, 'install', 'transaction.json'))).toBe(false);
+  });
+
+  it('does not unlink a foreign same-user file named by a crafted committed journal', async () => {
+    const root = temporary('omcu-crafted-owner-marker-');
+    const home = path.join(root, 'home');
+    const project = path.join(root, 'project');
+    const state = path.join(root, 'state');
+    const foreign = path.join(root, 'foreign');
+    fs.mkdirSync(home);
+    fs.mkdirSync(project);
+    fs.mkdirSync(foreign);
+    const installed = await installOrUpdate({
+      sourceRoot: packageFixture(root, '10.3.0', 'crafted-owner-marker'),
+      homeDir: home, stateRoot: state, projectRoot: project,
+      transactionId: 'crafted-owner-marker', runner: healthyCursor,
+      initializeProjectState: true,
+    });
+    const victim = path.join(
+      foreign,
+      `.install-owner-${crypto.createHash('sha256').update(installed.receipt.transaction_id).digest('hex')}`,
+    );
+    const cli = path.join(home, '.local', 'bin', 'omcu');
+    fs.writeFileSync(victim, `${installed.receipt.receipt_sha256}\n`, { mode: 0o600 });
+    fs.writeFileSync(path.join(state, 'install', 'transaction.json'), `${JSON.stringify({
+      store_kind: 'omcu_install_transaction',
+      schema_version: 1,
+      cli,
+      candidate_target: path.join(installed.receipt.installed.stage, 'dist', 'bin', 'omcu.js'),
+      prior_cli_target: null,
+      current_pointer: path.join(state, 'install', 'current.json'),
+      prior_pointer_base64: null,
+      receipt_path: installed.receiptPath,
+      receipt_sha256: installed.receipt.receipt_sha256,
+      stage: installed.receipt.installed.stage,
+      stage_existed: false,
+      temporary_stage: `${installed.receipt.installed.stage}.tmp-crafted`,
+      project_state: foreign,
+      project_state_ownership_marker: victim,
+    })}\n`, { mode: 0o600 });
+
+    await installOrUpdate({
+      sourceRoot: packageFixture(root, '10.4.0', 'after-crafted-owner-marker'),
+      action: 'update', homeDir: home, stateRoot: state, projectRoot: project,
+      transactionId: 'after-crafted-owner-marker', runner: healthyCursor,
+      initializeProjectState: false,
+    });
+
+    expect(fs.readFileSync(victim, 'utf8')).toBe(`${installed.receipt.receipt_sha256}\n`);
     expect(fs.existsSync(path.join(state, 'install', 'transaction.json'))).toBe(false);
   });
 

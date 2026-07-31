@@ -209,6 +209,21 @@ function ownsProjectState(journal: InstallTransactionJournal): boolean {
   if (journal.project_state === null || journal.project_state_ownership_marker === null) return false;
   if (path.dirname(journal.project_state_ownership_marker) !== journal.project_state) return false;
   try {
+    const receipt = readInstallReceipt(journal.receipt_path);
+    const projectStateInventory = receipt.owned_inventory.filter((owned) => owned.kind === 'project_state');
+    const expectedMarker = path.join(
+      journal.project_state,
+      `.install-owner-${crypto.createHash('sha256').update(receipt.transaction_id).digest('hex')}`,
+    );
+    if (receipt.receipt_sha256 !== journal.receipt_sha256
+      || receipt.installed.stage !== journal.stage
+      || receipt.installed.cli !== journal.cli
+      || journal.candidate_target !== path.join(receipt.installed.stage, 'dist', 'bin', 'omcu.js')
+      || path.basename(journal.receipt_path) !== `${receipt.transaction_id}.json`
+      || projectStateInventory.length !== 1
+      || projectStateInventory[0]?.path !== journal.project_state
+      || projectStateInventory[0]?.identity !== path.resolve(path.dirname(journal.project_state))
+      || journal.project_state_ownership_marker !== expectedMarker) return false;
     const directory = fs.lstatSync(journal.project_state);
     const marker = fs.lstatSync(journal.project_state_ownership_marker);
     return directory.isDirectory() && !directory.isSymbolicLink()
@@ -303,9 +318,9 @@ function reconcileInstallTransaction(stateRoot: string, home: string, allowProje
       const previousPointer = JSON.parse(Buffer.from(journal.prior_pointer_base64, 'base64').toString('utf8')) as unknown;
       atomicWriteJson(journal.current_pointer, previousPointer);
     }
+    if (allowProjectStateCleanup) removeTransactionOwnedProjectState(journal);
     removeWritable(journal.receipt_path);
     if (!journal.stage_existed) removeWritable(journal.stage);
-    if (allowProjectStateCleanup) removeTransactionOwnedProjectState(journal);
   } else {
     clearProjectStateOwnershipMarker(journal);
   }

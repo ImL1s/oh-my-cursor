@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { teamApiOperationStateAccess } from '../team/api-interop.js';
 
 /**
  * Strict CLI grammar for non-host-launch OMCU commands.
@@ -261,7 +262,7 @@ export const COMMAND_SCHEMAS: Readonly<Record<string, CommandSchema>> = Object.f
       start: { stateAccess: 'write-ensure', options: [{ name: '--id', kind: 'string', required: true, pattern: TEAM_ID_PATTERN }, workersJson('team-workers')] },
       run: { stateAccess: 'write-ensure', options: [{ name: '--id', kind: 'string', required: true, pattern: TEAM_ID_PATTERN }, workersJson('team-workers')] },
       status: { stateAccess: 'read-existing', options: [{ name: '--id', kind: 'string', required: true, pattern: TEAM_ID_PATTERN }] },
-      collect: { stateAccess: 'write-ensure', options: [{ name: '--id', kind: 'string', required: true, pattern: TEAM_ID_PATTERN }] },
+      collect: { stateAccess: 'read-existing', options: [{ name: '--id', kind: 'string', required: true, pattern: TEAM_ID_PATTERN }] },
       stop: { stateAccess: 'write-ensure', options: [{ name: '--id', kind: 'string', required: true, pattern: TEAM_ID_PATTERN }] },
       api: {
         stateAccess: 'write-ensure',
@@ -790,7 +791,16 @@ export function parseCli(argv: readonly string[]): ParsedCommand {
     return parsedResult('help', null, target, validateArgsAgainstSchema(target, COMMAND_SCHEMAS.help!), 'none');
   }
   const validated = validateArgsAgainstSchema(args, actionSchema ?? schema);
-  return parsedResult(command, action, args, validated, resolvedStateAccess(actionSchema ?? schema, validated, schema.stateAccess));
+  const stateAccess = command === 'team' && action === 'api'
+    ? teamApiStateAccess(validated)
+    : resolvedStateAccess(actionSchema ?? schema, validated, schema.stateAccess);
+  return parsedResult(command, action, args, validated, stateAccess);
+}
+
+function teamApiStateAccess(validated: ValidatedArgs): StateAccess {
+  const selected = validated.values['--op'] ?? validated.namedPositionals.operation;
+  if (typeof selected !== 'string') return 'write-ensure';
+  return teamApiOperationStateAccess(selected);
 }
 
 function isHelpRequest(args: readonly string[]): boolean {

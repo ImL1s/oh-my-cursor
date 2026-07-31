@@ -13,6 +13,7 @@ import {
   listTasks,
   readTeamConfig,
   teamWorkerInboxPath,
+  validateTeamApiOperationInput,
 } from '../../src/team/index.js';
 
 const roots: string[] = [];
@@ -184,6 +185,31 @@ describe('team api interop (P0)', () => {
     if (!released.ok) return;
     expect(released.data).toMatchObject({ ok: true });
     expect((released.data as { task: { status: string } }).task.status).toBe('pending');
+  });
+
+  it('rejects task ids beyond the persisted 20-digit limit', async () => {
+    const { root, teamName } = workspace('task-id-limit');
+    const taskId = '1'.repeat(21);
+    for (const [operation, input] of [
+      ['claim-task', { team_name: teamName, task_id: taskId, worker: 'one' }],
+      ['transition-task-status', {
+        team_name: teamName, task_id: taskId, from: 'pending', to: 'in_progress', claim_token: 'token',
+      }],
+      ['release-task-claim', { team_name: teamName, task_id: taskId, worker: 'one', claim_token: 'token' }],
+    ] as const) {
+      const result = await executeTeamApiOperation(operation, input, root);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('invalid_input');
+    }
+  });
+
+  it('rejects blocked_by task ids beyond the persisted 20-digit limit during preflight', () => {
+    expect(() => validateTeamApiOperationInput('create-task', {
+      team_name: 'task-id-limit',
+      subject: 'blocked task',
+      description: 'wait for dependency',
+      blocked_by: ['1'.repeat(21)],
+    })).toThrow('E_TEAM_API_INPUT_INVALID: blocked_by must be an array of task ids');
   });
 
   it('recovers task-first publication without holes and serializes concurrent creators', async () => {

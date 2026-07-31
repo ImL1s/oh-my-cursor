@@ -287,6 +287,12 @@ describe('strict CLI grammar (#12)', () => {
     expect(parseCli(['doctor', '--repair-owner']).stateAccess).toBe('write-existing');
     expect(parseCli(['workflow', 'lease-status', '--id', 'r1']).stateAccess).toBe('read-existing');
     expect(parseCli(['workflow', 'lease-reconcile', '--id', 'r1', '--revision', '1', '--credential-json', JSON.stringify(reconciliationProof())]).stateAccess).toBe('write-existing');
+    expect(parseCli(['team', 'collect', '--id', 't1']).stateAccess).toBe('read-existing');
+    for (const operation of ['mailbox-list', 'list-tasks', 'get-summary']) {
+      expect(parseCli(['team', 'api', operation, '--input', '{}']).stateAccess).toBe('read-existing');
+      expect(parseCli(['team', 'api', '--op', operation, '--input', '{}']).stateAccess).toBe('read-existing');
+    }
+    expect(parseCli(['team', 'api', 'create-task', '--input', '{}']).stateAccess).toBe('write-ensure');
   });
 
   it('validates notify enable/destination combinations before state access', () => {

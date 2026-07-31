@@ -530,6 +530,64 @@ describe('atomic write integrity (#14)', () => {
     }
   });
 
+  it('attaches cleanup evidence to a primary durability-unknown error', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-atomic-crash-cleanup-'));
+    const file = path.join(root, 'state.json');
+    try {
+      let captured: AtomicWriteError | null = null;
+      try {
+        atomicWriteJson(file, { committed: true }, {
+          helperFaults: ['after_commit_crash', 'temp_unlink'],
+        });
+      } catch (error) {
+        captured = error as AtomicWriteError;
+      }
+      expect(captured).toMatchObject({
+        phase: 'commit_durability_unknown',
+        message: expect.stringContaining('E_ATOMIC_HELPER_EXIT_FAILED'),
+      });
+      expect(captured?.causeError).toBeUndefined();
+      expect(captured?.cleanupError).toBeInstanceOf(Error);
+      expect(captured?.recoveryArtifact).toBeUndefined();
+      expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ committed: true });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('merges cleanup errors and attaches the quarantined recovery artifact', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-atomic-cleanup-merge-'));
+    const file = path.join(root, 'state.json');
+    const primaryCause = new Error('E_PRIMARY_CAUSE');
+    const priorCleanup = new Error('E_PRIOR_CLEANUP');
+    try {
+      let captured: AtomicWriteError | null = null;
+      try {
+        atomicWriteJson(file, { committed: false }, {
+          helperFaults: ['temp_unlink'],
+          faultInjector: (point) => {
+            if (point === 'rename') {
+              throw new AtomicWriteError('E_PRIMARY', 'not_committed', primaryCause, priorCleanup);
+            }
+          },
+        });
+      } catch (error) {
+        captured = error as AtomicWriteError;
+      }
+      expect(captured).toMatchObject({ phase: 'not_committed', message: 'E_PRIMARY' });
+      expect(captured?.causeError).toBe(primaryCause);
+      expect(captured?.cleanupError).toBeInstanceOf(AggregateError);
+      expect((captured?.cleanupError as AggregateError).errors[0]).toBe(priorCleanup);
+      expect((captured?.cleanupError as AggregateError).errors[1])
+        .toMatchObject({ message: expect.stringContaining('FAULT_TEMP_UNLINK') });
+      expect(captured?.recoveryArtifact).toBeTruthy();
+      expect(fs.existsSync(captured?.recoveryArtifact ?? '')).toBe(true);
+      expect(fs.existsSync(file)).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('preserves the original action error when lock cleanup also fails', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-atomic-cleanup-'));
     const target = path.join(root, 'payload.json');

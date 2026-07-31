@@ -350,6 +350,10 @@ describe('side-effect-free CLI entry paths (#8)', () => {
       ['persist', 'status'],
       ['notify', 'status'],
       ['team', 'status', '--id', 'missing'],
+      ['team', 'collect', '--id', 'missing'],
+      ['team', 'api', 'mailbox-list', '--input', '{"team_name":"missing","worker":"one"}'],
+      ['team', 'api', '--op', 'list-tasks', '--input', '{"team_name":"missing"}'],
+      ['team', 'api', 'get-summary', '--input', '{"team_name":"missing"}'],
       ['state', 'status', '--id', 'missing'],
       ['lease', 'status', '--run', 'missing', '--name', 'main'],
     ];
@@ -364,6 +368,32 @@ describe('side-effect-free CLI entry paths (#8)', () => {
         expect(code, argv.join(' ')).toBe(1);
         expect(stderr.join(''), argv.join(' ')).toContain('E_STATE_ROOT_ABSENT');
         expect(fs.existsSync(path.join(cwd, '.omcu')), argv.join(' ')).toBe(false);
+      } finally {
+        fs.rmSync(cwd, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it('rejects overlong team task references before creating project state', async () => {
+    const taskId = '1'.repeat(21);
+    for (const [operation, input] of [
+      ['create-task', {
+        team_name: 't1', subject: 'blocked task', description: 'wait for dependency', blocked_by: [taskId],
+      }],
+      ['claim-task', { team_name: 't1', task_id: taskId, worker: 'one' }],
+      ['transition-task-status', {
+        team_name: 't1', task_id: taskId, from: 'in_progress', to: 'completed', claim_token: 'token',
+      }],
+      ['release-task-claim', { team_name: 't1', task_id: taskId, worker: 'one', claim_token: 'token' }],
+    ] as const) {
+      const cwd = tempCwd('omcu-team-task-id-');
+      const stderr: string[] = [];
+      try {
+        expect(await runCli(['team', 'api', operation, '--input', JSON.stringify(input)], {
+          cwd, packageRoot: path.resolve('.'),
+        }, { stdout: () => undefined, stderr: (text) => stderr.push(text) })).toBe(1);
+        expect(stderr.join('')).toContain('E_TEAM_API_INPUT_INVALID');
+        expect(fs.existsSync(path.join(cwd, '.omcu'))).toBe(false);
       } finally {
         fs.rmSync(cwd, { recursive: true, force: true });
       }

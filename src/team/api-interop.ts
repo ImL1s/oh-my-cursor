@@ -50,6 +50,12 @@ function isFiniteInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && Number.isFinite(value);
 }
 
+const TEAM_TASK_ID_PATTERN = /^\d{1,20}$/;
+
+function isTaskId(value: unknown): value is string {
+  return typeof value === 'string' && TEAM_TASK_ID_PATTERN.test(value);
+}
+
 function invalidInput(message: string): never {
   throw new Error(`E_TEAM_API_INPUT_INVALID: ${message}`);
 }
@@ -73,14 +79,21 @@ function safeWorker(args: Record<string, unknown>, key: string): string {
 }
 
 function taskId(args: Record<string, unknown>): string {
-  const value = requiredString(args, 'task_id', 32);
-  if (!/^\d+$/.test(value)) invalidInput('task_id is invalid');
+  const value = requiredString(args, 'task_id', 20);
+  if (!isTaskId(value)) invalidInput('task_id is invalid');
   return value;
 }
 
 export function resolveTeamApiOperation(name: string): TeamApiOperation | null {
   const normalized = name.trim().toLowerCase().replaceAll('_', '-');
   return (TEAM_API_OPERATIONS as readonly string[]).includes(normalized) ? (normalized as TeamApiOperation) : null;
+}
+
+export function teamApiOperationStateAccess(name: string): 'read-existing' | 'write-ensure' {
+  const operation = resolveTeamApiOperation(name);
+  return operation !== null && ['mailbox-list', 'list-tasks', 'get-summary'].includes(operation)
+    ? 'read-existing'
+    : 'write-ensure';
 }
 
 /** Pure argv/domain preflight. Call before materializing project state. */
@@ -116,7 +129,7 @@ export function validateTeamApiOperationInput(
         if (/[\u0000-\u001f\u007f]/.test(requestId)) invalidInput('request_id is invalid');
       }
       if (args.blocked_by !== undefined && (!Array.isArray(args.blocked_by)
-        || args.blocked_by.some((entry) => typeof entry !== 'string' || !/^\d+$/.test(entry)))) {
+        || args.blocked_by.some((entry) => !isTaskId(entry)))) {
         invalidInput('blocked_by must be an array of task ids');
       }
       break;

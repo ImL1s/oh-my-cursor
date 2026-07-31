@@ -830,6 +830,29 @@ function asAtomicPrecommit(error: unknown): AtomicWriteError {
     : new AtomicWriteError(`E_ATOMIC_NOT_COMMITTED: ${errorText(error)}`, 'not_committed', error);
 }
 
+function attachAtomicCleanupEvidence(
+  primary: AtomicWriteError,
+  cleanup: { readonly error?: unknown; readonly recoveryArtifact?: string },
+): AtomicWriteError {
+  if (cleanup.error !== undefined) {
+    const cleanupError = primary.cleanupError === undefined
+      ? cleanup.error
+      : new AggregateError(
+        [primary.cleanupError, cleanup.error],
+        'E_ATOMIC_TEMP_CLEANUP_FAILED',
+        { cause: primary.cleanupError },
+      );
+    Object.defineProperty(primary, 'cleanupError', { value: cleanupError, configurable: true });
+  }
+  if (primary.recoveryArtifact === undefined && cleanup.recoveryArtifact !== undefined) {
+    Object.defineProperty(primary, 'recoveryArtifact', {
+      value: cleanup.recoveryArtifact,
+      configurable: true,
+    });
+  }
+  return primary;
+}
+
 function intendedMode(file: string, requested: number | undefined): number {
   if (requested !== undefined) {
     if (!Number.isInteger(requested) || requested < 0 || requested > 0o777) {
@@ -997,7 +1020,7 @@ function atomicWritePrepared(
         }
       }
     }
-    if (error instanceof AtomicWriteError) throw error;
+    if (error instanceof AtomicWriteError) throw attachAtomicCleanupEvidence(error, cleanup);
     throw new AtomicWriteError(
       `${committed ? 'E_ATOMIC_DURABILITY_UNKNOWN' : 'E_ATOMIC_NOT_COMMITTED'}: ${errorText(error)}`,
       committed ? 'commit_durability_unknown' : 'not_committed',
