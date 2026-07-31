@@ -18,6 +18,7 @@ export class ExperimentalTmuxTeamSupervisor {
     private readonly sleep: (milliseconds: number) => Promise<void> = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
     private readonly coordinationRoot: StateRoot | null = null,
     private readonly identityObserver: (pid: number) => ProcessStartIdentityObservation = observeStartIdentity,
+    private readonly probeGroup: (pgid: number) => void = (pgid) => { process.kill(-pgid, 0); },
   ) {}
 
   async start(teamId: string, workers: readonly TeamWorkerSpec[]): Promise<TeamManifest> {
@@ -177,9 +178,18 @@ export class ExperimentalTmuxTeamSupervisor {
   private async aliveGroups(workers: readonly TeamWorkerManifest[]): Promise<number[]> {
     const alive: number[] = [];
     for (const worker of workers) {
-      const observed = await this.runner('ps', ['-o', 'pid=', '-g', String(worker.process_group_id)], worker.cwd);
-      if (observed.code === 0 && observed.stdout.trim() !== '') alive.push(worker.process_group_id);
-      else if (observed.code !== 0 && observed.code !== 1) throw new Error(`E_TEAM_LIVENESS_PROBE:${observed.stderr}`);
+      try {
+        this.probeGroup(worker.process_group_id);
+        alive.push(worker.process_group_id);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'ESRCH') continue;
+        if (code === 'EPERM') {
+          alive.push(worker.process_group_id);
+          continue;
+        }
+        throw new Error(`E_TEAM_LIVENESS_PROBE:${code ?? 'UNKNOWN'}`);
+      }
     }
     return alive;
   }
