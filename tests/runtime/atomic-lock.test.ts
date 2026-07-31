@@ -17,6 +17,56 @@ function waitForExit(child: ReturnType<typeof spawn>): Promise<void> {
 }
 
 describe('generic project-state directory lock', () => {
+  it('cleans only generated stale-lock debris with valid ownership evidence', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-atomic-stale-cleanup-'));
+    const target = path.join(root, 'state.json');
+    const lock = `${target}.lock`;
+    const generated = `${lock}.stale-123-${'a'.repeat(16)}`;
+    const backup = `${lock}.stale-backup`;
+    const forged = `${lock}.stale-456-${'b'.repeat(16)}`;
+    const invalidOwners = [
+      { name: `${lock}.stale-457-${'c'.repeat(16)}`, owner: {
+        schema_version: 1, pid: 123, token: 'c'.repeat(32), created_at_ms: -1,
+      } },
+      { name: `${lock}.stale-458-${'d'.repeat(16)}`, owner: {
+        schema_version: 1, pid: 123, token: 'c'.repeat(32), created_at_ms: Date.now() + 120_000,
+      } },
+      { name: `${lock}.stale-459-${'e'.repeat(16)}`, owner: {
+        schema_version: 1, pid: 123, token: 'c'.repeat(32), created_at_ms: 10,
+        renewed_at_ms: 9, start_identity: '', start_identity_proven: true,
+      } },
+    ];
+    const old = new Date(Date.now() - 48 * 60 * 60 * 1_000);
+    try {
+      for (const directory of [generated, backup, forged, ...invalidOwners.map(({ name }) => name)]) {
+        fs.mkdirSync(directory, { mode: 0o700 });
+      }
+      fs.writeFileSync(path.join(generated, 'owner.json'), JSON.stringify({
+        schema_version: 1,
+        pid: 123,
+        token: 'c'.repeat(32),
+        created_at_ms: 1,
+      }), { mode: 0o600 });
+      fs.writeFileSync(path.join(backup, 'notes.txt'), 'user backup');
+      fs.writeFileSync(path.join(forged, 'owner.json'), '{}\n', { mode: 0o600 });
+      for (const { name, owner } of invalidOwners) {
+        fs.writeFileSync(path.join(name, 'owner.json'), JSON.stringify(owner), { mode: 0o600 });
+      }
+      for (const directory of [generated, backup, forged, ...invalidOwners.map(({ name }) => name)]) {
+        fs.utimesSync(directory, old, old);
+      }
+
+      await expect(withDirectoryLock(target, () => 'done', 100)).resolves.toBe('done');
+
+      expect(fs.existsSync(generated)).toBe(false);
+      expect(fs.readFileSync(path.join(backup, 'notes.txt'), 'utf8')).toBe('user backup');
+      expect(fs.existsSync(forged)).toBe(true);
+      for (const { name } of invalidOwners) expect(fs.existsSync(name)).toBe(true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('reclaims an owner-only lock after its writer is killed', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-atomic-killed-'));
     const target = path.join(root, 'state.json');

@@ -286,7 +286,7 @@ describe('atomic write integrity (#14)', () => {
     }
   });
 
-  it('refuses a symlink target and performs bounded cleanup of abandoned temps', () => {
+  it('cleans only exact generated abandoned temps and preserves old prefix lookalikes', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-atomic-symlink-'));
     const external = path.join(root, 'external.json');
     const file = path.join(root, 'state.json');
@@ -297,14 +297,22 @@ describe('atomic write integrity (#14)', () => {
       expect(JSON.parse(fs.readFileSync(external, 'utf8'))).toEqual({ external: true });
       fs.unlinkSync(file);
       const old = new Date(Date.now() - 48 * 60 * 60 * 1_000);
+      const backup = `${file}.tmp-backup`;
+      const malformed = `${file}.tmp-123-not-generated`;
+      fs.writeFileSync(backup, 'user backup');
+      fs.writeFileSync(malformed, 'lookalike');
+      fs.utimesSync(backup, old, old);
+      fs.utimesSync(malformed, old, old);
       for (let index = 0; index < 40; index += 1) {
-        const artifact = `${file}.tmp-old-${index}`;
+        const artifact = `${file}.tmp-${index + 1}-${index.toString(16).padStart(16, '0')}`;
         fs.writeFileSync(artifact, 'abandoned');
         fs.utimesSync(artifact, old, old);
       }
       atomicWriteJson(file, { cleaned: true });
-      const abandoned = fs.readdirSync(root).filter((name) => name.startsWith('state.json.tmp-old-'));
+      const abandoned = fs.readdirSync(root).filter((name) => /^state\.json\.tmp-\d+-[a-f0-9]{16}$/.test(name));
       expect(abandoned.length).toBeLessThanOrEqual(8);
+      expect(fs.readFileSync(backup, 'utf8')).toBe('user backup');
+      expect(fs.readFileSync(malformed, 'utf8')).toBe('lookalike');
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -315,17 +323,84 @@ describe('atomic write integrity (#14)', () => {
     const file = path.join(root, 'state.json');
     try {
       for (let index = 0; index < 32; index += 1) {
-        fs.writeFileSync(`${file}.tmp-aaa-young-${String(index).padStart(3, '0')}`, 'young');
+        fs.writeFileSync(`${file}.tmp-${index + 1}-${index.toString(16).padStart(16, '0')}`, 'young');
       }
       const old = new Date(Date.now() - 48 * 60 * 60 * 1_000);
       for (let index = 0; index < 40; index += 1) {
-        const artifact = `${file}.tmp-zzz-old-${String(index).padStart(3, '0')}`;
+        const artifact = `${file}.tmp-${index + 100}-${(index + 100).toString(16).padStart(16, '0')}`;
         fs.writeFileSync(artifact, 'old');
         fs.utimesSync(artifact, old, old);
       }
       atomicWriteJson(file, { cleaned: true });
-      expect(fs.readdirSync(root).filter((name) => name.includes('zzz-old'))).toHaveLength(8);
-      expect(fs.readdirSync(root).filter((name) => name.includes('aaa-young'))).toHaveLength(32);
+      const entries = fs.readdirSync(root);
+      expect(entries.filter((name) => /^state\.json\.tmp-1\d\d-/.test(name))).toHaveLength(8);
+      expect(entries.filter((name) => /^state\.json\.tmp-(?:[1-9]|[12]\d|3[0-2])-/.test(name))).toHaveLength(32);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not let unrelated siblings starve generated abandoned-temp cleanup', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-atomic-cleanup-siblings-'));
+    const file = path.join(root, 'state.json');
+    const artifact = `${file}.tmp-123-${'a'.repeat(16)}`;
+    const old = new Date(Date.now() - 48 * 60 * 60 * 1_000);
+    try {
+      for (let index = 0; index < 400; index += 1) {
+        fs.writeFileSync(path.join(root, `unrelated-${String(index).padStart(3, '0')}`), 'keep');
+      }
+      fs.writeFileSync(artifact, 'abandoned');
+      fs.utimesSync(artifact, old, old);
+
+      atomicWriteJson(file, { cleaned: true });
+
+      expect(fs.existsSync(artifact)).toBe(false);
+      expect(fs.existsSync(path.join(root, 'unrelated-000'))).toBe(true);
+      expect(fs.existsSync(path.join(root, 'unrelated-399'))).toBe(true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves a replacement swapped into an authenticated cleanup pathname', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-atomic-cleanup-swap-'));
+    const file = path.join(root, 'state.json');
+    const artifact = `${file}.tmp-123-${'a'.repeat(16)}`;
+    const displaced = `${artifact}.test-displaced`;
+    const old = new Date(Date.now() - 48 * 60 * 60 * 1_000);
+    try {
+      fs.writeFileSync(artifact, 'authenticated-original');
+      fs.utimesSync(artifact, old, old);
+
+      atomicWriteJson(file, { written: true }, { helperFaults: ['cleanup_candidate_replace'] });
+
+      expect(fs.readFileSync(artifact, 'utf8')).toBe('replacement');
+      expect(fs.readFileSync(displaced, 'utf8')).toBe('authenticated-original');
+      expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ written: true });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps failed cleanup deletion eligible for a later bounded cleanup pass', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-atomic-cleanup-remove-'));
+    const file = path.join(root, 'state.json');
+    const artifact = `${file}.tmp-123-${'a'.repeat(16)}`;
+    const artifactPattern = /^state\.json\.tmp-[1-9]\d*-[a-f0-9]{16}$/;
+    const old = new Date(Date.now() - 48 * 60 * 60 * 1_000);
+    try {
+      fs.writeFileSync(artifact, 'abandoned');
+      fs.utimesSync(artifact, old, old);
+
+      atomicWriteJson(file, { first: true }, { helperFaults: ['cleanup_remove'] });
+
+      const preserved = fs.readdirSync(root).filter((name) => artifactPattern.test(name));
+      expect(preserved).toHaveLength(1);
+      expect(fs.readFileSync(path.join(root, preserved[0]!), 'utf8')).toBe('abandoned');
+
+      atomicWriteJson(file, { second: true });
+      expect(fs.readdirSync(root).filter((name) => artifactPattern.test(name))).toEqual([]);
+      expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ second: true });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

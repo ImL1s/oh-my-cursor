@@ -26,6 +26,8 @@ export type DirectoryLockFaultPoint =
   | 'lock_mkdir'
   | 'after_owner_publish_crash'
   | 'reclaim_rename'
+  | 'cleanup_candidate_replace'
+  | 'cleanup_remove'
   | 'owner_read'
   | 'heartbeat_write'
   | 'release_remove';
@@ -54,7 +56,9 @@ export type AtomicWriteFaultPoint =
   | 'directory_open'
   | 'directory_fsync'
   | 'directory_close'
-  | 'temp_unlink';
+  | 'temp_unlink'
+  | 'cleanup_candidate_replace'
+  | 'cleanup_remove';
 
 export interface AtomicWriteOptions {
   /** Maximum UTF-8 payload bytes. Defaults to 8 MiB. */
@@ -281,35 +285,123 @@ const creatorIsDead = (creator) => {
   try { process.kill(creator.pid, 0); return false; }
   catch (error) { return Boolean(error && error.code === 'ESRCH'); }
 };
+const exactOwnerShape = (owner, allowLegacy) => {
+  if (!owner || typeof owner !== 'object') return false;
+  const keys = Object.keys(owner).sort().join(',');
+  const modern = 'created_at_ms,pid,renewed_at_ms,schema_version,start_identity,start_identity_proven,token';
+  const legacy = 'created_at_ms,pid,schema_version,token';
+  return keys === modern || (allowLegacy && keys === legacy);
+};
+const validOwnerRecord = (owner, allowLegacy, now = Date.now()) => {
+  if (!exactOwnerShape(owner, allowLegacy) || owner.schema_version !== 1
+    || !Number.isSafeInteger(owner.pid) || owner.pid <= 0
+    || typeof owner.token !== 'string' || !/^[a-f0-9]{32}$/.test(owner.token)
+    || !Number.isSafeInteger(owner.created_at_ms) || owner.created_at_ms <= 0
+    || owner.created_at_ms > now + 60000) return false;
+  if (!('renewed_at_ms' in owner)) return allowLegacy;
+  return typeof owner.start_identity === 'string'
+    && owner.start_identity.length > 0 && owner.start_identity.length <= 512
+    && typeof owner.start_identity_proven === 'boolean'
+    && Number.isSafeInteger(owner.renewed_at_ms) && owner.renewed_at_ms > 0
+    && owner.renewed_at_ms >= owner.created_at_ms
+    && owner.renewed_at_ms <= now + 60000;
+};
+const generatedArtifactName = (name, prefix) => {
+  if (!name.startsWith(prefix)) return false;
+  const match = /^([1-9]\d*)-[a-f0-9]{16}$/.exec(name.slice(prefix.length));
+  return match !== null && Number.isSafeInteger(Number(match[1]));
+};
+const validStaleLockArtifact = (name) => {
+  let fd;
+  try {
+    const ownerStat = fs.lstatSync(name + '/owner.json');
+    if (!ownerStat.isFile() || ownerStat.isSymbolicLink() || !owned(ownerStat)
+      || ownerStat.size <= 0 || ownerStat.size > 16 * 1024
+      || (process.platform !== 'win32' && (ownerStat.mode & 0o077) !== 0)) return false;
+    fd = fs.openSync(name + '/owner.json', fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    const opened = fs.fstatSync(fd);
+    if (!opened.isFile() || opened.dev !== ownerStat.dev || opened.ino !== ownerStat.ino
+      || opened.size !== ownerStat.size || !owned(opened)
+      || (process.platform !== 'win32' && (opened.mode & 0o077) !== 0)) return false;
+    const buffer = Buffer.alloc(16 * 1024 + 1);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const read = fs.readSync(fd, buffer, offset, buffer.length - offset, null);
+      if (read === 0) break;
+      offset += read;
+    }
+    const finalStat = fs.fstatSync(fd);
+    if (offset !== ownerStat.size || finalStat.dev !== ownerStat.dev || finalStat.ino !== ownerStat.ino
+      || finalStat.size !== ownerStat.size || !owned(finalStat)
+      || (process.platform !== 'win32' && (finalStat.mode & 0o077) !== 0)) return false;
+    return validOwnerRecord(JSON.parse(buffer.subarray(0, offset).toString('utf8')), true);
+  } catch { return false; }
+  finally { if (fd !== undefined) try { fs.closeSync(fd); } catch {} }
+};
 const cleanupOld = (prefix, directories) => {
   const now = Date.now();
   const candidates = [];
   const directory = fs.opendirSync('.');
   try {
-    let scanned = 0;
-    while (scanned < input.scanLimit) {
+    let traversed = 0;
+    let matched = 0;
+    const traversalLimit = input.scanLimit * 64;
+    while (traversed < traversalLimit && matched < input.scanLimit) {
       const entry = directory.readSync();
       if (entry === null) break;
-      scanned += 1;
+      traversed += 1;
       const name = entry.name;
-      if (!name.startsWith(prefix)) continue;
+      if (!generatedArtifactName(name, prefix)) continue;
       try {
         const stat = fs.lstatSync(name);
         if (stat.isSymbolicLink() || !owned(stat) || now - stat.mtimeMs < input.cleanupAge) continue;
         if (directories ? !stat.isDirectory() : !stat.isFile()) continue;
-        candidates.push({ name, mtimeMs: stat.mtimeMs });
+        if (directories && !validStaleLockArtifact(name)) continue;
+        matched += 1;
+        candidates.push({ name, mtimeMs: stat.mtimeMs, dev: stat.dev, ino: stat.ino });
       } catch {}
     }
   } finally { directory.closeSync(); }
   candidates.sort((left, right) => left.mtimeMs - right.mtimeMs || left.name.localeCompare(right.name));
   let removed = 0;
-  for (const { name } of candidates) {
+  let replacementInjected = false;
+  for (const { name, dev, ino } of candidates) {
     if (removed >= input.cleanupLimit) break;
     try {
       const stat = fs.lstatSync(name);
       if (stat.isSymbolicLink() || !owned(stat) || now - stat.mtimeMs < input.cleanupAge) continue;
       if (directories ? !stat.isDirectory() : !stat.isFile()) continue;
-      if (directories) fs.rmSync(name, { recursive: true }); else fs.unlinkSync(name);
+      if (stat.dev !== dev || stat.ino !== ino) continue;
+      if (directories && !validStaleLockArtifact(name)) continue;
+      if (!replacementInjected && Array.isArray(input.faults)
+        && input.faults.includes('cleanup_candidate_replace')) {
+        replacementInjected = true;
+        const displaced = name + '.test-displaced';
+        fs.renameSync(name, displaced);
+        if (directories) fs.mkdirSync(name, { mode: 0o700 });
+        else fs.writeFileSync(name, 'replacement', { mode: 0o600 });
+      }
+      const quarantine = prefix + process.pid + '-' + crypto.randomBytes(8).toString('hex');
+      fs.renameSync(name, quarantine);
+      let authenticated = false;
+      try {
+        const quarantineStat = fs.lstatSync(quarantine);
+        authenticated = !quarantineStat.isSymbolicLink() && owned(quarantineStat)
+          && quarantineStat.dev === dev && quarantineStat.ino === ino
+          && (directories ? quarantineStat.isDirectory() : quarantineStat.isFile())
+          && (!directories || validStaleLockArtifact(quarantine));
+      } catch {}
+      if (!authenticated) {
+        try { fs.renameSync(quarantine, name); } catch {}
+        continue;
+      }
+      try {
+        inject('cleanup_remove');
+        if (directories) fs.rmSync(quarantine, { recursive: true }); else fs.unlinkSync(quarantine);
+      } catch {
+        try { fs.renameSync(quarantine, name); } catch {}
+        continue;
+      }
       removed += 1;
     } catch {}
   }
@@ -367,13 +459,6 @@ const cleanupTemp = () => {
 const readOwner = (lock) => {
   validateName(lock);
   return JSON.parse(fs.readFileSync(lock + '/owner.json', 'utf8'));
-};
-const exactOwnerShape = (owner, allowLegacy) => {
-  if (!owner || typeof owner !== 'object') return false;
-  const keys = Object.keys(owner).sort().join(',');
-  const modern = 'created_at_ms,pid,renewed_at_ms,schema_version,start_identity,start_identity_proven,token';
-  const legacy = 'created_at_ms,pid,schema_version,token';
-  return keys === modern || (allowLegacy && keys === legacy);
 };
 const syncDirectory = () => {
   let fd;
@@ -963,7 +1048,9 @@ function atomicWritePrepared(
       }
       committed = true;
     } else {
-      const cleanup = runBoundHelper(secured, { op: 'cleanup-old', target }, 'E_ATOMIC');
+      const cleanup = runBoundHelper(secured, {
+        op: 'cleanup-old', target, faults: options.helperFaults,
+      }, 'E_ATOMIC');
       if (!cleanup.ok) throw new Error(cleanup.message ?? cleanup.code ?? 'E_ATOMIC_HELPER_FAILED');
       invokeFault(options, 'temp_open');
       invokeFault(options, 'write');
