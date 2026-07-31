@@ -6,7 +6,7 @@ import { runCli, HELP } from '../src/cli/application.js';
 import { installExitCode, uninstallExitCode } from '../src/cli/lifecycle.js';
 import { CursorAgentAdapter } from '../src/host/cursor-agent.js';
 import { projectStateRoot } from '../src/runtime/state-root.js';
-import { WorkflowPersistenceStore } from '../src/workflows/index.js';
+import { digestObject, WorkflowPersistenceStore } from '../src/workflows/index.js';
 
 function harness(cwd: string) {
   const stdout: string[] = []; const stderr: string[] = [];
@@ -62,6 +62,55 @@ describe('integrated CLI surface', () => {
       expect(await runCli(['workflow', 'plan', '--name', 'delivery', '--id', 'duplicate', '--objective', 'replacement'], h.dependencies, h.io)).toBe(1);
       expect(new WorkflowPersistenceStore(projectStateRoot(cwd)).read('duplicate').plan.objective).toBe('original');
       expect(h.stderr.join('')).toContain('E_WORKFLOW_RUN_EXISTS');
+    } finally { fs.rmSync(cwd, { recursive: true, force: true }); }
+  });
+
+  it('reports workflow lease status without raw nonce and reconciles cross-process with a non-secret acknowledgement', async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-workflow-lease-cli-')); const h = harness(cwd);
+    const definition = path.join(cwd, 'definition.json');
+    fs.writeFileSync(definition, JSON.stringify({ schema_version: 1, name: 'lease-cli', version: '1', capability_tier: 'cursor-backed', stages: [{ id: 'one', prompt: 'one', mode: 'ask', depends_on: [], max_attempts: 1 }] }));
+    try {
+      expect(await runCli(['workflow', 'install', '--file', definition], h.dependencies, h.io)).toBe(0);
+      expect(await runCli(['workflow', 'plan', '--name', 'lease-cli', '--id', 'lease-cli-run', '--objective', 'inspect'], h.dependencies, h.io)).toBe(0);
+      const store = new WorkflowPersistenceStore(projectStateRoot(cwd));
+      let record = store.read('lease-cli-run');
+      const rawNonce = 'cd'.repeat(32);
+      const acquired = await store.acquireExecutionLease('lease-cli-run', record.revision, '1-one', 'operator', {
+        pid: process.pid,
+        start_identity: `unproven:${process.pid}`,
+        start_identity_proven: false,
+        nonce: rawNonce,
+      });
+      record = acquired.record;
+      h.stdout.length = 0;
+      expect(await runCli(['workflow', 'lease-status', '--id', 'lease-cli-run'], h.dependencies, h.io)).toBe(0);
+      expect(h.stdout.join('')).toContain('"state": "ambiguous"');
+      expect(h.stdout.join('')).toContain('"nonce_sha256"');
+      expect(h.stdout.join('')).not.toContain(rawNonce);
+
+      h.stdout.length = 0;
+      const lease = record.execution_lease!;
+      const acknowledgement = {
+        run_id: lease.run_id,
+        task_id: lease.task_id,
+        owner_id: lease.owner_id,
+        owner_pid: lease.owner_pid,
+        owner_start_identity_sha256: digestObject(lease.owner_start_identity),
+        owner_start_identity_proven: lease.owner_start_identity_proven,
+        owner_nonce_sha256: lease.owner_nonce_sha256,
+        generation: lease.generation,
+        acquired_at: lease.acquired_at,
+        expected_status: 'ambiguous',
+        expected_reason: 'start_identity_unproven',
+        operator_confirmation: 'owner-dead-side-effects-reviewed',
+      };
+      expect(await runCli([
+        'workflow', 'lease-reconcile', '--id', 'lease-cli-run', '--revision', String(record.revision),
+        '--credential-json', JSON.stringify(acknowledgement),
+      ], h.dependencies, h.io)).toBe(0);
+      expect(h.stdout.join('')).toContain('"reconciled": true');
+      expect(h.stdout.join('')).not.toContain(rawNonce);
+      expect(store.executionLeaseStatus('lease-cli-run').state).toBe('none');
     } finally { fs.rmSync(cwd, { recursive: true, force: true }); }
   });
 

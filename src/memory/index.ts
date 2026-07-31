@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { atomicWriteJson } from '../runtime/atomic.js';
+import { atomicWriteJson, withDirectoryLockSync } from '../runtime/atomic.js';
 import { redact } from '../runtime/redaction.js';
 import { withinStateRoot, type StateRoot } from '../runtime/state-root.js';
 
@@ -10,82 +10,69 @@ export interface MemoryExport { readonly schema_version: 1; readonly memories: r
 function safe(value: string): string { if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value)) throw new Error('E_MEMORY_ID_INVALID'); return value; }
 function cleanText(value: string): string { if (value.trim() === '' || Buffer.byteLength(value) > 64 * 1024) throw new Error('E_MEMORY_TEXT_INVALID'); return String(redact(value, { maxStringLength: 64 * 1024 })); }
 const LOCK_TIMEOUT_MS = 5_000;
-const LOCK_STALE_MS = 60_000;
-const waitBuffer = new Int32Array(new SharedArrayBuffer(4));
 
-function processAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; }
-  catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
+function readMemoryRecord(file: string, expectedId: string): ProjectMemory {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<ProjectMemory> | null;
+    if (parsed === null || typeof parsed !== 'object'
+      || parsed.schema_version !== 1
+      || typeof parsed.id !== 'string' || parsed.id !== expectedId || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(parsed.id)
+      || typeof parsed.text !== 'string' || parsed.text.trim() === '' || Buffer.byteLength(parsed.text) > 64 * 1024
+      || !Object.prototype.hasOwnProperty.call(parsed, 'metadata')
+      || typeof parsed.updated_at !== 'string' || !Number.isFinite(Date.parse(parsed.updated_at))) {
+      throw new Error('E_MEMORY_RECORD_INVALID');
+    }
+    return parsed as ProjectMemory;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('E_STATE_ABSENT', { cause: error });
+    throw new Error('E_STATE_CORRUPT', { cause: error });
+  }
 }
 
 export class ProjectMemoryStore {
-  constructor(private readonly root: StateRoot, private readonly now: () => Date = () => new Date()) {}
+  constructor(
+    private readonly root: StateRoot,
+    private readonly now: () => Date = () => new Date(),
+    private readonly writeJson: (file: string, value: unknown) => unknown = atomicWriteJson,
+  ) {}
   private dir(): string { return withinStateRoot(this.root, 'memory', 'records'); }
   private file(id: string): string { return path.join(this.dir(), `${safe(id)}.json`); }
   private indexFile(): string { return withinStateRoot(this.root, 'memory', 'index.json'); }
   private withIndexLock<T>(action: () => T): T {
-    const lock = `${this.indexFile()}.lock`;
-    fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
-    const deadline = Date.now() + LOCK_TIMEOUT_MS;
-    const token = crypto.randomBytes(16).toString('hex');
-    while (true) {
-      try {
-        fs.mkdirSync(lock, { mode: 0o700 });
-        atomicWriteJson(path.join(lock, 'owner.json'), {
-          schema_version: 1, pid: process.pid, token, created_at_ms: Date.now(),
-        });
-        break;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-        let reclaim = false;
-        try {
-          const stat = fs.lstatSync(lock);
-          if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('E_MEMORY_LOCK_INVALID');
-          if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) throw new Error('E_MEMORY_LOCK_NOT_OWNED');
-          try {
-            const owner = JSON.parse(fs.readFileSync(path.join(lock, 'owner.json'), 'utf8')) as { pid?: unknown; created_at_ms?: unknown };
-            if (typeof owner.pid === 'number' && Number.isSafeInteger(owner.pid) && owner.pid > 0) reclaim = !processAlive(owner.pid);
-            else reclaim = Date.now() - stat.mtimeMs > LOCK_STALE_MS;
-          } catch {
-            reclaim = Date.now() - stat.mtimeMs > LOCK_STALE_MS;
-          }
-          if (reclaim) {
-            const stale = `${lock}.stale-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
-            fs.renameSync(lock, stale);
-            fs.rmSync(stale, { recursive: true, force: true });
-            continue;
-          }
-        } catch (lockError) {
-          if ((lockError as NodeJS.ErrnoException).code === 'ENOENT') continue;
-          throw lockError;
-        }
-        if (Date.now() >= deadline) throw new Error('E_MEMORY_LOCK_TIMEOUT');
-        Atomics.wait(waitBuffer, 0, 0, 10);
-      }
-    }
-    try {
-      return action();
-    } finally {
-      const owner = JSON.parse(fs.readFileSync(path.join(lock, 'owner.json'), 'utf8')) as { pid?: unknown; token?: unknown };
-      if (owner.pid !== process.pid || owner.token !== token) throw new Error('E_MEMORY_LOCK_OWNERSHIP_LOST');
-      fs.rmSync(lock, { recursive: true });
-    }
+    return withDirectoryLockSync(this.indexFile(), action, LOCK_TIMEOUT_MS, {
+      errorPrefix: 'E_MEMORY_LOCK',
+    });
   }
   private rescanUnlocked(): readonly string[] {
     const ids = this.list().map(({ id }) => id);
-    atomicWriteJson(this.indexFile(), { schema_version: 1, ids, rescanned_at: this.now().toISOString() });
+    this.writeJson(this.indexFile(), { schema_version: 1, ids, rescanned_at: this.now().toISOString() });
     return ids;
   }
-  show(id: string): ProjectMemory { return JSON.parse(fs.readFileSync(this.file(id), 'utf8')) as ProjectMemory; }
+  private prepareRecord(text: string, metadata: unknown, id: string): ProjectMemory {
+    return {
+      schema_version: 1,
+      id: safe(id),
+      text: cleanText(text),
+      metadata: redact(metadata),
+      updated_at: this.now().toISOString(),
+    };
+  }
+  private putUnlocked(record: ProjectMemory): void {
+    this.writeJson(this.file(record.id), record);
+  }
+  show(id: string): ProjectMemory { return readMemoryRecord(this.file(id), safe(id)); }
   list(): ProjectMemory[] {
     if (!fs.existsSync(this.dir())) return [];
-    return fs.readdirSync(this.dir()).filter((name) => name.endsWith('.json')).sort().map((name) => JSON.parse(fs.readFileSync(path.join(this.dir(), name), 'utf8')) as ProjectMemory);
+    return fs.readdirSync(this.dir()).filter((name) => name.endsWith('.json')).sort().map((name) => {
+      const id = name.slice(0, -'.json'.length);
+      return readMemoryRecord(path.join(this.dir(), name), id);
+    });
   }
   async put(text: string, metadata: unknown = {}, id: string = crypto.randomUUID()): Promise<ProjectMemory> {
     const file = this.file(id);
     return this.withIndexLock(() => {
-      const record: ProjectMemory = { schema_version: 1, id: safe(id), text: cleanText(text), metadata: redact(metadata), updated_at: this.now().toISOString() };
-      atomicWriteJson(file, record); this.rescanUnlocked(); return record;
+      const record = this.prepareRecord(text, metadata, id);
+      this.writeJson(file, record); this.rescanUnlocked(); return record;
     });
   }
   async delete(id: string): Promise<boolean> {
@@ -108,10 +95,29 @@ export class ProjectMemoryStore {
     if (bundle === null || typeof bundle !== 'object' || (bundle as Partial<MemoryExport>).schema_version !== 1 || !Array.isArray((bundle as Partial<MemoryExport>).memories)) throw new Error('E_MEMORY_IMPORT_INVALID');
     const memories = (bundle as MemoryExport).memories;
     if (memories.length > 1000 || Buffer.byteLength(JSON.stringify(bundle)) > 8 * 1024 * 1024) throw new Error('E_MEMORY_IMPORT_TOO_LARGE');
+    const prepared = new Map<string, ProjectMemory>();
     for (const item of memories) {
       if (item.schema_version !== 1 || typeof item.id !== 'string' || typeof item.text !== 'string') throw new Error('E_MEMORY_IMPORT_INVALID');
-      await this.put(item.text, item.metadata, item.id);
+      const record = this.prepareRecord(item.text, item.metadata, item.id);
+      // Preserve the prior last-duplicate-wins behavior without redundant writes.
+      prepared.delete(record.id);
+      prepared.set(record.id, record);
     }
+    this.withIndexLock(() => {
+      let writeError: unknown;
+      try {
+        for (const record of prepared.values()) this.putUnlocked(record);
+      } catch (error) {
+        writeError = error;
+      } finally {
+        try {
+          this.rescanUnlocked();
+        } catch (indexError) {
+          if (writeError === undefined) throw indexError;
+        }
+      }
+      if (writeError !== undefined) throw writeError;
+    });
     return memories.length;
   }
   rescan(): readonly string[] {

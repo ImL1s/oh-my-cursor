@@ -1,7 +1,17 @@
 export interface TeamWorkerSpec { readonly id: string; readonly objective: string; readonly cwd: string; readonly owned_paths: readonly string[] }
-export interface TeamWorkerManifest { readonly id: string; readonly cwd: string; readonly owned_paths: readonly string[]; readonly pane_target: string; readonly pane_pid: number; readonly process_group_id: number; readonly argv: readonly string[] }
+export interface TeamWorkerManifest {
+  readonly id: string;
+  readonly cwd: string;
+  readonly owned_paths: readonly string[];
+  readonly pane_target: string;
+  readonly pane_pid: number;
+  readonly pane_start_identity: string;
+  readonly pane_start_identity_proven: boolean;
+  readonly process_group_id: number;
+  readonly argv: readonly string[];
+}
 export interface TeamManifest {
-  readonly schema_version: 1;
+  readonly schema_version: 2;
   readonly team_id: string;
   readonly tmux_session: string;
   readonly capability_tier: 'experimental-local';

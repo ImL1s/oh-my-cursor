@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { assertSafeArgv } from '../host/cursor-agent.js';
+import { isKnownCommand, nearestCommand } from './parser.js';
 
 export const MADMAX_FLAG = '--madmax';
 export const DIRECT_FLAG = '--direct';
@@ -18,19 +19,6 @@ export const LAUNCHER_ONLY_FLAGS = Object.freeze(new Set([MADMAX_FLAG, DIRECT_FL
 
 /** Sol mapping: madmax → --yolo --sandbox disabled (--force is accepted as alias). */
 export const CURSOR_OPEN_FLAGS = Object.freeze(['--yolo', '--sandbox', 'disabled'] as const);
-
-export const KNOWN_OMCU_COMMANDS = Object.freeze(new Set([
-  'help', '--help', '-h',
-  'version', '--version', '-v',
-  'setup', 'update', 'doctor', 'uninstall',
-  'capabilities', 'native-status',
-  'state', 'run', 'lease', 'cancel', 'session', 'resume', 'recover',
-  'compact', 'memory', 'notify', 'tracker', 'wiki',
-  'mcp-server', 'mcp-install',
-  'workflow', 'ralplan', 'ralph', 'ulw',
-  'autopilot', 'pipeline', 'persist', 'team',
-  'review', 'qa', 'accept', 'integrate', 'ask',
-]));
 
 export type LaunchPolicy = 'auto' | 'tmux' | 'direct';
 
@@ -78,7 +66,7 @@ export function rejectLauncherFlagsAfterSubcommand(argv: readonly string[]): voi
   const { head } = splitAtEndOfOptions(argv);
   if (head.length === 0) return;
   const first = head[0] ?? '';
-  if (!KNOWN_OMCU_COMMANDS.has(first)) return;
+  if (!isKnownCommand(first)) return;
   for (const tok of head.slice(1)) {
     if (LAUNCHER_ONLY_FLAGS.has(tok)) {
       throw new HostLaunchUsageError(
@@ -93,14 +81,18 @@ export function shouldHostLaunch(argv: readonly string[]): boolean {
   rejectLauncherFlagsAfterSubcommand(argv);
   if (argv.length === 0) return true;
   const { head } = splitAtEndOfOptions(argv);
-  if (hasMadmaxFlag(argv)) {
-    // GRAM-05: only a recognized *first* token owns the line.
-    return true;
-  }
   const first = head[0] ?? '';
-  if (KNOWN_OMCU_COMMANDS.has(first)) return false;
+  if (isKnownCommand(first)) return false;
+  // Break-glass launch must be explicit at the launcher boundary. An unknown
+  // first token followed by --madmax is still an unknown CLI command; treating
+  // it as a launch would let command typos bypass the typed parser.
+  if (first === MADMAX_FLAG) return true;
+  if (first === 'prompt' || first === '--prompt' || first.startsWith('--prompt=')) return true;
   if (first === DIRECT_FLAG || first === TMUX_FLAG) return true;
-  return true;
+  // Preserve the documented quoted-prompt shorthand while routing likely
+  // misspelled command paths through the typed CLI parser. A prompt containing
+  // spaces arrives as exactly one argv token; two or more bare tokens do not.
+  return argv.length === 1 && first.length > 0 && !first.startsWith('-') && nearestCommand(first) === null;
 }
 
 export function policyFromEnv(env: NodeJS.ProcessEnv = process.env): LaunchPolicy | undefined {
@@ -150,6 +142,26 @@ export function normalizeCursorArgs(argv: readonly string[], options: {
 
   for (let i = 0; i < rest.length; i += 1) {
     const arg = rest[i]!;
+    if (i === 0 && arg === 'prompt') {
+      const prompt = rest[i + 1];
+      if (prompt === undefined) throw new HostLaunchUsageError('omcu: prompt requires text');
+      out.push(prompt);
+      i += 1;
+      continue;
+    }
+    if (i === 0 && arg === '--prompt') {
+      const prompt = rest[i + 1];
+      if (prompt === undefined) throw new HostLaunchUsageError('omcu: --prompt requires text');
+      out.push(prompt);
+      i += 1;
+      continue;
+    }
+    if (i === 0 && arg.startsWith('--prompt=')) {
+      const prompt = arg.slice('--prompt='.length);
+      if (prompt === '') throw new HostLaunchUsageError('omcu: --prompt requires text');
+      out.push(prompt);
+      continue;
+    }
     if (arg === MADMAX_FLAG) continue;
     if (arg === '--yolo') {
       if (!sawYoloOrForce) {

@@ -14,6 +14,15 @@ function store(): WorkflowPersistenceStore {
   return new WorkflowPersistenceStore(projectStateRoot(workspace), () => new Date('2026-07-23T00:00:00.000Z'));
 }
 
+function processIdentity(pid: number) {
+  return {
+    pid,
+    start_identity: `test-start:${pid}`,
+    start_identity_proven: true,
+    nonce: 'ab'.repeat(32),
+  } as const;
+}
+
 function definition() {
   return {
     schema_version: 1 as const,
@@ -125,24 +134,30 @@ describe('workflow orchestration', () => {
     roots.push(workspace);
     const alive = new Set<number>([7001]);
     let now = new Date('2026-07-23T00:00:00.000Z');
-    const persistence = new WorkflowPersistenceStore(projectStateRoot(workspace), () => now, (pid) => alive.has(pid));
+    const persistence = new WorkflowPersistenceStore(
+      projectStateRoot(workspace),
+      () => now,
+      (pid) => alive.has(pid),
+      (pid) => ({ value: `test-start:${pid}`, proven: true, source: 'linux-proc' }),
+    );
     const plan = planWorkflow(new WorkflowRegistry().register(definition()), 'lease-run', 'exclusive');
     let record = await persistence.create(plan);
-    record = await persistence.acquireExecutionLease(plan.run_id, record.revision, '1-plan', 'owner-a', 7001);
+    record = (await persistence.acquireExecutionLease(plan.run_id, record.revision, '1-plan', 'owner-a', processIdentity(7001))).record;
     now = new Date('2026-07-23T01:00:00.000Z');
-    await expect(persistence.acquireExecutionLease(plan.run_id, record.revision, '1-plan', 'owner-b', 7002)).rejects.toThrow('E_WORKFLOW_LEASE_HELD');
+    await expect(persistence.acquireExecutionLease(plan.run_id, record.revision, '1-plan', 'owner-b', processIdentity(7002))).rejects.toThrow('E_WORKFLOW_LEASE_HELD');
     let duplicateCalls = 0;
     const duplicateAdapter = new CursorAgentAdapter('cursor-agent', async () => { duplicateCalls += 1; return { code: 0, stdout: '{}', stderr: '' }; });
     await expect(new WorkflowRunner(duplicateAdapter, '/repo').run(new WorkflowRegistry().register(definition()), plan, [], undefined, {
       acquire: async (taskId) => {
-        record = await persistence.acquireExecutionLease(plan.run_id, record.revision, taskId, 'owner-b', 7002);
-        return record.execution_lease;
+        const acquired = await persistence.acquireExecutionLease(plan.run_id, record.revision, taskId, 'owner-b', processIdentity(7002));
+        record = acquired.record;
+        return acquired.credential;
       },
       release: async () => undefined,
     })).rejects.toThrow('E_WORKFLOW_LEASE_HELD');
     expect(duplicateCalls).toBe(0);
     alive.delete(7001);
-    record = await persistence.acquireExecutionLease(plan.run_id, record.revision, '1-plan', 'owner-b', 7002);
+    record = (await persistence.acquireExecutionLease(plan.run_id, record.revision, '1-plan', 'owner-b', processIdentity(7002))).record;
     expect(record.execution_lease).toMatchObject({ owner_id: 'owner-b', generation: 2 });
   });
 

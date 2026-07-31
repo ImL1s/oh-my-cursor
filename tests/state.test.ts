@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ensureExternalStateRoot, projectStateRoot, withinStateRoot } from '../src/runtime/state-root.js';
 import { createCliMutationAuthority } from '../src/state/authority.js';
-import { LeaseStore, RunStateStore, sha256Evidence } from '../src/state/store.js';
+import { LeaseStore, observeRunState, RunStateStore, sha256Evidence } from '../src/state/store.js';
 
 const roots: string[] = [];
 function workspace(): string { const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-test-')); roots.push(root); return root; }
@@ -52,5 +52,24 @@ describe('owner-only state and CLI mutation contract', () => {
     fs.writeFileSync(root.ownerFile, JSON.stringify({ ...owner, owner_token: 'f'.repeat(64) }), { mode: 0o600 });
     await expect(store.create('stale-owner', 'must fail')).rejects.toThrow('E_CLI_MUTATION_AUTHORITY_STALE');
     await expect(leases.release('stale-owner', 'writer', 'owner-a', lease.generation)).rejects.toThrow('E_CLI_MUTATION_AUTHORITY_STALE');
+  });
+
+  it.each([
+    { status: 'active', verification: { verified: true, evidence_sha256: 'a'.repeat(64), verified_at: '2026-07-23T01:00:00.000Z' } },
+    { status: 'complete', verification: { verified: true, evidence_sha256: null, verified_at: '2026-07-23T01:00:00.000Z' } },
+    { status: 'complete', verification: { verified: true, evidence_sha256: 'a'.repeat(64), verified_at: '2026-07-23 01:00:00Z' } },
+    { status: 'complete', verification: { verified: false, evidence_sha256: 'a'.repeat(64), verified_at: null } },
+    { status: 'complete', verification: { verified: false, evidence_sha256: null, verified_at: '2026-07-23T01:00:00.000Z' } },
+  ] as const)('rejects inconsistent persisted verification state: %#', ({ status, verification }) => {
+    const root = projectStateRoot(workspace());
+    const runDir = path.join(root.path, 'runs', 'bad-verification');
+    fs.mkdirSync(runDir, { recursive: true });
+    fs.writeFileSync(path.join(runDir, 'state.json'), JSON.stringify({
+      store_kind: 'run_state', schema_version: 1, repository_id: 'OMCU', run_id: 'bad-verification',
+      revision: 1, status, objective: 'test', created_at: '2026-07-23T01:00:00.000Z', updated_at: '2026-07-23T01:00:00.000Z',
+      verification,
+      last_mutation: { source: 'omcu-cli', owner_token_sha256: 'b'.repeat(64), writer_pid: 1, mutated_at: '2026-07-23T01:00:00.000Z' },
+    }));
+    expect(() => observeRunState(root, 'bad-verification')).toThrow('E_STATE_CORRUPT');
   });
 });

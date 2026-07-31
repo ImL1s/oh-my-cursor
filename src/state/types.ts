@@ -34,6 +34,11 @@ export interface RunEventV1 {
   readonly payload: unknown;
   readonly mutation: MutationProof;
 }
+/**
+ * Advisory coordination lease for generic CLI state only. Its wall-clock TTL
+ * is not an authoritative workflow execution fence and must never authorize a
+ * workflow task retry; workflow ownership uses WorkflowExecutionLease v2.
+ */
 export interface LeaseV1 {
   readonly store_kind: 'run_lease';
   readonly schema_version: 1;

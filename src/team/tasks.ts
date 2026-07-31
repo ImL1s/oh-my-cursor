@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { atomicWriteJson, withDirectoryLock } from '../runtime/atomic.js';
+import { atomicCreateJson, atomicWriteJson, withDirectoryLock, type AtomicWriteOptions } from '../runtime/atomic.js';
 import type { StateRoot } from '../runtime/state-root.js';
 import {
   assertSafeWorkerName,
@@ -39,6 +39,10 @@ export interface TeamTask {
   readonly status: TeamTaskStatus;
   readonly created_at: string;
   readonly version: number;
+  readonly request_id?: string;
+  readonly request_payload_sha256?: string;
+  /** Immutable owner from the idempotent create request; later claims may rewrite owner. */
+  readonly request_owner?: string | null;
   readonly owner?: string;
   readonly blocked_by?: readonly string[];
   readonly claim?: TeamTaskClaim;
@@ -75,6 +79,25 @@ export interface TeamSummary {
   readonly workers: readonly { readonly name: string }[];
 }
 
+export interface CreateTaskOptions {
+  readonly taskWriteOptions?: AtomicWriteOptions;
+  readonly configWriteOptions?: AtomicWriteOptions;
+  /** Test seam for a caller-visible failure after both durable writes commit. */
+  readonly faultInjector?: (point: 'after_task_and_config_commit_before_response') => void;
+}
+
+export interface CreateTaskInput {
+  readonly subject: string;
+  readonly description: string;
+  readonly owner?: string;
+  readonly blocked_by?: readonly string[];
+  /**
+   * Durable idempotency key. Retries with the same key must use the identical
+   * canonical payload. Omitting it preserves the legacy at-least-once API.
+   */
+  readonly request_id?: string;
+}
+
 function assertTaskId(taskId: string): string {
   if (!/^\d{1,20}$/.test(taskId)) throw new Error('E_TEAM_TASK_ID_INVALID');
   return taskId;
@@ -96,7 +119,14 @@ function isTeamTask(value: unknown): value is TeamTask {
     && typeof task.created_at === 'string'
     && typeof task.version === 'number'
     && Number.isInteger(task.version)
-    && task.version >= 1;
+    && task.version >= 1
+    && (task.request_id === undefined || (typeof task.request_id === 'string' && isRequestId(task.request_id)))
+    && (task.request_payload_sha256 === undefined
+      || (typeof task.request_payload_sha256 === 'string' && /^[a-f0-9]{64}$/.test(task.request_payload_sha256)))
+    && (task.request_owner === undefined || task.request_owner === null
+      || (typeof task.request_owner === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(task.request_owner)))
+    && ((task.request_id === undefined) === (task.request_payload_sha256 === undefined))
+    && ((task.request_id === undefined) === (task.request_owner === undefined));
 }
 
 function leaseExpired(claim: TeamTaskClaim | undefined, now: Date): boolean {
@@ -143,12 +173,14 @@ export async function listTasks(root: StateRoot, teamName: string): Promise<read
 export async function createTask(
   root: StateRoot,
   teamName: string,
-  input: { readonly subject: string; readonly description: string; readonly owner?: string; readonly blocked_by?: readonly string[] },
+  input: CreateTaskInput,
   now: () => Date = () => new Date(),
+  options: CreateTaskOptions = {},
 ): Promise<TeamTask> {
   const subject = input.subject.trim();
   const description = input.description.trim();
   if (subject === '' || description === '') throw new Error('E_TEAM_TASK_FIELDS_REQUIRED');
+  const requestId = input.request_id === undefined ? undefined : assertRequestId(input.request_id);
 
   return withDirectoryLock(teamConfigPath(root, teamName), () => {
     const config = readTeamConfig(root, teamName);
@@ -174,10 +206,51 @@ export async function createTask(
       }
     }
 
-    const nextId = String(config.next_task_id);
-    if (readTaskUnlocked(root, teamName, nextId) !== null) {
-      throw new Error('E_TEAM_TASK_ID_COLLISION');
+    const requestPayloadSha256 = requestId === undefined ? undefined : canonicalTaskRequestSha256({
+      subject,
+      description,
+      ...(owner === undefined ? {} : { owner }),
+      ...(blockedBy === undefined ? {} : { blocked_by: blockedBy }),
+    });
+    if (requestId !== undefined) {
+      const existing = findTaskByRequestId(root, teamName, requestId);
+      if (existing !== undefined) {
+        if (existing.request_payload_sha256 !== requestPayloadSha256) {
+          throw new Error('E_TEAM_TASK_IDEMPOTENCY_CONFLICT');
+        }
+        const nextTaskId = Number(existing.id) + 1;
+        if (Number.isSafeInteger(nextTaskId) && config.next_task_id < nextTaskId) {
+          const repaired = { ...config, next_task_id: nextTaskId };
+          try {
+            atomicWriteJson(teamConfigPath(root, teamName), repaired, options.configWriteOptions);
+          } catch (error) {
+            if ((error as { phase?: string }).phase !== 'commit_durability_unknown'
+              || readTeamConfig(root, teamName)?.next_task_id !== nextTaskId) throw error;
+          }
+        }
+        return existing;
+      }
     }
+
+    let workingConfig = config;
+    while (true) {
+      const occupied = readTaskUnlocked(root, teamName, String(workingConfig.next_task_id));
+      if (occupied === null) break;
+      const repaired: TeamCoordinationConfig = {
+        ...workingConfig,
+        next_task_id: workingConfig.next_task_id + 1,
+      };
+      writeTeamConfig(root, repaired);
+      if (sameTaskRequest(occupied, {
+        subject,
+        description,
+        ...(requestId === undefined ? {} : { request_id: requestId }),
+        ...(owner === undefined ? {} : { owner }),
+        ...(blockedBy === undefined ? {} : { blocked_by: blockedBy }),
+      })) return occupied;
+      workingConfig = repaired;
+    }
+    const nextId = String(workingConfig.next_task_id);
     const task: TeamTask = {
       id: nextId,
       subject,
@@ -185,14 +258,95 @@ export async function createTask(
       status: 'pending',
       created_at: now().toISOString(),
       version: 1,
+      ...(requestId !== undefined ? {
+        request_id: requestId,
+        request_payload_sha256: requestPayloadSha256!,
+        request_owner: owner ?? null,
+      } : {}),
       ...(owner !== undefined ? { owner } : {}),
       ...(blockedBy !== undefined ? { blocked_by: blockedBy } : {}),
     };
-    const next: TeamCoordinationConfig = { ...config, next_task_id: config.next_task_id + 1 };
-    writeTeamConfig(root, next);
-    writeTaskUnlocked(root, teamName, task);
+    atomicCreateJson(taskFilePath(root, teamName, task.id), task, options.taskWriteOptions);
+    const next: TeamCoordinationConfig = { ...workingConfig, next_task_id: workingConfig.next_task_id + 1 };
+    try {
+      atomicWriteJson(teamConfigPath(root, teamName), next, options.configWriteOptions);
+    } catch (error) {
+      if ((error as { phase?: string }).phase === 'commit_durability_unknown') {
+        const observed = readTeamConfig(root, teamName);
+        if (observed?.next_task_id === next.next_task_id) {
+          options.faultInjector?.('after_task_and_config_commit_before_response');
+          return task;
+        }
+      }
+      throw error;
+    }
+    options.faultInjector?.('after_task_and_config_commit_before_response');
     return task;
   });
+}
+
+function isRequestId(value: string): boolean {
+  return value.length > 0 && value.length <= 256 && !/[\u0000-\u001f\u007f]/.test(value);
+}
+
+function findTaskByRequestId(root: StateRoot, teamName: string, requestId: string): TeamTask | undefined {
+  const dir = teamTasksDir(root, teamName);
+  if (!fs.existsSync(dir)) return undefined;
+  let found: TeamTask | undefined;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const match = entry.isFile() ? /^task-(\d+)\.json$/.exec(entry.name) : null;
+    if (match === null) continue;
+    const task = readTaskUnlocked(root, teamName, match[1]!);
+    if (task?.request_id !== requestId) continue;
+    const expectedPayload = canonicalTaskRequestSha256({
+      subject: task.subject,
+      description: task.description,
+      ...(task.request_owner === null || task.request_owner === undefined ? {} : { owner: task.request_owner }),
+      ...(task.blocked_by === undefined ? {} : { blocked_by: task.blocked_by }),
+    });
+    if (task.request_payload_sha256 !== expectedPayload) throw new Error('E_TEAM_TASK_IDEMPOTENCY_CORRUPT');
+    if (found !== undefined) throw new Error('E_TEAM_TASK_IDEMPOTENCY_CORRUPT');
+    found = task;
+  }
+  return found;
+}
+
+function assertRequestId(value: string): string {
+  if (!isRequestId(value)) throw new Error('E_TEAM_TASK_REQUEST_ID_INVALID');
+  return value;
+}
+
+function canonicalTaskRequestSha256(
+  input: { readonly subject: string; readonly description: string; readonly owner?: string; readonly blocked_by?: readonly string[] },
+): string {
+  return crypto.createHash('sha256').update(JSON.stringify({
+    subject: input.subject,
+    description: input.description,
+    owner: input.owner ?? null,
+    blocked_by: input.blocked_by ?? [],
+  })).digest('hex');
+}
+
+function requestMetadata(task: TeamTask): Partial<Pick<TeamTask, 'request_id' | 'request_payload_sha256' | 'request_owner'>> {
+  return task.request_id === undefined || task.request_payload_sha256 === undefined || task.request_owner === undefined
+    ? {}
+    : {
+      request_id: task.request_id,
+      request_payload_sha256: task.request_payload_sha256,
+      request_owner: task.request_owner,
+    };
+}
+
+function sameTaskRequest(
+  task: TeamTask,
+  input: CreateTaskInput,
+): boolean {
+  return task.version === 1 && task.status === 'pending'
+    && task.request_id === input.request_id
+    && task.subject === input.subject
+    && task.description === input.description
+    && task.owner === input.owner
+    && JSON.stringify(task.blocked_by ?? []) === JSON.stringify(input.blocked_by ?? []);
 }
 
 export async function claimTask(
@@ -234,6 +388,7 @@ export async function claimTask(
         status: 'pending',
         created_at: working.created_at,
         version: working.version + 1,
+        ...requestMetadata(working),
         ...(working.blocked_by !== undefined ? { blocked_by: working.blocked_by } : {}),
       };
     }
@@ -249,6 +404,7 @@ export async function claimTask(
       status: 'in_progress',
       created_at: working.created_at,
       version: working.version + 1,
+      ...requestMetadata(working),
       owner: worker,
       claim: { owner: worker, token: claimToken, leased_until: new Date(now().getTime() + CLAIM_LEASE_MS).toISOString() },
       ...(working.blocked_by !== undefined ? { blocked_by: working.blocked_by } : {}),
@@ -290,6 +446,7 @@ export async function transitionTaskStatus(
       status: to,
       created_at: current.created_at,
       version: current.version + 1,
+      ...requestMetadata(current),
       owner: current.owner,
       completed_at: now().toISOString(),
       ...(current.blocked_by !== undefined ? { blocked_by: current.blocked_by } : {}),
@@ -332,6 +489,7 @@ export async function releaseTaskClaim(
       status: 'pending',
       created_at: current.created_at,
       version: current.version + 1,
+      ...requestMetadata(current),
       ...(current.blocked_by !== undefined ? { blocked_by: current.blocked_by } : {}),
     };
     writeTaskUnlocked(root, teamName, updated);

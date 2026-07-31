@@ -61,6 +61,189 @@ const healthyCursor: CommandRunner = {
 };
 
 describe('receipt-backed lifecycle', () => {
+  it('refuses install into an existing over-wide state root without chmodding or mutating it', async () => {
+    const root = temporary('omcu-lifecycle-wide-state-install-');
+    const home = path.join(root, 'home');
+    const state = path.join(root, 'state');
+    fs.mkdirSync(home);
+    fs.mkdirSync(state, { mode: 0o755 });
+    fs.chmodSync(state, 0o755);
+    fs.writeFileSync(path.join(state, 'external.json'), '{"owner":"external"}\n');
+
+    await expect(installOrUpdate({
+      sourceRoot: packageFixture(root, '0.9.0', 'wide-state-install'),
+      homeDir: home,
+      stateRoot: state,
+      transactionId: 'wide-state-install',
+      runner: healthyCursor,
+    })).rejects.toThrow('E_STATE_ROOT_MODE_UNSAFE');
+
+    expect(fs.statSync(state).mode & 0o777).toBe(0o755);
+    expect(fs.readdirSync(state)).toEqual(['external.json']);
+    expect(fs.existsSync(path.join(home, '.omcu'))).toBe(false);
+    expect(fs.existsSync(path.join(home, '.local', 'bin', 'omcu'))).toBe(false);
+  });
+
+  it('refuses uninstall from an over-wide state root before removing installed artifacts', async () => {
+    const root = temporary('omcu-lifecycle-wide-state-uninstall-');
+    const home = path.join(root, 'home');
+    const state = path.join(root, 'state');
+    fs.mkdirSync(home);
+    const installed = await installOrUpdate({
+      sourceRoot: packageFixture(root, '0.9.1', 'wide-state-uninstall'),
+      homeDir: home,
+      stateRoot: state,
+      transactionId: 'wide-state-uninstall',
+      runner: healthyCursor,
+    });
+    const cli = installed.receipt.installed.cli;
+    const stage = installed.receipt.installed.stage;
+    fs.chmodSync(state, 0o755);
+
+    expect(() => uninstall({
+      receiptPath: installed.receiptPath,
+      homeDir: home,
+      stateRoot: state,
+    })).toThrow('E_STATE_ROOT_MODE_UNSAFE');
+
+    expect(fs.statSync(state).mode & 0o777).toBe(0o755);
+    expect(fs.lstatSync(cli).isSymbolicLink()).toBe(true);
+    expect(fs.existsSync(stage)).toBe(true);
+    expect(fs.existsSync(path.join(state, 'install', 'current.json'))).toBe(true);
+  });
+
+  it('does not initialize project state when the caller explicitly disables it', async () => {
+    const root = temporary('omcu-lifecycle-no-project-state-');
+    const home = path.join(root, 'home');
+    const project = path.join(root, 'project');
+    fs.mkdirSync(home);
+    fs.mkdirSync(project);
+    const result = await installOrUpdate({
+      sourceRoot: packageFixture(root, '1.0.0', 'no-project-state'),
+      homeDir: home,
+      stateRoot: path.join(root, 'state'),
+      projectRoot: project,
+      transactionId: 'no-project-state',
+      runner: healthyCursor,
+      initializeProjectState: false,
+    });
+    expect(fs.existsSync(path.join(project, '.omcu'))).toBe(false);
+    expect(result.receipt.owned_inventory.some((entry) => entry.kind === 'project_state')).toBe(false);
+  });
+
+  it('preserves project state concurrently created by doctor when initialization is disabled', async () => {
+    const root = temporary('omcu-lifecycle-concurrent-project-state-');
+    const home = path.join(root, 'home');
+    const project = path.join(root, 'project');
+    const state = path.join(root, 'state');
+    const projectState = path.join(project, '.omcu');
+    fs.mkdirSync(home);
+    fs.mkdirSync(project);
+    let inspectedJournal = false;
+    const concurrentFailingDoctor: CommandRunner = {
+      async run() {
+        if (!fs.existsSync(projectState)) {
+          const journal = JSON.parse(fs.readFileSync(path.join(state, 'install', 'transaction.json'), 'utf8')) as {
+            project_state: unknown;
+            project_state_ownership_marker: unknown;
+          };
+          expect(journal.project_state).toBeNull();
+          expect(journal.project_state_ownership_marker).toBeNull();
+          inspectedJournal = true;
+          fs.mkdirSync(projectState, { mode: 0o700 });
+          fs.writeFileSync(path.join(projectState, 'external.json'), '{"owner":"external"}\n');
+        }
+        return { code: 1, stdout: '', stderr: 'doctor failed' };
+      },
+    };
+
+    await expect(installOrUpdate({
+      sourceRoot: packageFixture(root, '1.0.1', 'concurrent-project-state'),
+      homeDir: home, stateRoot: state, projectRoot: project,
+      transactionId: 'concurrent-project-state', runner: concurrentFailingDoctor,
+      initializeProjectState: false,
+    })).rejects.toThrow('E_POST_INSTALL_DOCTOR_FAILED');
+    expect(inspectedJournal).toBe(true);
+    expect(fs.readFileSync(path.join(projectState, 'external.json'), 'utf8')).toContain('external');
+  });
+
+  it('preserves concurrent external project-state data during an opted-in rollback', async () => {
+    const root = temporary('omcu-lifecycle-concurrent-opted-in-state-');
+    const home = path.join(root, 'home');
+    const project = path.join(root, 'project');
+    const state = path.join(root, 'state');
+    const projectState = path.join(project, '.omcu');
+    fs.mkdirSync(home);
+    fs.mkdirSync(project);
+    const concurrentFailingDoctor: CommandRunner = {
+      async run() {
+        fs.writeFileSync(path.join(projectState, 'external.json'), '{"owner":"external"}\n');
+        return { code: 1, stdout: '', stderr: 'doctor failed' };
+      },
+    };
+    await expect(installOrUpdate({
+      sourceRoot: packageFixture(root, '1.0.2', 'concurrent-opted-in-state'),
+      homeDir: home, stateRoot: state, projectRoot: project,
+      transactionId: 'concurrent-opted-in-state', runner: concurrentFailingDoctor,
+      initializeProjectState: true,
+    })).rejects.toThrow('E_POST_INSTALL_DOCTOR_FAILED');
+    expect(fs.readFileSync(path.join(projectState, 'external.json'), 'utf8')).toContain('external');
+    expect(fs.readdirSync(projectState)).toEqual(['external.json']);
+  });
+
+  it('validates and adopts pre-existing owner-only project state without claiming ownership', async () => {
+    const root = temporary('omcu-lifecycle-adopt-project-state-');
+    const home = path.join(root, 'home');
+    const project = path.join(root, 'project');
+    const projectState = path.join(project, '.omcu');
+    fs.mkdirSync(home);
+    fs.mkdirSync(project);
+    fs.mkdirSync(projectState, { mode: 0o700 });
+    fs.writeFileSync(path.join(projectState, 'owner.json'), `${JSON.stringify({
+      schema_version: 1,
+      owner_token: 'a'.repeat(64),
+      created_at: '2026-07-23T00:00:00.000Z',
+    })}\n`, { mode: 0o600 });
+    const result = await installOrUpdate({
+      sourceRoot: packageFixture(root, '1.0.3', 'adopt-project-state'),
+      homeDir: home, stateRoot: path.join(root, 'state'), projectRoot: project,
+      transactionId: 'adopt-project-state', runner: healthyCursor,
+      initializeProjectState: true,
+    });
+    expect(result.receipt.owned_inventory.some((entry) => entry.kind === 'project_state')).toBe(false);
+    expect(fs.existsSync(path.join(projectState, 'owner.json'))).toBe(true);
+  });
+
+  it.each(['symlink', 'file', 'wide-mode', 'corrupt-owner'] as const)(
+    'fails closed when opted-in pre-existing project state is unsafe: %s',
+    async (kind) => {
+      const root = temporary(`omcu-lifecycle-unsafe-project-${kind}-`);
+      const home = path.join(root, 'home');
+      const project = path.join(root, 'project');
+      const projectState = path.join(project, '.omcu');
+      fs.mkdirSync(home);
+      fs.mkdirSync(project);
+      if (kind === 'symlink') {
+        const foreign = path.join(root, 'foreign');
+        fs.mkdirSync(foreign);
+        fs.symlinkSync(foreign, projectState);
+      } else if (kind === 'file') {
+        fs.writeFileSync(projectState, 'not a directory');
+      } else {
+        fs.mkdirSync(projectState, { mode: kind === 'wide-mode' ? 0o755 : 0o700 });
+        if (kind === 'wide-mode') fs.chmodSync(projectState, 0o755);
+        if (kind === 'corrupt-owner') fs.writeFileSync(path.join(projectState, 'owner.json'), '{bad', { mode: 0o600 });
+      }
+      await expect(installOrUpdate({
+        sourceRoot: packageFixture(root, '1.0.4', kind),
+        homeDir: home, stateRoot: path.join(root, 'state'), projectRoot: project,
+        transactionId: `unsafe-${kind}`, runner: healthyCursor,
+        initializeProjectState: true,
+      })).rejects.toThrow(/E_(STATE_ROOT|OWNER_)/);
+      expect(fs.existsSync(path.join(root, 'state', 'install', 'current.json'))).toBe(false);
+    },
+  );
+
   it('stages immutable bytes, switches the CLI, creates project state, and reads back ownership', async () => {
     const root = temporary('omcu-lifecycle-');
     const home = path.join(root, 'home');
@@ -72,6 +255,7 @@ describe('receipt-backed lifecycle', () => {
       sourceRoot: source, homeDir: home, stateRoot: path.join(root, 'state'),
       projectRoot: project, transactionId: 'install-v1', runner: healthyCursor,
       now: () => new Date('2026-07-23T00:00:00.000Z'),
+      initializeProjectState: true,
     });
     expect(fs.lstatSync(path.join(home, '.local', 'bin', 'omcu')).isSymbolicLink()).toBe(true);
     expect(fs.statSync(result.receipt.installed.stage).mode & 0o777).toBe(0o500);
@@ -232,6 +416,7 @@ describe('receipt-backed lifecycle', () => {
     const installed = await installOrUpdate({
       sourceRoot: packageFixture(root, '7.0.0', 'project-collision'), homeDir: home, stateRoot: state,
       projectRoot: project, transactionId: 'project-collision', runner: healthyCursor,
+      initializeProjectState: true,
     });
     fs.rmdirSync(path.join(project, '.omcu'));
     fs.symlinkSync(foreign, path.join(project, '.omcu'));
@@ -260,6 +445,7 @@ describe('receipt-backed lifecycle', () => {
     const installed = await installOrUpdate({
       sourceRoot: packageFixture(root, '8.0.0', 'project-data'), homeDir: home, stateRoot: state,
       projectRoot: project, transactionId: 'project-data', runner: healthyCursor,
+      initializeProjectState: true,
     });
     const projectState = path.join(project, '.omcu');
     fs.writeFileSync(path.join(projectState, 'user-state.json'), '{"keep":true}\n');

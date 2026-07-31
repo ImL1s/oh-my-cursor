@@ -12,18 +12,40 @@ import {
   shouldHostLaunch,
   splitAtEndOfOptions,
 } from '../src/cli/host-launch.js';
+import { COMMAND_NAMES, nearestCommand } from '../src/cli/parser.js';
 
 describe('OMCU host launch contract', () => {
   it('routes bare argv and prompts to host launch; keeps known commands', () => {
     expect(shouldHostLaunch([])).toBe(true);
     expect(shouldHostLaunch(['fix the tests'])).toBe(true);
+    expect(shouldHostLaunch(['fix'])).toBe(true);
+    expect(shouldHostLaunch(['--prompt', 'workflow'])).toBe(true);
+    expect(shouldHostLaunch(['prompt', 'workflow'])).toBe(true);
     expect(shouldHostLaunch(['--madmax'])).toBe(true);
     expect(shouldHostLaunch(['--madmax', 'ship it'])).toBe(true);
+    expect(shouldHostLaunch(['--direct', 'ship it'])).toBe(true);
+    expect(shouldHostLaunch(['--tmux', 'ship it'])).toBe(true);
+    expect(shouldHostLaunch(['worfklow', 'list'])).toBe(false);
+    expect(shouldHostLaunch(['worfklow'])).toBe(false);
+    expect(shouldHostLaunch(['worfklow', '--madmax'])).toBe(false);
+    expect(shouldHostLaunch(['--madmax', 'worfklow'])).toBe(true);
     expect(shouldHostLaunch(['doctor'])).toBe(false);
     expect(shouldHostLaunch(['session', 'list'])).toBe(false);
     expect(shouldHostLaunch(['--help'])).toBe(false);
     expect(() => shouldHostLaunch(['ralph', '--madmax'])).toThrow(HostLaunchUsageError);
     expect(() => shouldHostLaunch(['doctor', '--direct'])).toThrow(/E_LAUNCH_USAGE/);
+  });
+
+  it('fails closed for deterministic one- and two-edit command-confusable shorthand', () => {
+    expect(nearestCommand('worfklow')).toEqual({ command: 'workflow', distance: 2 });
+    for (const command of COMMAND_NAMES) {
+      const oneEdit = `${command}x`;
+      const twoEdits = `${command}xy`;
+      expect(nearestCommand(oneEdit), oneEdit).not.toBeNull();
+      expect(nearestCommand(twoEdits), twoEdits).not.toBeNull();
+      expect(shouldHostLaunch([oneEdit]), oneEdit).toBe(false);
+      expect(shouldHostLaunch([twoEdits]), twoEdits).toBe(false);
+    }
   });
 
   it('keeps suffix after -- opaque (GRAM-04)', () => {
@@ -64,6 +86,12 @@ describe('OMCU host launch contract', () => {
     ]);
     expect(normalizeCursorArgs(['ship'], { packageRoot: '/pkg', madmax: false })).toEqual([
       '--plugin-dir', '/pkg', 'ship',
+    ]);
+    expect(normalizeCursorArgs(['--prompt', 'workflow'], { packageRoot: '/pkg', madmax: false })).toEqual([
+      '--plugin-dir', '/pkg', 'workflow',
+    ]);
+    expect(normalizeCursorArgs(['prompt', 'workflow'], { packageRoot: '/pkg', madmax: false })).toEqual([
+      '--plugin-dir', '/pkg', 'workflow',
     ]);
     expect(normalizeCursorArgs(['--madmax', 'ship'], { packageRoot: '/pkg', madmax: true })).toEqual([
       '--plugin-dir', '/pkg',

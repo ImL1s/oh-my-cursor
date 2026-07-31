@@ -42,7 +42,9 @@ By default:
 
 - install state: `~/.local/state/oh-my-cursor/`;
 - CLI link: `~/.local/bin/omcu`;
-- project state: `/absolute/path/to/project/.omcu/`.
+- project state: not inspected or created unless `--init-project-state` is passed.
+
+To initialize or safely adopt an owner-only project state root, add `--init-project-state`. Existing roots must be a non-symlink directory owned by the current user with mode `0700`; an existing `owner.json`, when present, must satisfy the CLI authority schema.
 
 Installation state and project state have different owners and lifetimes. Never copy install receipts into `.omcu/`, and never edit `.omcu/` manually.
 

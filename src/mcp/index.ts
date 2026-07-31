@@ -1,9 +1,13 @@
 import fs from 'node:fs';
-import crypto from 'node:crypto';
 import path from 'node:path';
 import readline from 'node:readline';
 import type { Readable, Writable } from 'node:stream';
 import { redact } from '../runtime/redaction.js';
+import {
+  AtomicWriteError,
+  atomicCreateJson,
+  type AtomicWriteOptions,
+} from '../runtime/atomic.js';
 import { withinStateRoot, type StateRoot } from '../runtime/state-root.js';
 import { ProjectMemoryStore } from '../memory/index.js';
 import { readRecovery } from '../recovery/index.js';
@@ -32,26 +36,53 @@ function args(params: unknown): Record<string, unknown> {
 }
 function safe(value: unknown): string { if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value)) throw new Error('E_MCP_ID_INVALID'); return value; }
 function toolResult(value: unknown): unknown { return { content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value }; }
-function publishProposal(file: string, proposal: unknown): void {
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const temporary = `${file}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
-  const descriptor = fs.openSync(temporary, 'wx', 0o400);
+function proposalMatches(file: string, proposal: unknown): boolean {
+  let expected: Buffer;
   try {
-    fs.writeFileSync(descriptor, `${JSON.stringify(proposal, null, 2)}\n`);
-    fs.fsyncSync(descriptor);
-  } finally {
-    fs.closeSync(descriptor);
+    expected = Buffer.from(`${JSON.stringify(proposal, null, 2)}\n`);
+    const before = fs.lstatSync(file);
+    if (!before.isFile() || before.isSymbolicLink() || before.size !== expected.length
+      || (typeof process.getuid === 'function' && before.uid !== process.getuid())
+      || (process.platform !== 'win32' && (before.mode & 0o777) !== 0o400)) return false;
+    const descriptor = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+    try {
+      const opened = fs.fstatSync(descriptor);
+      if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino
+        || opened.size !== before.size) return false;
+      const observed = Buffer.alloc(opened.size);
+      const bytes = fs.readSync(descriptor, observed, 0, observed.length, 0);
+      const final = fs.fstatSync(descriptor);
+      return bytes === observed.length && final.dev === opened.dev && final.ino === opened.ino
+        && final.size === opened.size
+        && (typeof process.getuid !== 'function' || final.uid === process.getuid())
+        && (process.platform === 'win32' || (final.mode & 0o777) === 0o400)
+        && observed.equals(expected);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+  } catch {
+    return false;
   }
+}
+
+/** Exclusive immutable proposal publication; exported only for focused fault tests. */
+export function publishProposal(
+  file: string,
+  proposal: unknown,
+  options: AtomicWriteOptions = {},
+): void {
   try {
-    fs.linkSync(temporary, file);
+    atomicCreateJson(file, proposal, { ...options, mode: 0o400 });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error('E_MCP_PROPOSAL_EXISTS');
+    if (error instanceof AtomicWriteError && error.phase === 'commit_durability_unknown'
+      && proposalMatches(file, proposal)) return;
+    const details = `${error instanceof Error ? error.message : String(error)} ${
+      error instanceof AtomicWriteError && error.causeError instanceof Error ? error.causeError.message : ''
+    }`;
+    if (error instanceof AtomicWriteError && error.phase === 'not_committed'
+      && /(?:E_ATOMIC_EXISTS|EEXIST)/.test(details)) throw new Error('E_MCP_PROPOSAL_EXISTS', { cause: error });
     throw error;
-  } finally {
-    fs.unlinkSync(temporary);
   }
-  const directory = fs.openSync(path.dirname(file), 'r');
-  try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
 }
 
 export function createMcpRequestHandler(root: StateRoot): (request: JsonRpcRequest) => Promise<JsonRpcResponse> {

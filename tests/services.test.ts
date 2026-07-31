@@ -4,13 +4,14 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { projectStateRoot } from '../src/runtime/state-root.js';
+import { atomicWriteJson } from '../src/runtime/atomic.js';
 import { readRecovery, recoverCursorSession } from '../src/recovery/index.js';
 import { CompactionStore } from '../src/compaction/index.js';
 import { ProjectMemoryStore } from '../src/memory/index.js';
 import { NotificationService } from '../src/notify/index.js';
 import { LifecycleTracker } from '../src/tracker/index.js';
 import { LifecycleWiki } from '../src/wiki/index.js';
-import { createMcpRequestHandler } from '../src/mcp/index.js';
+import { createMcpRequestHandler, publishProposal } from '../src/mcp/index.js';
 import crypto from 'node:crypto';
 
 const roots: string[] = [];
@@ -137,6 +138,55 @@ describe('Cursor service layer', () => {
     expect(other.rescan()).toEqual(['release']);
   });
 
+  it('imports a validated memory batch under one index rescan with last duplicate winning', async () => {
+    const store = new ProjectMemoryStore(projectStateRoot(workspace()), now);
+    const internal = store as unknown as { rescanUnlocked: () => readonly string[] };
+    const originalRescan = internal.rescanUnlocked.bind(store);
+    let rescans = 0;
+    internal.rescanUnlocked = () => { rescans += 1; return originalRescan(); };
+
+    await expect(store.import({
+      schema_version: 1,
+      memories: [
+        { schema_version: 1, id: 'duplicate', text: 'old', metadata: {}, updated_at: 'ignored' },
+        { schema_version: 1, id: 'unique', text: 'value', metadata: {}, updated_at: 'ignored' },
+        { schema_version: 1, id: 'duplicate', text: 'new', metadata: {}, updated_at: 'ignored' },
+      ],
+    })).resolves.toBe(3);
+    expect(rescans).toBe(1);
+    expect(store.show('duplicate').text).toBe('new');
+    expect(store.list().map(({ id }) => id)).toEqual(['duplicate', 'unique']);
+
+    const empty = new ProjectMemoryStore(projectStateRoot(workspace()), now);
+    await expect(empty.import({
+      schema_version: 1,
+      memories: [
+        { schema_version: 1, id: 'would-have-written', text: 'valid', metadata: {}, updated_at: 'ignored' },
+        { schema_version: 1, id: '../invalid', text: 'invalid', metadata: {}, updated_at: 'ignored' },
+      ],
+    })).rejects.toThrow('E_MEMORY_ID_INVALID');
+    expect(empty.list()).toEqual([]);
+  });
+
+  it('rebuilds the memory index after a later record write fails during import', async () => {
+    const root = projectStateRoot(workspace());
+    const store = new ProjectMemoryStore(root, now, (file, value) => {
+      if (file.endsWith(`${path.sep}b.json`)) throw new Error('E_INJECTED_RECORD_WRITE');
+      return atomicWriteJson(file, value);
+    });
+    await expect(store.import({
+      schema_version: 1,
+      memories: [
+        { schema_version: 1, id: 'a', text: 'committed', metadata: {}, updated_at: 'ignored' },
+        { schema_version: 1, id: 'b', text: 'fails', metadata: {}, updated_at: 'ignored' },
+      ],
+    })).rejects.toThrow('E_INJECTED_RECORD_WRITE');
+    const index = JSON.parse(fs.readFileSync(path.join(root.path, 'memory', 'index.json'), 'utf8')) as { ids: string[] };
+    expect(index.ids).toEqual(['a']);
+    expect(store.show('a').text).toBe('committed');
+    expect(fs.existsSync(path.join(root.path, 'memory', 'records', 'b.json'))).toBe(false);
+  });
+
   it('serializes shared memory index updates across processes without losing records', async () => {
     const root = projectStateRoot(workspace());
     const holder = spawn(viteNode, [localStateChild, 'memory-hold-lock', root.path, 'unused', 'unused'], { stdio: ['pipe', 'pipe', 'pipe'] });
@@ -181,6 +231,19 @@ describe('Cursor service layer', () => {
     expect(sent).toHaveBeenCalledWith({ destination: 'test://sink', nonce: queued.nonce, payload: { token: '<redacted>', message: 'done' } });
   });
 
+  it('maps missing and corrupt observational notification reads to stable state errors', async () => {
+    const root = projectStateRoot(workspace());
+    const service = new NotificationService(root, vi.fn(async () => undefined));
+    expect(() => service.config()).toThrow('E_STATE_ABSENT');
+    expect(() => service.read('missing')).toThrow('E_STATE_ABSENT');
+    fs.mkdirSync(path.join(root.path, 'notify'), { recursive: true });
+    fs.writeFileSync(path.join(root.path, 'notify', 'config.json'), JSON.stringify({ schema_version: 1 }));
+    fs.mkdirSync(path.join(root.path, 'notify', 'queue'), { recursive: true });
+    fs.writeFileSync(path.join(root.path, 'notify', 'queue', 'bad.json'), '{bad');
+    expect(() => service.config()).toThrow('E_STATE_CORRUPT');
+    expect(() => service.read('bad')).toThrow('E_STATE_CORRUPT');
+  });
+
   it('tracks lifecycle and renders a generation-fenced wiki', async () => {
     const root = projectStateRoot(workspace()); const tracker = new LifecycleTracker(root, now);
     await tracker.record('run-1', 'created'); await tracker.record('run-1', 'started', { token: 'secret' }); await tracker.record('run-1', 'completed');
@@ -220,5 +283,26 @@ describe('Cursor service layer', () => {
     const preserved = JSON.parse(fs.readFileSync(file, 'utf8')) as { proposal: { value: string } };
     expect(['first', 'second']).toContain(preserved.proposal.value);
     expect(fs.statSync(file).mode & 0o777).toBe(0o400);
+  });
+
+  it('uses hardened atomic proposal creation and resolves only an exact durability-unknown commit', () => {
+    const root = projectStateRoot(workspace());
+    const proposals = path.join(root.path, 'mcp', 'proposals');
+    const failed = path.join(proposals, 'failed.json');
+    const committed = path.join(proposals, 'committed.json');
+    const proposal = { schema_version: 1, id: 'committed', authoritative: false, proposal: { value: 'ok' } };
+
+    expect(() => publishProposal(failed, proposal, { helperFaults: ['write'] }))
+      .toThrowError(expect.objectContaining({ phase: 'not_committed' }));
+    expect(fs.existsSync(failed)).toBe(false);
+    expect(fs.readdirSync(proposals).filter((name) => name.includes('.tmp-'))).toEqual([]);
+
+    expect(() => publishProposal(committed, proposal, { helperFaults: ['after_commit_crash'] }))
+      .not.toThrow();
+    expect(JSON.parse(fs.readFileSync(committed, 'utf8'))).toEqual(proposal);
+    expect(fs.readdirSync(proposals).filter((name) => name.includes('.tmp-'))).toEqual([]);
+    expect(() => publishProposal(committed, { ...proposal, proposal: { value: 'other' } }))
+      .toThrow('E_MCP_PROPOSAL_EXISTS');
+    expect(JSON.parse(fs.readFileSync(committed, 'utf8'))).toEqual(proposal);
   });
 });
