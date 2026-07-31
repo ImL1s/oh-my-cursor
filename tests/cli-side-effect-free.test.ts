@@ -485,11 +485,18 @@ describe('side-effect-free CLI entry paths (#8)', () => {
         stdout: (text) => stdout.push(text),
         stderr: () => undefined,
       });
-      expect([0, 2]).toContain(code);
+      const report = JSON.parse(stdout.join('')) as {
+        exit_code: 0 | 1 | 2;
+        owner_repair: { repaired: boolean };
+      };
+      // Owner repair is independent of live Cursor health. A machine without
+      // cursor-agent correctly returns the doctor failure code after repair.
+      expect(code).toBe(report.exit_code);
+      expect([0, 1, 2]).toContain(code);
       expect(fs.existsSync(owner)).toBe(false);
       const quarantine = fs.readdirSync(root).filter((name) => name.startsWith('owner.json.invalid-'));
       expect(quarantine).toHaveLength(1);
-      expect(stdout.join('')).toContain('"repaired": true');
+      expect(report.owner_repair.repaired).toBe(true);
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true });
     }
