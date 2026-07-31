@@ -484,7 +484,7 @@ describe('receipt-backed lifecycle', () => {
         ...process.env,
         OMCU_CRASH_INPUT: JSON.stringify({
           sourceRoot: interruptedSource, homeDir: home, stateRoot: state, projectRoot: project,
-          transactionId: `interrupted-${action}`, action, marker,
+          transactionId: `interrupted-${action}`, action, marker, initializeProjectState: true,
         }),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -494,6 +494,14 @@ describe('receipt-backed lifecycle', () => {
     await waitForFile(marker);
     const cli = path.join(home, '.local', 'bin', 'omcu');
     expect(fs.readlinkSync(cli)).toContain('10.0.0-');
+    const journal = JSON.parse(fs.readFileSync(
+      path.join(state, 'install', 'transaction.json'),
+      'utf8',
+    )) as { project_state_ownership_marker: string; receipt_sha256: string };
+    expect(fs.readFileSync(journal.project_state_ownership_marker, 'utf8'))
+      .toBe(`${journal.receipt_sha256}\n`);
+    expect(fs.lstatSync(journal.project_state_ownership_marker).mode & 0o777).toBe(0o600);
+    expect(fs.readdirSync(path.join(project, '.omcu')).some((name) => name.includes('.tmp-'))).toBe(false);
     child.kill('SIGKILL');
     await new Promise<void>((resolve, reject) => {
       child.once('close', () => resolve());
@@ -505,7 +513,7 @@ describe('receipt-backed lifecycle', () => {
     const recovered = await installOrUpdate({
       sourceRoot: packageFixture(root, '11.0.0', 'recovered'), action: 'update',
       homeDir: home, stateRoot: state, projectRoot: project, transactionId: `recovered-${action}`,
-      runner: healthyCursor,
+      runner: healthyCursor, initializeProjectState: true,
     });
     expect(fs.existsSync(path.join(state, 'install', 'transaction.json'))).toBe(false);
     expect(fs.readlinkSync(cli)).toBe(path.join(recovered.receipt.installed.stage, 'dist', 'bin', 'omcu.js'));

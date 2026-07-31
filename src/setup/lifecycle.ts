@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { atomicWriteJson } from '../runtime/atomic.js';
+import { atomicCreateText, atomicWriteJson } from '../runtime/atomic.js';
 import { ensureExternalStateRoot } from '../runtime/state-root.js';
 import { openProjectStateRoot } from '../runtime/state-root.js';
 import { validateExistingCliOwnerRecord } from '../state/authority.js';
@@ -202,7 +202,7 @@ function createTransactionOwnedProjectState(projectState: string, marker: string
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error('E_PROJECT_STATE_RACE', { cause: error });
     throw error;
   }
-  fs.writeFileSync(marker, `${proof}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+  atomicCreateText(marker, `${proof}\n`, { maxBytes: 128, mode: 0o600 });
 }
 
 function ownsProjectState(journal: InstallTransactionJournal): boolean {

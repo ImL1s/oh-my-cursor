@@ -10,6 +10,7 @@ import {
   DirectoryLockDualFailureError,
   atomicPublishDirectory,
   atomicCreateJson,
+  atomicCreateText,
   atomicWriteJson,
   atomicWriteText,
   cleanupAtomicStagingDirectories,
@@ -107,6 +108,7 @@ describe('atomic write integrity (#14)', () => {
   it.each([
     ['json', '{\n  "after": true\n}\n'],
     ['create', '{\n  "created": true\n}\n'],
+    ['create-text', 'created\n'],
     ['text', 'after\n'],
   ] as const)('classifies a real %s helper crash after commit as durability unknown', (kind, content) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), `omcu-atomic-crash-${kind}-`));
@@ -267,6 +269,23 @@ describe('atomic write integrity (#14)', () => {
       expect(() => atomicCreateJson(file, { replacement: true }))
         .toThrowError(expect.objectContaining({ phase: 'not_committed' }));
       expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ ok: true });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('creates plain text exclusively without replacing an existing marker', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-atomic-create-text-'));
+    const marker = path.join(root, '.install-owner-test');
+    try {
+      expect(atomicCreateText(marker, 'receipt-sha\n', { mode: 0o600 }))
+        .toEqual({ phase: 'committed', bytes: 12 });
+      const identity = fs.lstatSync(marker);
+      expect(identity.mode & 0o777).toBe(0o600);
+      expect(() => atomicCreateText(marker, 'replacement\n', { mode: 0o600 }))
+        .toThrowError(expect.objectContaining({ phase: 'not_committed' }));
+      expect(fs.lstatSync(marker).ino).toBe(identity.ino);
+      expect(fs.readFileSync(marker, 'utf8')).toBe('receipt-sha\n');
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

@@ -1171,7 +1171,36 @@ export function atomicWriteText(
   }
 }
 
-/** Crash-safe exclusive create. EEXIST is reported as a typed pre-commit failure. */
+function atomicCreatePrepared(
+  file: string,
+  body: string,
+  bytes: number,
+  options: AtomicWriteOptions = {},
+): AtomicWriteResult {
+  const secured = secureFilePath(
+    file,
+    'E_ATOMIC',
+    (phase) => invokeFault(options, phase === 'parent' ? 'parent_revalidate' : 'segment_revalidate'),
+  );
+  let exists = false;
+  try {
+    fs.lstatSync(secured.file);
+    exists = true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  if (exists) throw new AtomicWriteError('E_ATOMIC_EXISTS', 'not_committed');
+  return atomicWritePrepared(
+    secured,
+    body,
+    bytes,
+    intendedMode(secured.file, options.mode),
+    options,
+    true,
+  );
+}
+
+/** Crash-safe exclusive JSON create. EEXIST is reported as a typed pre-commit failure. */
 export function atomicCreateJson(
   file: string,
   value: unknown,
@@ -1179,27 +1208,21 @@ export function atomicCreateJson(
 ): AtomicWriteResult {
   try {
     const { body, bytes } = serialize(value, options.maxBytes ?? DEFAULT_MAX_BYTES);
-    const secured = secureFilePath(
-      file,
-      'E_ATOMIC',
-      (phase) => invokeFault(options, phase === 'parent' ? 'parent_revalidate' : 'segment_revalidate'),
-    );
-    let exists = false;
-    try {
-      fs.lstatSync(secured.file);
-      exists = true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
-    if (exists) throw new AtomicWriteError('E_ATOMIC_EXISTS', 'not_committed');
-    return atomicWritePrepared(
-      secured,
-      body,
-      bytes,
-      intendedMode(secured.file, options.mode),
-      options,
-      true,
-    );
+    return atomicCreatePrepared(file, body, bytes, options);
+  } catch (error) {
+    throw asAtomicPrecommit(error);
+  }
+}
+
+/** Crash-safe exclusive UTF-8 text create. EEXIST is reported as a typed pre-commit failure. */
+export function atomicCreateText(
+  file: string,
+  value: string,
+  options: AtomicWriteOptions = {},
+): AtomicWriteResult {
+  try {
+    const { body, bytes } = boundedText(value, options.maxBytes ?? DEFAULT_MAX_BYTES);
+    return atomicCreatePrepared(file, body, bytes, options);
   } catch (error) {
     throw asAtomicPrecommit(error);
   }

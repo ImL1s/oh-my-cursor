@@ -10,6 +10,7 @@ const input = JSON.parse(process.env.OMCU_CRASH_INPUT ?? '{}') as {
   transactionId: string;
   action: 'install' | 'update';
   marker: string;
+  initializeProjectState?: boolean;
 };
 
 const runner: CommandRunner = {
