@@ -512,6 +512,51 @@ describe('receipt-backed lifecycle', () => {
     expect(fs.readdirSync(path.join(state, 'install', 'releases')).some((name) => name.startsWith('10.0.0-'))).toBe(false);
   }, 30_000);
 
+  it('clears a committed transaction ownership marker during reconcile', async () => {
+    const root = temporary('omcu-committed-owner-marker-');
+    const home = path.join(root, 'home');
+    const project = path.join(root, 'project');
+    const state = path.join(root, 'state');
+    fs.mkdirSync(home);
+    fs.mkdirSync(project);
+    const installed = await installOrUpdate({
+      sourceRoot: packageFixture(root, '10.1.0', 'committed-owner-marker'),
+      homeDir: home, stateRoot: state, projectRoot: project,
+      transactionId: 'committed-owner-marker', runner: healthyCursor,
+      initializeProjectState: true,
+    });
+    const projectState = path.join(project, '.omcu');
+    const ownershipMarker = path.join(projectState, '.install-owner-interrupted');
+    const cli = path.join(home, '.local', 'bin', 'omcu');
+    fs.writeFileSync(ownershipMarker, `${installed.receipt.receipt_sha256}\n`, { mode: 0o600 });
+    fs.writeFileSync(path.join(state, 'install', 'transaction.json'), `${JSON.stringify({
+      store_kind: 'omcu_install_transaction',
+      schema_version: 1,
+      cli,
+      candidate_target: path.join(installed.receipt.installed.stage, 'dist', 'bin', 'omcu.js'),
+      prior_cli_target: null,
+      current_pointer: path.join(state, 'install', 'current.json'),
+      prior_pointer_base64: null,
+      receipt_path: installed.receiptPath,
+      receipt_sha256: installed.receipt.receipt_sha256,
+      stage: installed.receipt.installed.stage,
+      stage_existed: false,
+      temporary_stage: `${installed.receipt.installed.stage}.tmp-interrupted`,
+      project_state: projectState,
+      project_state_ownership_marker: ownershipMarker,
+    })}\n`, { mode: 0o600 });
+
+    await installOrUpdate({
+      sourceRoot: packageFixture(root, '10.2.0', 'after-committed-owner-marker'),
+      action: 'update', homeDir: home, stateRoot: state, projectRoot: project,
+      transactionId: 'after-committed-owner-marker', runner: healthyCursor,
+      initializeProjectState: false,
+    });
+
+    expect(fs.existsSync(ownershipMarker)).toBe(false);
+    expect(fs.existsSync(path.join(state, 'install', 'transaction.json'))).toBe(false);
+  });
+
   it('finishes a journaled partial uninstall before the next install', async () => {
     const root = temporary('omcu-uninstall-reconcile-');
     const home = path.join(root, 'home');

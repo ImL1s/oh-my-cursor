@@ -4,6 +4,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runCli } from '../src/cli/application.js';
 import { buildHostLaunchPlan, shouldHostLaunch } from '../src/cli/host-launch.js';
+import { TEAM_API_HELP } from '../src/team/index.js';
 
 function tempCwd(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -27,6 +28,27 @@ describe('side-effect-free CLI entry paths (#8)', () => {
       expect(stderr).toEqual([]);
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('prints dedicated team api help without creating project state', async () => {
+    for (const flag of ['--help', '-h']) {
+      const cwd = tempCwd('omcu-team-api-help-');
+      const stdout: string[] = [];
+      const stderr: string[] = [];
+      try {
+        expect(await runCli(['team', 'api', flag], { cwd, packageRoot: path.resolve('.') }, {
+          stdout: (text) => stdout.push(text),
+          stderr: (text) => stderr.push(text),
+        })).toBe(0);
+        expect(stdout.join('')).toBe(TEAM_API_HELP);
+        expect(stdout.join('')).toContain('send-message');
+        expect(stdout.join('')).toContain('Examples:');
+        expect(stderr).toEqual([]);
+        expect(fs.existsSync(path.join(cwd, '.omcu'))).toBe(false);
+      } finally {
+        fs.rmSync(cwd, { recursive: true, force: true });
+      }
     }
   });
 

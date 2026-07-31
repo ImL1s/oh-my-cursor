@@ -268,6 +268,18 @@ describe('strict CLI grammar (#12)', () => {
     expect(() => parseCli(['state', 'create', '--id', 'a', '--id', 'b', '--help'])).toThrow('E_OPTION_DUPLICATE');
   });
 
+  it('routes team api help flags to its dedicated operation help', () => {
+    for (const flag of ['--help', '-h']) {
+      expect(parseCli(['team', 'api', flag])).toMatchObject({
+        command: 'team',
+        action: 'api',
+        args: [flag],
+        positionals: ['help'],
+        stateAccess: 'none',
+      });
+    }
+  });
+
   it('classifies option-dependent project state access', () => {
     expect(parseCli(['setup']).stateAccess).toBe('none');
     expect(parseCli(['setup', '--init-project-state']).stateAccess).toBe('write-ensure');

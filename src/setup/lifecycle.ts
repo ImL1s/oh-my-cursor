@@ -306,6 +306,8 @@ function reconcileInstallTransaction(stateRoot: string, home: string, allowProje
     removeWritable(journal.receipt_path);
     if (!journal.stage_existed) removeWritable(journal.stage);
     if (allowProjectStateCleanup) removeTransactionOwnedProjectState(journal);
+  } else {
+    clearProjectStateOwnershipMarker(journal);
   }
   fs.rmSync(journalPath, { force: true });
 }

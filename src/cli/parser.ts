@@ -781,6 +781,10 @@ export function parseCli(argv: readonly string[]): ParsedCommand {
   }
 
   const actionSchema = action !== null ? actions[action] : undefined;
+  if (command === 'team' && action === 'api' && actionSchema !== undefined && isHelpRequest(args)) {
+    const validated = validateArgsAgainstSchema(['help'], actionSchema);
+    return parsedResult(command, action, args, validated, 'none');
+  }
   if (action !== null && actionSchema !== undefined && isHelpRequest(args)) {
     const target = [command, action];
     return parsedResult('help', null, target, validateArgsAgainstSchema(target, COMMAND_SCHEMAS.help!), 'none');
