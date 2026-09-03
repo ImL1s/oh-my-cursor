@@ -184,7 +184,25 @@ async function handleState(command: string, action: string | null, context: CliC
   if (effectiveAction === 'create') printJson(context.io, await store.create(id, requiredOptionValue<string>(context, '--objective')));
   else if (effectiveAction === 'status' || effectiveAction === 'show') printJson(context.io, store.read(id));
   else if (effectiveAction === 'transition') printJson(context.io, await store.transition(id, requiredOptionValue<number>(context, '--revision'), requiredOptionValue<string>(context, '--status') as RunStatus));
-  else if (effectiveAction === 'cancel') { const current = store.read(id); printJson(context.io, await store.transition(id, current.revision, 'cancelled')); }
+  else if (effectiveAction === 'cancel') {
+    const current = store.read(id);
+    if (current.status === 'cancelled') {
+      printJson(context.io, current);
+    } else {
+      try {
+        printJson(context.io, await store.transition(id, current.revision, 'cancelled'));
+      } catch (error) {
+        if ((error as Error).message === 'E_REVISION_CONFLICT') {
+          const recheck = store.read(id);
+          if (recheck.status === 'cancelled') {
+            printJson(context.io, recheck);
+            return 0;
+          }
+        }
+        throw error;
+      }
+    }
+  }
   else if (effectiveAction === 'verify') printJson(context.io, await store.verify(id, requiredOptionValue<number>(context, '--revision'), requiredOptionValue<string>(context, '--evidence-sha256')));
   else if (effectiveAction === 'event') printJson(context.io, await store.appendEvent(id, requiredOptionValue<string>(context, '--type'), requiredOptionValue<unknown>(context, '--payload-json')));
   else throw new Error('E_STATE_ACTION_INVALID');

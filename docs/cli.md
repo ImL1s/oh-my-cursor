@@ -69,7 +69,7 @@ omcu state event --id <run-id> --type <type> [--payload-json <json>]
 omcu cancel --id <run-id>
 ```
 
-Every transition clears prior verification. Verification rejects active runs, stale revisions, and malformed evidence digests. `cancel` reads the current revision and performs a fenced cancellation.
+Every transition clears prior verification. Verification requires status `complete` and rejects non-complete runs (`active`, `failed`, `cancelled`), stale revisions, and malformed evidence digests. `cancel` reads the current revision and performs a fenced cancellation.
 
 Leases coordinate project writers:
 

@@ -5,7 +5,16 @@ import { atomicWriteJson, withDirectoryLock } from '../runtime/atomic.js';
 import { redact } from '../runtime/redaction.js';
 import { withinStateRoot, type StateRoot } from '../runtime/state-root.js';
 import { assertCliMutationAuthority, authorityDigest, type CliMutationAuthority } from './authority.js';
-import type { LeaseV1, MutationProof, RunEventV1, RunStateV1, RunStatus } from './types.js';
+import {
+  ALLOWED_TRANSITIONS,
+  TERMINAL_STATUSES,
+  type LeaseV1,
+  type MutationProof,
+  type RunEventV1,
+  type RunStateV1,
+  type RunStatus,
+} from './types.js';
+export { ALLOWED_TRANSITIONS, TERMINAL_STATUSES };
 
 const SAFE_KEY = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 function safeKey(value: string, label: string): string {
@@ -24,39 +33,83 @@ function stateCorrupt(error: unknown): Error {
   return new Error('E_STATE_CORRUPT', { cause: error });
 }
 function validDate(value: unknown): value is string {
-  return typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
+  if (typeof value !== 'string') return false;
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return false;
+  try {
+    return new Date(parsed).toISOString() === value;
+  } catch {
+    return false;
+  }
 }
-function validMutation(value: unknown): value is MutationProof {
+
+export function validMutation(value: unknown): value is MutationProof {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
-  const mutation = value as Partial<MutationProof>;
+  const mutation = value as Partial<MutationProof> & Record<string, unknown>;
+  const keys = Object.keys(mutation).sort().join(',');
+  if (keys !== 'mutated_at,owner_token_sha256,source,writer_pid') return false;
   return mutation.source === 'omcu-cli'
-    && typeof mutation.owner_token_sha256 === 'string' && /^[a-f0-9]{64}$/.test(mutation.owner_token_sha256)
-    && Number.isInteger(mutation.writer_pid) && (mutation.writer_pid as number) > 0
+    && typeof mutation.owner_token_sha256 === 'string'
+    && /^[a-f0-9]{64}$/.test(mutation.owner_token_sha256)
+    && Number.isSafeInteger(mutation.writer_pid)
+    && (mutation.writer_pid as number) > 0
     && validDate(mutation.mutated_at);
 }
-function validRunState(state: RunStateV1, runId: string): boolean {
-  const verificationConsistent = state.verification !== null && typeof state.verification === 'object'
-    && typeof state.verification.verified === 'boolean'
-    && (state.verification.verified
-      ? state.status !== 'active'
-        && typeof state.verification.evidence_sha256 === 'string'
-        && /^[a-f0-9]{64}$/.test(state.verification.evidence_sha256)
-        && validDate(state.verification.verified_at)
-      : state.verification.evidence_sha256 === null && state.verification.verified_at === null);
-  return state.store_kind === 'run_state' && state.schema_version === 1 && state.repository_id === 'OMCU'
-    && state.run_id === runId && Number.isInteger(state.revision) && state.revision >= 1
-    && ['active', 'complete', 'failed', 'cancelled'].includes(state.status)
-    && typeof state.objective === 'string' && state.objective.trim() !== '' && state.objective.length <= 16_384
-    && validDate(state.created_at) && validDate(state.updated_at)
-    && verificationConsistent
-    && validMutation(state.last_mutation);
+
+export function validRunState(state: unknown, runId: string): state is RunStateV1 {
+  if (state === null || typeof state !== 'object' || Array.isArray(state)) return false;
+  const s = state as Partial<RunStateV1> & Record<string, unknown>;
+  const keys = Object.keys(s).sort().join(',');
+  if (keys !== 'created_at,last_mutation,objective,repository_id,revision,run_id,schema_version,status,store_kind,updated_at,verification') {
+    return false;
+  }
+  if (s.store_kind !== 'run_state' || s.schema_version !== 1 || s.repository_id !== 'OMCU') return false;
+  if (s.run_id !== runId || typeof s.run_id !== 'string' || !SAFE_KEY.test(s.run_id)) return false;
+  if (!Number.isSafeInteger(s.revision) || (s.revision as number) < 1) return false;
+  if (s.status !== 'active' && s.status !== 'complete' && s.status !== 'failed' && s.status !== 'cancelled') return false;
+  if (typeof s.objective !== 'string' || s.objective.trim() === '' || s.objective.length > 16_384) return false;
+  if (!validDate(s.created_at) || !validDate(s.updated_at)) return false;
+  if (Date.parse(s.created_at) > Date.parse(s.updated_at)) return false;
+
+  const v = s.verification;
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return false;
+  const vRec = v as unknown as Record<string, unknown>;
+  const vKeys = Object.keys(vRec).sort().join(',');
+  if (vKeys !== 'evidence_sha256,verified,verified_at') return false;
+  if (typeof vRec.verified !== 'boolean') return false;
+
+  if (vRec.verified) {
+    if (s.status !== 'complete') return false;
+    if (typeof vRec.evidence_sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(vRec.evidence_sha256)) return false;
+    if (!validDate(vRec.verified_at)) return false;
+    if (Date.parse(s.created_at) > Date.parse(vRec.verified_at)) return false;
+    if (Date.parse(vRec.verified_at) > Date.parse(s.updated_at)) return false;
+  } else {
+    if (vRec.evidence_sha256 !== null || vRec.verified_at !== null) return false;
+  }
+
+  if (!validMutation(s.last_mutation)) return false;
+  if (Date.parse(s.created_at) > Date.parse(s.last_mutation.mutated_at)) return false;
+  if (Date.parse(s.last_mutation.mutated_at) > Date.parse(s.updated_at)) return false;
+  return true;
 }
-function validLease(lease: LeaseV1, runId: string, leaseName: string): boolean {
-  return lease.store_kind === 'run_lease' && lease.schema_version === 1 && lease.repository_id === 'OMCU'
-    && lease.run_id === runId && lease.lease_name === leaseName
-    && SAFE_KEY.test(lease.owner) && Number.isInteger(lease.generation) && lease.generation >= 1
-    && validDate(lease.expires_at) && validMutation(lease.mutation);
+
+export function validLease(lease: unknown, runId: string, leaseName: string): lease is LeaseV1 {
+  if (lease === null || typeof lease !== 'object' || Array.isArray(lease)) return false;
+  const l = lease as Partial<LeaseV1> & Record<string, unknown>;
+  const keys = Object.keys(l).sort().join(',');
+  if (keys !== 'expires_at,generation,lease_name,mutation,owner,repository_id,run_id,schema_version,store_kind') {
+    return false;
+  }
+  if (l.store_kind !== 'run_lease' || l.schema_version !== 1 || l.repository_id !== 'OMCU') return false;
+  if (l.run_id !== runId || typeof l.run_id !== 'string' || !SAFE_KEY.test(l.run_id)) return false;
+  if (l.lease_name !== leaseName || typeof l.lease_name !== 'string' || !SAFE_KEY.test(l.lease_name)) return false;
+  if (typeof l.owner !== 'string' || !SAFE_KEY.test(l.owner)) return false;
+  if (!Number.isSafeInteger(l.generation) || (l.generation as number) < 1) return false;
+  if (!validDate(l.expires_at)) return false;
+  return validMutation(l.mutation);
 }
+
 
 /** Read a run without creating CLI authority or acquiring a mutation lock. */
 export function observeRunState(root: StateRoot, runId: string): RunStateV1 {
@@ -120,6 +173,7 @@ export class RunStateStore {
     if (objective.trim() === '' || objective.length > 16_384) throw new Error('E_OBJECTIVE_INVALID');
     const file = this.runFile(runId);
     return withDirectoryLock(file, () => {
+      assertCliMutationAuthority(this.authority);
       if (fs.existsSync(file)) throw new Error('E_RUN_EXISTS');
       const now = this.now();
       const state: RunStateV1 = {
@@ -138,9 +192,18 @@ export class RunStateStore {
     }
     const file = this.runFile(runId);
     return withDirectoryLock(file, () => {
+      assertCliMutationAuthority(this.authority);
       const current = this.read(runId);
       if (current.revision !== expectedRevision) throw new Error('E_REVISION_CONFLICT');
-      const now = this.now();
+      if (TERMINAL_STATUSES.has(current.status)) {
+        throw new Error('E_TRANSITION_ILLEGAL');
+      }
+      if (current.status === status) {
+        throw new Error('E_TRANSITION_NOOP');
+      }
+      const rawNow = this.now();
+      const updatedMs = Math.max(rawNow.getTime(), Date.parse(current.updated_at));
+      const now = new Date(updatedMs);
       const next: RunStateV1 = { ...current, revision: current.revision + 1, status, updated_at: now.toISOString(), verification: { verified: false, evidence_sha256: null, verified_at: null }, last_mutation: proof(this.authority, now) };
       atomicWriteJson(file, next);
       return next;
@@ -151,10 +214,13 @@ export class RunStateStore {
     if (!/^[a-f0-9]{64}$/.test(evidenceSha256)) throw new Error('E_EVIDENCE_DIGEST_INVALID');
     const file = this.runFile(runId);
     return withDirectoryLock(file, () => {
+      assertCliMutationAuthority(this.authority);
       const current = this.read(runId);
       if (current.revision !== expectedRevision) throw new Error('E_REVISION_CONFLICT');
-      if (current.status === 'active') throw new Error('E_ACTIVE_RUN_NOT_VERIFIABLE');
-      const now = this.now();
+      if (current.status !== 'complete') throw new Error('E_RUN_NOT_COMPLETE_FOR_VERIFICATION');
+      const rawNow = this.now();
+      const updatedMs = Math.max(rawNow.getTime(), Date.parse(current.updated_at));
+      const now = new Date(updatedMs);
       const next: RunStateV1 = { ...current, revision: current.revision + 1, updated_at: now.toISOString(), verification: { verified: true, evidence_sha256: evidenceSha256, verified_at: now.toISOString() }, last_mutation: proof(this.authority, now) };
       atomicWriteJson(file, next);
       return next;
@@ -163,12 +229,26 @@ export class RunStateStore {
 
   async appendEvent(runId: string, type: string, payload: unknown): Promise<RunEventV1> {
     safeKey(type, 'event_type');
-    this.read(runId);
+    const runState = this.read(runId);
     const file = path.join(this.runDir(runId), 'events.jsonl');
     return withDirectoryLock(file, () => {
+      assertCliMutationAuthority(this.authority);
       const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split(/\r?\n/).filter(Boolean) : [];
       if (existing.length >= 10_000) throw new Error('E_EVENT_LIMIT');
-      const now = this.now();
+      const rawNow = this.now();
+      let lastAtMs = Date.parse(runState.created_at);
+      if (existing.length > 0) {
+        try {
+          const lastEvent = JSON.parse(existing[existing.length - 1]!) as RunEventV1;
+          if (validDate(lastEvent.at)) {
+            lastAtMs = Math.max(lastAtMs, Date.parse(lastEvent.at));
+          }
+        } catch {
+          // ignore corrupted trailing event when computing clock clamp
+        }
+      }
+      const atMs = Math.max(rawNow.getTime(), lastAtMs);
+      const now = new Date(atMs);
       const event: RunEventV1 = { store_kind: 'run_event', schema_version: 1, repository_id: 'OMCU', run_id: runId, sequence: existing.length + 1, type, at: now.toISOString(), payload: redact(payload), mutation: proof(this.authority, now) };
       const line = `${JSON.stringify(event)}\n`;
       if (Buffer.byteLength(line) > 64 * 1024) throw new Error('E_EVENT_TOO_LARGE');
@@ -192,15 +272,37 @@ export class LeaseStore {
   }
   async acquire(runId: string, leaseName: string, owner: string, ttlMs: number): Promise<LeaseV1> {
     safeKey(owner, 'lease_owner');
-    if (!Number.isInteger(ttlMs) || ttlMs < 1000 || ttlMs > 86_400_000) throw new Error('E_LEASE_TTL_INVALID');
+    if (!Number.isSafeInteger(ttlMs) || ttlMs < 1000 || ttlMs > 86_400_000) throw new Error('E_LEASE_TTL_INVALID');
+    const checkRun = (): RunStateV1 => {
+      try {
+        const runState = observeRunState(this.root, runId);
+        if (runState.status !== 'active') {
+          throw new Error('E_RUN_TERMINAL');
+        }
+        return runState;
+      } catch (error) {
+        if ((error as Error).message === 'E_STATE_ABSENT') {
+          throw new Error('E_RUN_ABSENT', { cause: error });
+        }
+        throw error;
+      }
+    };
+    checkRun();
+    const runFile = withinStateRoot(this.root, 'runs', safeKey(runId, 'run_id'), 'state.json');
     const file = this.file(runId, leaseName);
-    return withDirectoryLock(file, () => {
-      const now = this.now();
-      const current = this.read(runId, leaseName);
-      if (current !== null && Date.parse(current.expires_at) > now.getTime() && current.owner !== owner) throw new Error('E_LEASE_HELD');
-      const lease: LeaseV1 = { store_kind: 'run_lease', schema_version: 1, repository_id: 'OMCU', run_id: runId, lease_name: leaseName, owner, generation: (current?.generation ?? 0) + 1, expires_at: new Date(now.getTime() + ttlMs).toISOString(), mutation: proof(this.authority, now) };
-      atomicWriteJson(file, lease);
-      return lease;
+    return withDirectoryLock(runFile, () => {
+      return withDirectoryLock(file, () => {
+        assertCliMutationAuthority(this.authority);
+        checkRun();
+        const current = this.read(runId, leaseName);
+        const rawNow = this.now();
+        const mutatedMs = current !== null ? Math.max(rawNow.getTime(), Date.parse(current.mutation.mutated_at)) : rawNow.getTime();
+        const now = new Date(mutatedMs);
+        if (current !== null && Date.parse(current.expires_at) > now.getTime() && current.owner !== owner) throw new Error('E_LEASE_HELD');
+        const lease: LeaseV1 = { store_kind: 'run_lease', schema_version: 1, repository_id: 'OMCU', run_id: runId, lease_name: leaseName, owner, generation: (current?.generation ?? 0) + 1, expires_at: new Date(now.getTime() + ttlMs).toISOString(), mutation: proof(this.authority, now) };
+        atomicWriteJson(file, lease);
+        return lease;
+      });
     });
   }
   async release(runId: string, leaseName: string, owner: string, generation: number): Promise<void> {

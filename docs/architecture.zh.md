@@ -36,7 +36,7 @@ setup lifecycle -----------> ~/.local/state/oh-my-cursor/
 
 `src/runtime/` 建立仅所有者可写的根目录，防止路径逃逸与符号链接根、执行原子写入，并编修敏感字段。
 
-`src/state/` 在 `.omcu/` 下存储 runs、events 与 leases。Run 转换使用乐观 revision。Lease 使用 owner、generation 与到期围栏。终端 run 在 `omcu run verify` 记录新鲜 SHA-256 证据摘要前不算 verified。
+`src/state/` 在 `.omcu/` 下存储 runs、events 与 leases。Run 转换使用乐观 revision。Lease 使用 owner、generation 与到期围栏。已完成（complete）的 run 在 `omcu run verify` 记录新鲜 SHA-256 证据摘要前不算 verified（failed 与 cancelled 的 run 无法被验证）。
 
 工作流收据、模式结果、team 收集、hooks 与 MCP 提案刻意包含 `verified: false`。它们可提供证据，但无法自行验收。
 
