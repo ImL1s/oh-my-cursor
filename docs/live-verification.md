@@ -71,7 +71,7 @@ A zero exit proves the current Cursor binary accepted the plugin directory for t
 
 ## Verification authority
 
-A workflow or test result is evidence, not authoritative state. To verify a terminal run:
+A workflow or test result is evidence, not authoritative state. To verify a complete run:
 
 1. save the exact evidence in a stable file;
 2. calculate its lowercase SHA-256;

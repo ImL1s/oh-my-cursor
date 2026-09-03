@@ -36,7 +36,7 @@ setup lifecycle -----------> ~/.local/state/oh-my-cursor/
 
 `src/runtime/` creates owner-only roots, prevents path escapes and symlink roots, performs atomic writes, and redacts sensitive fields.
 
-`src/state/` stores runs, events, and leases beneath `.omcu/`. Run transitions use optimistic revisions. Leases use owner, generation, and expiry fences. A terminal run is not verified until `omcu run verify` records a fresh SHA-256 evidence digest.
+`src/state/` stores runs, events, and leases beneath `.omcu/`. Run transitions use optimistic revisions. Leases use owner, generation, and expiry fences. A complete run is not verified until `omcu run verify` records a fresh SHA-256 evidence digest (failed and cancelled runs cannot be verified).
 
 Workflow receipts, mode results, team collection, hooks, and MCP proposals deliberately contain `verified: false`. They can supply evidence but cannot accept their own work.
 

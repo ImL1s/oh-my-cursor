@@ -69,7 +69,7 @@ omcu state event --id <run-id> --type <type> [--payload-json <json>]
 omcu cancel --id <run-id>
 ```
 
-每次轉換會清除先前的驗證。驗證會拒絕 active run、過期 revision 與格式錯誤的證據摘要。`cancel` 讀取目前 revision 並執行有圍欄的取消。
+每次轉換會清除先前的驗證。驗證要求狀態為 `complete`，並會拒絕非 complete 的 run（`active`、`failed`、`cancelled`）、過期 revision 與格式錯誤的證據摘要。`cancel` 讀取目前 revision 並執行有圍欄的取消。
 
 Lease 協調專案寫入者：
 
