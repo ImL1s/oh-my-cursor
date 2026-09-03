@@ -83,11 +83,15 @@ export function validRunState(state: unknown, runId: string): state is RunStateV
     if (typeof vRec.evidence_sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(vRec.evidence_sha256)) return false;
     if (!validDate(vRec.verified_at)) return false;
     if (Date.parse(s.created_at) > Date.parse(vRec.verified_at)) return false;
+    if (Date.parse(vRec.verified_at) > Date.parse(s.updated_at)) return false;
   } else {
     if (vRec.evidence_sha256 !== null || vRec.verified_at !== null) return false;
   }
 
-  return validMutation(s.last_mutation);
+  if (!validMutation(s.last_mutation)) return false;
+  if (Date.parse(s.created_at) > Date.parse(s.last_mutation.mutated_at)) return false;
+  if (Date.parse(s.last_mutation.mutated_at) > Date.parse(s.updated_at)) return false;
+  return true;
 }
 
 export function validLease(lease: unknown, runId: string, leaseName: string): lease is LeaseV1 {
@@ -191,11 +195,11 @@ export class RunStateStore {
       assertCliMutationAuthority(this.authority);
       const current = this.read(runId);
       if (current.revision !== expectedRevision) throw new Error('E_REVISION_CONFLICT');
-      if (current.status === status) {
-        throw new Error('E_TRANSITION_NOOP');
-      }
       if (TERMINAL_STATUSES.has(current.status)) {
         throw new Error('E_TRANSITION_ILLEGAL');
+      }
+      if (current.status === status) {
+        throw new Error('E_TRANSITION_NOOP');
       }
       const rawNow = this.now();
       const updatedMs = Math.max(rawNow.getTime(), Date.parse(current.updated_at));
@@ -232,7 +236,18 @@ export class RunStateStore {
       const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split(/\r?\n/).filter(Boolean) : [];
       if (existing.length >= 10_000) throw new Error('E_EVENT_LIMIT');
       const rawNow = this.now();
-      const atMs = Math.max(rawNow.getTime(), Date.parse(runState.created_at));
+      let lastAtMs = Date.parse(runState.created_at);
+      if (existing.length > 0) {
+        try {
+          const lastEvent = JSON.parse(existing[existing.length - 1]!) as RunEventV1;
+          if (validDate(lastEvent.at)) {
+            lastAtMs = Math.max(lastAtMs, Date.parse(lastEvent.at));
+          }
+        } catch {
+          // ignore corrupted trailing event when computing clock clamp
+        }
+      }
+      const atMs = Math.max(rawNow.getTime(), lastAtMs);
       const now = new Date(atMs);
       const event: RunEventV1 = { store_kind: 'run_event', schema_version: 1, repository_id: 'OMCU', run_id: runId, sequence: existing.length + 1, type, at: now.toISOString(), payload: redact(payload), mutation: proof(this.authority, now) };
       const line = `${JSON.stringify(event)}\n`;
@@ -277,8 +292,10 @@ export class LeaseStore {
     return withDirectoryLock(file, () => {
       assertCliMutationAuthority(this.authority);
       checkRun();
-      const now = this.now();
       const current = this.read(runId, leaseName);
+      const rawNow = this.now();
+      const mutatedMs = current !== null ? Math.max(rawNow.getTime(), Date.parse(current.mutation.mutated_at)) : rawNow.getTime();
+      const now = new Date(mutatedMs);
       if (current !== null && Date.parse(current.expires_at) > now.getTime() && current.owner !== owner) throw new Error('E_LEASE_HELD');
       const lease: LeaseV1 = { store_kind: 'run_lease', schema_version: 1, repository_id: 'OMCU', run_id: runId, lease_name: leaseName, owner, generation: (current?.generation ?? 0) + 1, expires_at: new Date(now.getTime() + ttlMs).toISOString(), mutation: proof(this.authority, now) };
       atomicWriteJson(file, lease);

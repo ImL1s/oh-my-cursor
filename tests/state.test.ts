@@ -161,15 +161,15 @@ describe('run-state transition graph and invariants', () => {
     { from: 'active', to: 'complete', expected: 'ok' },
     { from: 'active', to: 'failed', expected: 'ok' },
     { from: 'active', to: 'cancelled', expected: 'ok' },
-    { from: 'complete', to: 'complete', expected: 'noop' },
+    { from: 'complete', to: 'complete', expected: 'illegal' },
     { from: 'complete', to: 'active', expected: 'illegal' },
     { from: 'complete', to: 'failed', expected: 'illegal' },
     { from: 'complete', to: 'cancelled', expected: 'illegal' },
-    { from: 'failed', to: 'failed', expected: 'noop' },
+    { from: 'failed', to: 'failed', expected: 'illegal' },
     { from: 'failed', to: 'active', expected: 'illegal' },
     { from: 'failed', to: 'complete', expected: 'illegal' },
     { from: 'failed', to: 'cancelled', expected: 'illegal' },
-    { from: 'cancelled', to: 'cancelled', expected: 'noop' },
+    { from: 'cancelled', to: 'cancelled', expected: 'illegal' },
     { from: 'cancelled', to: 'active', expected: 'illegal' },
     { from: 'cancelled', to: 'complete', expected: 'illegal' },
     { from: 'cancelled', to: 'failed', expected: 'illegal' },
@@ -226,6 +226,23 @@ describe('run-state transition graph and invariants', () => {
     expect(Date.parse(next.created_at)).toBeLessThanOrEqual(Date.parse(next.updated_at));
     // Verify that subsequent observeRunState succeeds without E_STATE_CORRUPT
     expect(observeRunState(root, 'clock-rollback-run').status).toBe('complete');
+  });
+
+  it('clamps event timestamps when clock steps backwards across multiple events', async () => {
+    const root = projectStateRoot(workspace());
+    let mockTime = new Date('2026-07-23T12:00:00.000Z');
+    const store = new RunStateStore(root, createCliMutationAuthority(root), () => mockTime);
+    await store.create('clock-rollback-events', 'objective');
+
+    mockTime = new Date('2026-07-23T12:05:00.000Z');
+    const ev1 = await store.appendEvent('clock-rollback-events', 'ev1', { count: 1 });
+    expect(ev1.at).toBe('2026-07-23T12:05:00.000Z');
+
+    // Clock steps backward
+    mockTime = new Date('2026-07-23T12:02:00.000Z');
+    const ev2 = await store.appendEvent('clock-rollback-events', 'ev2', { count: 2 });
+    expect(ev2.at).toBe('2026-07-23T12:05:00.000Z');
+    expect(Date.parse(ev1.at)).toBeLessThanOrEqual(Date.parse(ev2.at));
   });
 });
 
@@ -329,6 +346,41 @@ describe('LeaseStore relationship with RunState', () => {
     await expect(leases.acquire('run-ttl-bounds', 'worker', 'owner', 5000.5)).rejects.toThrow('E_LEASE_TTL_INVALID');
     await expect(leases.acquire('run-ttl-bounds', 'worker', 'owner', NaN)).rejects.toThrow('E_LEASE_TTL_INVALID');
   });
+
+  it('clamps lease mutation timestamp when clock steps backward during renewal', async () => {
+    const root = projectStateRoot(workspace());
+    const authority = createCliMutationAuthority(root);
+    const runs = new RunStateStore(root, authority);
+    await runs.create('run-lease-rollback', 'test');
+
+    let mockTime = new Date('2026-07-23T12:00:00.000Z');
+    const leases = new LeaseStore(root, authority, () => mockTime);
+    const lease1 = await leases.acquire('run-lease-rollback', 'worker', 'owner-1', 5_000);
+    expect(lease1.mutation.mutated_at).toBe('2026-07-23T12:00:00.000Z');
+
+    // Clock steps backward
+    mockTime = new Date('2026-07-23T11:59:00.000Z');
+    const lease2 = await leases.acquire('run-lease-rollback', 'worker', 'owner-1', 5_000);
+    expect(lease2.generation).toBe(2);
+    expect(lease2.mutation.mutated_at).toBe('2026-07-23T12:00:00.000Z');
+    expect(Date.parse(lease2.expires_at)).toBeGreaterThan(Date.parse(lease2.mutation.mutated_at));
+    expect(observeLease(root, 'run-lease-rollback', 'worker').generation).toBe(2);
+  });
+
+  it('rejects lease renewal when run transitions to terminal state concurrently', async () => {
+    const root = projectStateRoot(workspace());
+    const authority = createCliMutationAuthority(root);
+    const runs = new RunStateStore(root, authority);
+    await runs.create('run-race-terminal', 'race test');
+    const leases = new LeaseStore(root, authority);
+    await leases.acquire('run-race-terminal', 'worker', 'owner-1', 5_000);
+
+    // Transition run to complete
+    await runs.transition('run-race-terminal', 1, 'complete');
+
+    // Attempt to re-acquire / renew lease must fail with E_RUN_TERMINAL
+    await expect(leases.acquire('run-race-terminal', 'worker', 'owner-1', 5_000)).rejects.toThrow('E_RUN_TERMINAL');
+  });
 });
 
 describe('runtime schema validation: validRunState and validLease', () => {
@@ -368,6 +420,12 @@ describe('runtime schema validation: validRunState and validLease', () => {
     ['verified true with failed status', createValidRunStateJson({ status: 'failed', verification: { verified: true, evidence_sha256: 'a'.repeat(64), verified_at: '2026-07-23T01:00:00.000Z' } })],
     ['verified true with non-hex evidence', createValidRunStateJson({ status: 'complete', verification: { verified: true, evidence_sha256: 'zzz', verified_at: '2026-07-23T01:00:00.000Z' } })],
     ['verified true with uppercase evidence hex', createValidRunStateJson({ status: 'complete', verification: { verified: true, evidence_sha256: 'A'.repeat(64), verified_at: '2026-07-23T01:00:00.000Z' } })],
+    ['verified false with non-null evidence_sha256', createValidRunStateJson({ verification: { verified: false, evidence_sha256: 'a'.repeat(64), verified_at: null } })],
+    ['verified false with non-null verified_at', createValidRunStateJson({ verification: { verified: false, evidence_sha256: null, verified_at: '2026-07-23T01:00:00.000Z' } })],
+    ['verified true with verified_at before created_at', createValidRunStateJson({ status: 'complete', created_at: '2026-07-23T01:00:00.000Z', verification: { verified: true, evidence_sha256: 'a'.repeat(64), verified_at: '2026-07-23T00:59:59.000Z' } })],
+    ['verified true with verified_at after updated_at', createValidRunStateJson({ status: 'complete', updated_at: '2026-07-23T01:00:00.000Z', verification: { verified: true, evidence_sha256: 'a'.repeat(64), verified_at: '2026-07-23T01:00:01.000Z' } })],
+    ['last_mutation mutated_at before created_at', createValidRunStateJson({ created_at: '2026-07-23T01:00:00.000Z', last_mutation: { source: 'omcu-cli', owner_token_sha256: 'a'.repeat(64), writer_pid: 1, mutated_at: '2026-07-23T00:59:59.000Z' } })],
+    ['last_mutation mutated_at after updated_at', createValidRunStateJson({ updated_at: '2026-07-23T01:00:00.000Z', last_mutation: { source: 'omcu-cli', owner_token_sha256: 'a'.repeat(64), writer_pid: 1, mutated_at: '2026-07-23T01:00:01.000Z' } })],
     ['missing last_mutation', (() => { const s = createValidRunStateJson(); delete (s as any).last_mutation; return s; })()],
     ['bad last_mutation source', createValidRunStateJson({ last_mutation: { source: 'other', owner_token_sha256: 'a'.repeat(64), writer_pid: 1, mutated_at: '2026-07-23T01:00:00.000Z' } })],
     ['bad last_mutation pid <= 0', createValidRunStateJson({ last_mutation: { source: 'omcu-cli', owner_token_sha256: 'a'.repeat(64), writer_pid: 0, mutated_at: '2026-07-23T01:00:00.000Z' } })],
@@ -385,6 +443,7 @@ describe('runtime schema validation: validRunState and validLease', () => {
     ['wrong repository_id', createValidLeaseJson({ repository_id: 'OTHER' })],
     ['run_id mismatch', createValidLeaseJson({ run_id: 'mismatch' })],
     ['lease_name mismatch', createValidLeaseJson({ lease_name: 'mismatch' })],
+    ['lease_name unsafe key', createValidLeaseJson({ lease_name: '../escape' })],
     ['unsafe owner key', createValidLeaseJson({ owner: '../bad' })],
     ['generation 0', createValidLeaseJson({ generation: 0 })],
     ['negative generation', createValidLeaseJson({ generation: -1 })],
@@ -479,6 +538,18 @@ describe('CLI integration for cancellation and state transition invariants', () 
     expect(await runCli(['state', 'create', '--id', 'run-noop', '--objective', 'noop test'], h.dependencies, h.io)).toBe(0);
     expect(await runCli(['state', 'transition', '--id', 'run-noop', '--revision', '1', '--status', 'active'], h.dependencies, h.io)).toBe(1);
     expect(h.stderr.join('')).toContain('E_TRANSITION_NOOP');
+  });
+
+  it('rejects transitioning a complete terminal run to complete in CLI with E_TRANSITION_ILLEGAL', async () => {
+    const cwd = workspace();
+    const h = harness(cwd);
+
+    expect(await runCli(['state', 'create', '--id', 'run-complete-noop', '--objective', 'test'], h.dependencies, h.io)).toBe(0);
+    expect(await runCli(['state', 'transition', '--id', 'run-complete-noop', '--revision', '1', '--status', 'complete'], h.dependencies, h.io)).toBe(0);
+
+    // Transitioning from complete to complete must fail with E_TRANSITION_ILLEGAL, not E_TRANSITION_NOOP
+    expect(await runCli(['state', 'transition', '--id', 'run-complete-noop', '--revision', '2', '--status', 'complete'], h.dependencies, h.io)).toBe(1);
+    expect(h.stderr.join('')).toContain('E_TRANSITION_ILLEGAL');
   });
 
   it('rejects acquiring lease via CLI when run is absent or terminal', async () => {
