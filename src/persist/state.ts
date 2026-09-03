@@ -9,6 +9,7 @@ export const MAX_PERSIST_LOOPS = 500;
 export const DEFAULT_PERSIST_LOOPS = 25;
 export const DEFAULT_PERSIST_DEADLINE_MINUTES = 120;
 export const MAX_PERSIST_DEADLINE_MINUTES = 24 * 60;
+export const PERSIST_LOCK_TIMEOUT_MS = 10_000;
 const MAX_PERSIST_STATE_BYTES = 64 * 1024;
 
 export interface PersistState {
@@ -167,7 +168,7 @@ export function startPersist(root: StateRoot, input: StartPersistInput): Persist
     };
     atomicWriteJson(persistFile(root), state);
     return state;
-  }, 2_000, { errorPrefix: 'E_PERSIST_LOCK' });
+  }, PERSIST_LOCK_TIMEOUT_MS, { errorPrefix: 'E_PERSIST_LOCK' });
 }
 
 /** Deactivate the loop (abort). Idempotent; returns the resulting state. */
@@ -185,7 +186,7 @@ export function stopPersist(root: StateRoot): PersistState | null {
     };
     atomicWriteJson(persistFile(root), next);
     return next;
-  }, 2_000, { errorPrefix: 'E_PERSIST_LOCK' });
+  }, PERSIST_LOCK_TIMEOUT_MS, { errorPrefix: 'E_PERSIST_LOCK' });
 }
 
 /** Mark the goal satisfied so the next stop halts. Idempotent. */
@@ -204,7 +205,7 @@ export function completePersist(root: StateRoot): PersistState | null {
     };
     atomicWriteJson(persistFile(root), next);
     return next;
-  }, 2_000, { errorPrefix: 'E_PERSIST_LOCK' });
+  }, PERSIST_LOCK_TIMEOUT_MS, { errorPrefix: 'E_PERSIST_LOCK' });
 }
 
 export interface PersistStatus {
@@ -258,5 +259,5 @@ export function executePersistDecision(root: StateRoot, hookInput: unknown, nowM
       ...(decision.loop_count !== undefined ? { loop_count: decision.loop_count } : {}),
       ...(decision.followup_message !== undefined ? { followup_message: decision.followup_message } : {}),
     };
-  }, 2_000, { errorPrefix: 'E_PERSIST_LOCK' });
+  }, PERSIST_LOCK_TIMEOUT_MS, { errorPrefix: 'E_PERSIST_LOCK' });
 }

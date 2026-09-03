@@ -25,12 +25,11 @@ function workspace(): string {
 }
 afterEach(() => { for (const dir of workspaces.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
 
-const viteNode = path.join(process.cwd(), 'node_modules', '.bin', 'vite-node');
-const localStateChild = path.join(process.cwd(), 'tests', 'fixtures', 'local-state-child.ts');
+const omcuBin = path.join(process.cwd(), 'dist', 'bin', 'omcu.js');
 
-function child(action: string, root: string, id: string, value: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
+function cliChild(cwd: string, argv: readonly string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const proc = spawn(viteNode, [localStateChild, action, root, id, value], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = spawn(process.execPath, [omcuBin, ...argv], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = ''; let stderr = '';
     proc.stdout.on('data', (chunk) => { stdout += String(chunk); });
     proc.stderr.on('data', (chunk) => { stderr += String(chunk); });
@@ -168,7 +167,8 @@ describe('CLI-owned persist state', () => {
   });
 
   it('20 concurrent decisions with one slot remaining produce exactly one continuation', async () => {
-    const root = projectStateRoot(workspace());
+    const ws = workspace();
+    const root = projectStateRoot(ws);
     // Start with max_loops: 5 and simulate 4 loops already consumed
     startPersist(root, { goal: 'race test', maxLoops: 5, deadlineMinutes: 10 });
     // Execute 4 decisions to leave exactly 1 slot remaining
@@ -177,10 +177,10 @@ describe('CLI-owned persist state', () => {
     }
     expect(readPersistState(root)?.consumed_loops).toBe(4);
 
-    // Spawn 20 child processes simultaneously competing for the last slot
+    // Spawn 20 child processes simultaneously competing for the last slot via real CLI
     const results = await Promise.all(
       Array.from({ length: 20 }, (_, i) =>
-        child('persist-decide', root.path, `race-event-${i}`, '4'),
+        cliChild(ws, ['persist', 'decide', '--input', JSON.stringify({ status: 'completed', loop_count: 4, event_id: `race-event-${i}` })]),
       ),
     );
 
@@ -193,16 +193,17 @@ describe('CLI-owned persist state', () => {
     expect(stopped).toHaveLength(19);
     expect(stopped.every((d) => d.reason === 'loop_budget_exhausted')).toBe(true);
     expect(readPersistState(root)?.consumed_loops).toBe(5);
-  }, 15_000);
+  }, 30_000);
 
   it('done and stop win races against decide', async () => {
-    const root = projectStateRoot(workspace());
+    const ws = workspace();
+    const root = projectStateRoot(ws);
     startPersist(root, { goal: 'done race', maxLoops: 10, deadlineMinutes: 10 });
 
-    // Race stop with decide
+    // Race stop with decide via real CLI
     const [stopResult, decideResult] = await Promise.all([
-      child('persist-stop', root.path, 'stop-call', '0'),
-      child('persist-decide', root.path, 'decide-call', '0'),
+      cliChild(ws, ['persist', 'stop']),
+      cliChild(ws, ['persist', 'decide', '--input', JSON.stringify({ status: 'completed', loop_count: 0 })]),
     ]);
 
     expect(stopResult.code).toBe(0);
@@ -210,7 +211,7 @@ describe('CLI-owned persist state', () => {
     // Persist must end up inactive
     const finalState = readPersistState(root);
     expect(finalState?.active).toBe(false);
-  });
+  }, 15_000);
 
   it('restart/resume preserves consumed budget across executions', () => {
     const root = projectStateRoot(workspace());
