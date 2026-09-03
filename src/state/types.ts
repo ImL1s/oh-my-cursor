@@ -1,4 +1,11 @@
 export type RunStatus = 'active' | 'complete' | 'failed' | 'cancelled';
+export const TERMINAL_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>(['complete', 'failed', 'cancelled']);
+export const ALLOWED_TRANSITIONS: Readonly<Record<RunStatus, readonly RunStatus[]>> = Object.freeze({
+  active: Object.freeze(['complete', 'failed', 'cancelled'] as RunStatus[]),
+  complete: Object.freeze([] as RunStatus[]),
+  failed: Object.freeze([] as RunStatus[]),
+  cancelled: Object.freeze([] as RunStatus[]),
+});
 export interface MutationProof {
   readonly source: 'omcu-cli';
   readonly owner_token_sha256: string;
