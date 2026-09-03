@@ -139,8 +139,28 @@ describe('CLI-owned persist state', () => {
     expect(v2?.consumed_loops).toBe(1);
     expect(v2?.revision).toBe(2);
 
+    // v1 with overlong last_event_id is bounded
+    const v1LongId = normalizePersistState({
+      schema_version: 1, active: true, goal: 'g', max_loops: 1, deadline_ms: 1, created_at_ms: 1, done: false, last_event_id: 'x'.repeat(500),
+    });
+    expect(v1LongId?.last_event_id?.length).toBeLessThanOrEqual(256);
+
     expect(normalizePersistState({ schema_version: 2, active: true, goal: '', max_loops: 1, consumed_loops: 0, last_host_loop_count: null, revision: 1, deadline_ms: 1, created_at_ms: 1, done: false, last_event_id: null, last_decision_at_ms: null, last_decision_reason: null })).toBeNull();
     expect(normalizePersistState({ schema_version: 2, active: 'yes', goal: 'g', max_loops: 1, consumed_loops: 0, last_host_loop_count: null, revision: 1, deadline_ms: 1, created_at_ms: 1, done: false, last_event_id: null, last_decision_at_ms: null, last_decision_reason: null })).toBeNull();
+  });
+
+  it('stopping or completing a legacy v1 state writes clean schema v2 without legacy_v1 flag', () => {
+    const root = projectStateRoot(workspace());
+    const file = path.join(root.path, 'persist.json');
+    fs.writeFileSync(file, JSON.stringify({
+      schema_version: 1, active: true, goal: 'v1 goal', max_loops: 5, deadline_ms: Date.now() + 10_000, created_at_ms: Date.now() - 1000, done: false,
+    }), { mode: 0o600 });
+    const stopped = stopPersist(root);
+    expect(stopped?.schema_version).toBe(2);
+    expect(stopped?.legacy_v1).toBeUndefined();
+    const rawDisk = JSON.parse(fs.readFileSync(file, 'utf8'));
+    expect(rawDisk.schema_version).toBe(2);
+    expect(rawDisk.legacy_v1).toBeUndefined();
   });
 
   it('executePersistDecision increments consumed_loops and persists monotonically', () => {
@@ -164,6 +184,12 @@ describe('CLI-owned persist state', () => {
     expect(d4.continue).toBe(false);
     expect(d4.reason).toBe('loop_budget_exhausted');
     expect(readPersistState(root)?.consumed_loops).toBe(3);
+
+    // Status reflects loop_budget_exhausted when remaining_loops is 0
+    expect(persistStatus(root)).toMatchObject({
+      remaining_loops: 0,
+      last_decision_reason: 'loop_budget_exhausted',
+    });
   });
 
   it('20 concurrent decisions with one slot remaining produce exactly one continuation', async () => {

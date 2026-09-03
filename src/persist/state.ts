@@ -94,7 +94,9 @@ export function normalizePersistState(value: unknown): PersistState | null {
       deadline_ms: state.deadline_ms as number,
       created_at_ms: state.created_at_ms as number,
       done: state.done as boolean,
-      last_event_id: typeof state.last_event_id === 'string' ? state.last_event_id : null,
+      last_event_id: typeof state.last_event_id === 'string' && state.last_event_id.length <= 256
+        ? state.last_event_id
+        : (typeof state.last_event_id === 'string' ? state.last_event_id.slice(0, 256) : null),
       last_decision_at_ms: Number.isSafeInteger(state.last_decision_at_ms) && (state.last_decision_at_ms as number) >= 0
         ? (state.last_decision_at_ms as number) : null,
       last_decision_reason: typeof state.last_decision_reason === 'string' ? state.last_decision_reason : null,
@@ -177,8 +179,9 @@ export function stopPersist(root: StateRoot): PersistState | null {
   return withDirectoryLockSync(persistFile(root), () => {
     const current = readPersistState(root);
     if (current === null) return null;
+    const { legacy_v1, ...cleanState } = current;
     const next: PersistState = {
-      ...current,
+      ...cleanState,
       schema_version: PERSIST_SCHEMA_VERSION,
       active: false,
       revision: current.revision + 1,
@@ -195,8 +198,9 @@ export function completePersist(root: StateRoot): PersistState | null {
   return withDirectoryLockSync(persistFile(root), () => {
     const current = readPersistState(root);
     if (current === null) return null;
+    const { legacy_v1, ...cleanState } = current;
     const next: PersistState = {
-      ...current,
+      ...cleanState,
       schema_version: PERSIST_SCHEMA_VERSION,
       active: false,
       done: true,
@@ -231,14 +235,21 @@ export function persistStatus(root: StateRoot): PersistStatus {
       last_decision_reason: null,
     };
   }
+  const remainingLoops = Math.max(0, state.max_loops - state.consumed_loops);
+  let effectiveReason = state.last_decision_reason ?? null;
+  if (state.active && remainingLoops === 0 && effectiveReason === 'persist_active') {
+    effectiveReason = 'loop_budget_exhausted';
+  } else if (state.active && Date.now() >= state.deadline_ms && effectiveReason === 'persist_active') {
+    effectiveReason = 'deadline_reached';
+  }
   return {
     present: true,
     state,
     consumed_loops: state.consumed_loops,
-    remaining_loops: Math.max(0, state.max_loops - state.consumed_loops),
+    remaining_loops: remainingLoops,
     deadline_ms: state.deadline_ms,
     revision: state.revision,
-    last_decision_reason: state.last_decision_reason ?? null,
+    last_decision_reason: effectiveReason,
   };
 }
 

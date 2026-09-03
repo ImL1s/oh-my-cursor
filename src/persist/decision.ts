@@ -77,7 +77,7 @@ export function decidePersist(rawState: unknown, hookInput: unknown, nowMs: numb
   if (state.done === true) return { continue: false, reason: 'goal_marked_done' };
   if (state.active !== true) return { continue: false, reason: 'no_active_persist_state' };
 
-  if (!Number.isSafeInteger(nowMs) || nowMs >= state.deadline_ms) {
+  if (!Number.isSafeInteger(nowMs) || nowMs <= 0 || nowMs >= state.deadline_ms) {
     return { continue: false, reason: 'deadline_reached' };
   }
 
@@ -114,6 +114,7 @@ export function decidePersist(rawState: unknown, hookInput: unknown, nowMs: numb
   }
 
   const nextConsumed = baselineConsumed + 1;
+  const decisionAtMs = Math.max(nowMs, state.last_decision_at_ms ?? state.created_at_ms);
   const next_state: PersistState = {
     schema_version: 2,
     active: true,
@@ -126,7 +127,7 @@ export function decidePersist(rawState: unknown, hookInput: unknown, nowMs: numb
     created_at_ms: state.created_at_ms,
     done: false,
     last_event_id: eventId,
-    last_decision_at_ms: nowMs,
+    last_decision_at_ms: decisionAtMs,
     last_decision_reason: 'persist_active',
   };
 
@@ -142,7 +143,7 @@ export function decidePersist(rawState: unknown, hookInput: unknown, nowMs: numb
 
 /** The continuation directive injected back into the same agent turn. */
 export function buildFollowupMessage(state: PersistState, observedLoops: number): string {
-  const remaining = Math.max(0, Math.min(MAX_PERSIST_LOOPS, state.max_loops) - observedLoops);
+  const remaining = Math.max(0, Math.min(MAX_PERSIST_LOOPS, state.max_loops) - (observedLoops + 1));
   return [
     'OMCU persistent execution is active — the boulder never stops.',
     `Goal: ${state.goal}`,

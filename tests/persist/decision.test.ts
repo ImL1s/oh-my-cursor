@@ -95,11 +95,23 @@ describe('persist decision core', () => {
     });
   });
 
-  it('halts at the deadline', () => {
+  it('halts at the deadline and rejects negative, zero, or non-finite clock values', () => {
     expect(decidePersist(active({ deadline_ms: NOW }), { status: 'completed', loop_count: 0 }, NOW).reason)
       .toBe('deadline_reached');
     expect(decidePersist(active(), { status: 'completed', loop_count: 0 }, Number.NaN).reason)
       .toBe('deadline_reached');
+    expect(decidePersist(active(), { status: 'completed', loop_count: 0 }, 0).reason)
+      .toBe('deadline_reached');
+    expect(decidePersist(active(), { status: 'completed', loop_count: 0 }, -100).reason)
+      .toBe('deadline_reached');
+  });
+
+  it('guarantees monotonic decision timestamps when system clock skews backwards', () => {
+    const state = active({ created_at_ms: NOW, last_decision_at_ms: NOW + 500, consumed_loops: 1, last_host_loop_count: 0 });
+    // System time stepped backwards by 200ms
+    const decision = decidePersist(state, { status: 'completed', loop_count: 1 }, NOW + 300);
+    expect(decision.continue).toBe(true);
+    expect(decision.next_state?.last_decision_at_ms).toBe(NOW + 500);
   });
 
   it('halts when the loop budget is exhausted (Cursor loop_count at/over the ceiling)', () => {
@@ -163,12 +175,17 @@ describe('persist decision core', () => {
     expect(hugeParts.length).toBeLessThanOrEqual(128);
   });
 
-  it('builds a follow-up that never fabricates completion', () => {
+  it('builds a follow-up that never fabricates completion and states remaining loops accurately', () => {
     const message = buildFollowupMessage(active(), 2);
     expect(message).toContain('Continuation 3');
+    expect(message).toContain('about 22 left before the hard cap');
     expect(message).toContain('omcu persist done');
     expect(message).toContain('omcu persist stop');
     expect(message).toMatch(/Never fabricate completion/i);
     expect(message).not.toMatch(/"verified"\s*:\s*true|passes\s*:\s*true/);
+
+    // Final continuation of a 1-loop budget has 0 left
+    const finalTurnMessage = buildFollowupMessage(active({ max_loops: 1 }), 0);
+    expect(finalTurnMessage).toContain('Continuation 1 (about 0 left before the hard cap).');
   });
 });
