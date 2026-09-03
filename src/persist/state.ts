@@ -106,7 +106,7 @@ export function normalizePersistState(value: unknown): PersistState | null {
   if (!Number.isSafeInteger(state.consumed_loops) || (state.consumed_loops as number) < 0 || (state.consumed_loops as number) > MAX_PERSIST_LOOPS) return null;
   if (state.last_host_loop_count !== null && (!Number.isSafeInteger(state.last_host_loop_count) || (state.last_host_loop_count as number) < 0 || (state.last_host_loop_count as number) > MAX_PERSIST_LOOPS)) return null;
   if (!Number.isSafeInteger(state.revision) || (state.revision as number) < 0) return null;
-  if (state.last_event_id !== null && typeof state.last_event_id !== 'string') return null;
+  if (state.last_event_id !== null && (typeof state.last_event_id !== 'string' || state.last_event_id.length > 256)) return null;
   if (state.last_decision_at_ms !== null && (!Number.isSafeInteger(state.last_decision_at_ms) || (state.last_decision_at_ms as number) < 0)) return null;
   if (state.last_decision_reason !== null && state.last_decision_reason !== undefined && typeof state.last_decision_reason !== 'string') return null;
 
@@ -258,6 +258,7 @@ export function executePersistDecision(root: StateRoot, hookInput: unknown, nowM
       reason: decision.reason,
       ...(decision.loop_count !== undefined ? { loop_count: decision.loop_count } : {}),
       ...(decision.followup_message !== undefined ? { followup_message: decision.followup_message } : {}),
+      ...(decision.next_state?.revision !== undefined ? { revision: decision.next_state.revision } : {}),
     };
   }, PERSIST_LOCK_TIMEOUT_MS, { errorPrefix: 'E_PERSIST_LOCK' });
 }

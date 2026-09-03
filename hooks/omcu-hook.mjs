@@ -95,6 +95,26 @@ export function persistFollowup(rawInputText, env = process.env, runner = spawnS
   }
   if (decision && decision.continue === true && typeof decision.followup_message === 'string'
     && decision.followup_message.length > 0 && decision.followup_message.length <= 65_536) {
+    // Fence against concurrent stop/done: verify state is still active with the matching revision.
+    try {
+      const statusResult = runner(process.execPath, [entry, 'persist', 'status'], {
+        encoding: 'utf8',
+        timeout: 5_000,
+        maxBuffer: 1024 * 1024,
+      });
+      if (!statusResult || statusResult.status !== 0 || typeof statusResult.stdout !== 'string') return {};
+      const status = JSON.parse(statusResult.stdout);
+      if (status && status.action === 'status') {
+        if (!status.present || !status.state || status.state.active !== true || status.state.done === true) {
+          return {};
+        }
+        if (typeof decision.revision === 'number' && status.state.revision !== decision.revision) {
+          return {};
+        }
+      }
+    } catch {
+      return {};
+    }
     return { followup_message: decision.followup_message };
   }
   return {};

@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { MAX_PERSIST_LOOPS, normalizePersistState, type PersistState } from './state.js';
 
 export interface PersistHookInput {
@@ -16,29 +17,37 @@ export interface PersistDecision {
   readonly reason: string;
   readonly followup_message?: string;
   readonly loop_count?: number;
+  readonly revision?: number;
   readonly next_state?: PersistState;
+}
+
+export function boundId(value: string, maxLen = 128): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= maxLen) return trimmed;
+  const hash = crypto.createHash('sha256').update(trimmed).digest('hex').slice(0, 16);
+  return `${trimmed.slice(0, maxLen - 17)}_${hash}`;
 }
 
 export function deriveEventId(input: PersistHookInput): string {
   if (typeof input.event_id === 'string' && input.event_id.trim() !== '') {
-    return input.event_id.trim();
+    return boundId(input.event_id);
   }
   if (typeof input.eventId === 'string' && input.eventId.trim() !== '') {
-    return input.eventId.trim();
+    return boundId(input.eventId);
   }
   const parts: string[] = [];
   if (typeof input.session_id === 'string' && input.session_id.trim() !== '') {
-    parts.push(`session:${input.session_id.trim()}`);
+    parts.push(`session:${boundId(input.session_id, 64)}`);
   } else if (typeof input.sessionId === 'string' && input.sessionId.trim() !== '') {
-    parts.push(`session:${input.sessionId.trim()}`);
+    parts.push(`session:${boundId(input.sessionId, 64)}`);
   }
   if (typeof input.turn_id === 'string' && input.turn_id.trim() !== '') {
-    parts.push(`turn:${input.turn_id.trim()}`);
+    parts.push(`turn:${boundId(input.turn_id, 64)}`);
   } else if (typeof input.turnId === 'string' && input.turnId.trim() !== '') {
-    parts.push(`turn:${input.turnId.trim()}`);
+    parts.push(`turn:${boundId(input.turnId, 64)}`);
   }
   parts.push(`loop:${input.loop_count}`);
-  return parts.join(':');
+  return boundId(parts.join(':'), 128);
 }
 
 /**
@@ -125,6 +134,7 @@ export function decidePersist(rawState: unknown, hookInput: unknown, nowMs: numb
     continue: true,
     reason: 'persist_active',
     loop_count: rawLoop,
+    revision: next_state.revision,
     next_state,
     followup_message: buildFollowupMessage(state, baselineConsumed),
   };

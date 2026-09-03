@@ -153,6 +153,16 @@ describe('persist decision core', () => {
     expect(deriveEventId({ loop_count: 5 })).toBe('loop:5');
   });
 
+  it('bounds overlong event IDs to prevent state bloat/corruption', () => {
+    const huge = 'a'.repeat(500);
+    const id = deriveEventId({ event_id: huge });
+    expect(id.length).toBeLessThanOrEqual(128);
+    expect(id).toMatch(/^[a-z]+_[0-9a-f]{16}$/);
+
+    const hugeParts = deriveEventId({ session_id: huge, turn_id: huge, loop_count: 1 });
+    expect(hugeParts.length).toBeLessThanOrEqual(128);
+  });
+
   it('builds a follow-up that never fabricates completion', () => {
     const message = buildFollowupMessage(active(), 2);
     expect(message).toContain('Continuation 3');
