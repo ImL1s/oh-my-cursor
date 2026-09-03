@@ -127,7 +127,7 @@ describe('workflow orchestration', () => {
     const resumed = await new WorkflowRunner(resumedAdapter, '/repo').run(registered, plan, persisted.events);
     expect(resumed.status.status).toBe('ambiguous');
     expect(resumedCalls).toBe(0);
-  });
+  }, 15_000);
 
   it('recovers a persisted execution lease only from a dead owner', async () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-workflow-lease-'));

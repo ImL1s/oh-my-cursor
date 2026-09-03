@@ -9,8 +9,7 @@ import { routeSessionCommand, type SessionCommand } from '../sessions/router.js'
 import { createCliMutationAuthority } from '../state/authority.js';
 import { LeaseStore, observeLease, observeRunState, RunStateStore } from '../state/store.js';
 import type { RunStatus } from '../state/types.js';
-import { decidePersist } from '../persist/decision.js';
-import { completePersist, persistStatus, readPersistState, startPersist, stopPersist } from '../persist/state.js';
+import { completePersist, executePersistDecision, persistStatus, readPersistState, startPersist, stopPersist } from '../persist/state.js';
 import { LifecycleTracker, type LifecyclePhase } from '../tracker/index.js';
 import { LifecycleWiki } from '../wiki/index.js';
 import { flagValue, optionValue, printJson, readJsonFile, requiredOptionValue, type CliContext } from './shared.js';
@@ -71,8 +70,6 @@ function handlePersist(action: string | null, context: CliContext): number {
     return 0;
   }
   if (action === 'decide') {
-    // Read-only decision oracle: consulted by the stop hook. Reads Cursor's
-    // hook stdin JSON and prints the followup decision. Never mutates state.
     let input: unknown = {};
     const inline = optionValue<unknown>(context, '--input');
     if (inline !== undefined) {
@@ -80,7 +77,7 @@ function handlePersist(action: string | null, context: CliContext): number {
     } else {
       try { input = JSON.parse(fs.readFileSync(0, 'utf8')); } catch { input = {}; }
     }
-    const decision = decidePersist(readPersistState(context.root), input, Date.now());
+    const decision = executePersistDecision(context.root, input, Date.now());
     printJson(context.io, decision);
     return 0;
   }

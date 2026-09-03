@@ -78,10 +78,43 @@ describe('persist follow-up wiring (anti idle-stop)', () => {
     expect(resolveOmcuEntrypoint({ CURSOR_PLUGIN_ROOT: root })).toBe(path.join(root, 'dist', 'bin', 'omcu.js'));
   });
 
-  it('returns the CLI follow-up verbatim when the oracle says continue', () => {
-    const decision = JSON.stringify({ continue: true, followup_message: 'keep going', reason: 'persist_active' });
-    expect(persistFollowup('{"status":"completed"}', { CURSOR_PLUGIN_ROOT: root }, fakeRunner(decision)))
+  it('returns the CLI follow-up verbatim when the oracle says continue and status verifies', () => {
+    const decision = JSON.stringify({ continue: true, followup_message: 'keep going', reason: 'persist_active', revision: 2 });
+    const status = JSON.stringify({ action: 'status', present: true, state: { active: true, done: false, revision: 2 } });
+    const runner = (_bin: string, args: readonly string[]) => {
+      if (args[2] === 'decide') return { status: 0, stdout: decision, stderr: '' };
+      if (args[2] === 'status') return { status: 0, stdout: status, stderr: '' };
+      return { status: 1, stdout: '', stderr: '' };
+    };
+    expect(persistFollowup('{"status":"completed"}', { CURSOR_PLUGIN_ROOT: root }, runner as any))
       .toEqual({ followup_message: 'keep going' });
+  });
+
+  it('fences follow-up against concurrent stop, done, or revision mismatch', () => {
+    const decision = JSON.stringify({ continue: true, followup_message: 'keep going', reason: 'persist_active', revision: 2 });
+    // Stopped concurrently
+    const stoppedRunner = (_bin: string, args: readonly string[]) => {
+      if (args[2] === 'decide') return { status: 0, stdout: decision, stderr: '' };
+      return { status: 0, stdout: JSON.stringify({ action: 'status', present: true, state: { active: false, done: false, revision: 3 } }), stderr: '' };
+    };
+    expect(persistFollowup('{"status":"completed"}', { CURSOR_PLUGIN_ROOT: root }, stoppedRunner as any))
+      .toEqual({});
+
+    // Done concurrently
+    const doneRunner = (_bin: string, args: readonly string[]) => {
+      if (args[2] === 'decide') return { status: 0, stdout: decision, stderr: '' };
+      return { status: 0, stdout: JSON.stringify({ action: 'status', present: true, state: { active: false, done: true, revision: 3 } }), stderr: '' };
+    };
+    expect(persistFollowup('{"status":"completed"}', { CURSOR_PLUGIN_ROOT: root }, doneRunner as any))
+      .toEqual({});
+
+    // Revision mismatch concurrently
+    const revisionMismatchRunner = (_bin: string, args: readonly string[]) => {
+      if (args[2] === 'decide') return { status: 0, stdout: decision, stderr: '' };
+      return { status: 0, stdout: JSON.stringify({ action: 'status', present: true, state: { active: true, done: false, revision: 4 } }), stderr: '' };
+    };
+    expect(persistFollowup('{"status":"completed"}', { CURSOR_PLUGIN_ROOT: root }, revisionMismatchRunner as any))
+      .toEqual({});
   });
 
   it('fails open to a normal stop on every declined or broken path', () => {

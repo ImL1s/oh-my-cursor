@@ -282,7 +282,7 @@ export const COMMAND_SCHEMAS: Readonly<Record<string, CommandSchema>> = Object.f
       stop: { stateAccess: 'write-ensure' },
       done: { stateAccess: 'write-ensure' },
       status: { stateAccess: 'read-existing' },
-      decide: { stateAccess: 'read-existing', options: [{ name: '--input', kind: 'json' }] },
+      decide: { stateAccess: 'write-existing', options: [{ name: '--input', kind: 'json' }] },
     },
     defaultAction: 'status',
   },

@@ -1,5 +1,6 @@
 import { createMcpRequestHandler } from '../../src/mcp/index.js';
 import { ProjectMemoryStore } from '../../src/memory/index.js';
+import { completePersist, executePersistDecision, stopPersist } from '../../src/persist/state.js';
 import { ensureExternalStateRoot } from '../../src/runtime/state-root.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -32,6 +33,15 @@ if (action === 'memory-hold-lock') {
     params: { name: 'omcu.proposal.write', arguments: { id, proposal: { value } } },
   });
   process.stdout.write(`${JSON.stringify(response)}\n`);
+} else if (action === 'persist-decide') {
+  const decision = executePersistDecision(root, { status: 'completed', loop_count: Number(value), event_id: id });
+  process.stdout.write(`${JSON.stringify(decision)}\n`);
+} else if (action === 'persist-done') {
+  const result = completePersist(root);
+  process.stdout.write(`${JSON.stringify(result)}\n`);
+} else if (action === 'persist-stop') {
+  const result = stopPersist(root);
+  process.stdout.write(`${JSON.stringify(result)}\n`);
 } else {
   throw new Error('E_FIXTURE_ACTION');
 }

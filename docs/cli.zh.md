@@ -169,6 +169,23 @@ omcu workflow lease-reconcile --id run-1 --revision <n> --credential-json '<不�
 
 每次 Cursor 调用前，CLI 会持久化 `task_started` 意图。若进程在对应收据变为持久之前结束，`status` 与 `replay` 会报告 `ambiguous`。OMCU 不会自动重跑该任务，因为其编辑或 shell 副作用可能已发生。检查 run 记录与仓库、手动对账不确定效果后，若需明确重跑请创建新 run ID。刻意**没有**自动 `ambiguous`→重试转换。
 
+## 持久化执行
+
+```sh
+omcu persist start --goal <text> [--max-loops 25] [--deadline-min 120]
+omcu persist status
+omcu persist done
+omcu persist stop
+omcu persist decide [--input <json>]
+```
+
+`persist` 通过 Cursor 的 `stop` 与 `subagentStop` hooks 协调 opt-in「巨石不停」继续执行循环。循环上限由 OMCU 自有的持久化状态（`.omcu/persist.json`）强制执行，而非仅依赖宿主 hook 计数器。
+- 延续限制严格单调递增：在返回后续消息前，`consumed_loops` 会在加锁保护下原子递增并写入磁盘。
+- 缺失、非整数、负数、非有限值或递减的宿主计数器均 fail-closed 中止。
+- 重复 hook 事件依 event/loop 标识去重，最多消耗一次延续名额。
+- Schema v1 状态安全平滑迁移至 schema v2，绝不意外重置活跃循环预算。
+- 所有决策均在锁内原子事务中运行；`persist done` 与 `persist stop` 在并发决策竞态中胜出。
+
 ## Cursor 支持的模式
 
 ```sh
