@@ -212,6 +212,21 @@ describe('run-state transition graph and invariants', () => {
     await store.create('rev-conflict', 'test');
     await expect(store.transition('rev-conflict', 42, 'complete')).rejects.toThrow('E_REVISION_CONFLICT');
   });
+
+  it('clamps mutation timestamps when clock steps backwards to preserve monotonic created_at <= updated_at', async () => {
+    const root = projectStateRoot(workspace());
+    let mockTime = new Date('2026-07-23T12:00:00.000Z');
+    const store = new RunStateStore(root, createCliMutationAuthority(root), () => mockTime);
+    await store.create('clock-rollback-run', 'objective');
+
+    // Simulate clock moving backward 1 hour
+    mockTime = new Date('2026-07-23T11:00:00.000Z');
+    const next = await store.transition('clock-rollback-run', 1, 'complete');
+    expect(next.updated_at).toBe('2026-07-23T12:00:00.000Z');
+    expect(Date.parse(next.created_at)).toBeLessThanOrEqual(Date.parse(next.updated_at));
+    // Verify that subsequent observeRunState succeeds without E_STATE_CORRUPT
+    expect(observeRunState(root, 'clock-rollback-run').status).toBe('complete');
+  });
 });
 
 describe('verification invariants (Option A - acceptance verification)', () => {
@@ -479,5 +494,22 @@ describe('CLI integration for cancellation and state transition invariants', () 
     expect(await runCli(['state', 'transition', '--id', 'completed-run', '--revision', '1', '--status', 'complete'], h.dependencies, h.io)).toBe(0);
     expect(await runCli(['lease', 'acquire', '--run', 'completed-run', '--name', 'test', '--owner', 'me'], h.dependencies, h.io)).toBe(1);
     expect(h.stderr.join('')).toContain('E_RUN_TERMINAL');
+  });
+
+  it('handles concurrent cancellation races idempotently on revision conflict', async () => {
+    const cwd = workspace();
+    const h1 = harness(cwd);
+    const h2 = harness(cwd);
+
+    expect(await runCli(['state', 'create', '--id', 'run-concurrent-cancel', '--objective', 'race test'], h1.dependencies, h1.io)).toBe(0);
+
+    const [code1, code2] = await Promise.all([
+      runCli(['cancel', '--id', 'run-concurrent-cancel'], h1.dependencies, h1.io),
+      runCli(['cancel', '--id', 'run-concurrent-cancel'], h2.dependencies, h2.io),
+    ]);
+    expect(code1).toBe(0);
+    expect(code2).toBe(0);
+    expect(h1.stderr).toEqual([]);
+    expect(h2.stderr).toEqual([]);
   });
 });

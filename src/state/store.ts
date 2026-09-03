@@ -197,7 +197,9 @@ export class RunStateStore {
       if (TERMINAL_STATUSES.has(current.status)) {
         throw new Error('E_TRANSITION_ILLEGAL');
       }
-      const now = this.now();
+      const rawNow = this.now();
+      const updatedMs = Math.max(rawNow.getTime(), Date.parse(current.updated_at));
+      const now = new Date(updatedMs);
       const next: RunStateV1 = { ...current, revision: current.revision + 1, status, updated_at: now.toISOString(), verification: { verified: false, evidence_sha256: null, verified_at: null }, last_mutation: proof(this.authority, now) };
       atomicWriteJson(file, next);
       return next;
@@ -212,7 +214,9 @@ export class RunStateStore {
       const current = this.read(runId);
       if (current.revision !== expectedRevision) throw new Error('E_REVISION_CONFLICT');
       if (current.status !== 'complete') throw new Error('E_RUN_NOT_COMPLETE_FOR_VERIFICATION');
-      const now = this.now();
+      const rawNow = this.now();
+      const updatedMs = Math.max(rawNow.getTime(), Date.parse(current.updated_at));
+      const now = new Date(updatedMs);
       const next: RunStateV1 = { ...current, revision: current.revision + 1, updated_at: now.toISOString(), verification: { verified: true, evidence_sha256: evidenceSha256, verified_at: now.toISOString() }, last_mutation: proof(this.authority, now) };
       atomicWriteJson(file, next);
       return next;
@@ -221,13 +225,15 @@ export class RunStateStore {
 
   async appendEvent(runId: string, type: string, payload: unknown): Promise<RunEventV1> {
     safeKey(type, 'event_type');
-    this.read(runId);
+    const runState = this.read(runId);
     const file = path.join(this.runDir(runId), 'events.jsonl');
     return withDirectoryLock(file, () => {
       assertCliMutationAuthority(this.authority);
       const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split(/\r?\n/).filter(Boolean) : [];
       if (existing.length >= 10_000) throw new Error('E_EVENT_LIMIT');
-      const now = this.now();
+      const rawNow = this.now();
+      const atMs = Math.max(rawNow.getTime(), Date.parse(runState.created_at));
+      const now = new Date(atMs);
       const event: RunEventV1 = { store_kind: 'run_event', schema_version: 1, repository_id: 'OMCU', run_id: runId, sequence: existing.length + 1, type, at: now.toISOString(), payload: redact(payload), mutation: proof(this.authority, now) };
       const line = `${JSON.stringify(event)}\n`;
       if (Buffer.byteLength(line) > 64 * 1024) throw new Error('E_EVENT_TOO_LARGE');

@@ -189,7 +189,18 @@ async function handleState(command: string, action: string | null, context: CliC
     if (current.status === 'cancelled') {
       printJson(context.io, current);
     } else {
-      printJson(context.io, await store.transition(id, current.revision, 'cancelled'));
+      try {
+        printJson(context.io, await store.transition(id, current.revision, 'cancelled'));
+      } catch (error) {
+        if ((error as Error).message === 'E_REVISION_CONFLICT') {
+          const recheck = store.read(id);
+          if (recheck.status === 'cancelled') {
+            printJson(context.io, recheck);
+            return 0;
+          }
+        }
+        throw error;
+      }
     }
   }
   else if (effectiveAction === 'verify') printJson(context.io, await store.verify(id, requiredOptionValue<number>(context, '--revision'), requiredOptionValue<string>(context, '--evidence-sha256')));
