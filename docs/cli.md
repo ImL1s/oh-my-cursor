@@ -175,6 +175,23 @@ manually reconcile the uncertain effects, then create a new run ID if an
 explicit rerun is appropriate. There is intentionally no automatic
 `ambiguous`-to-retry transition.
 
+## Persistent execution
+
+```sh
+omcu persist start --goal <text> [--max-loops 25] [--deadline-min 120]
+omcu persist status
+omcu persist done
+omcu persist stop
+omcu persist decide [--input <json>]
+```
+
+`persist` coordinates the opt-in "boulder never stops" continuation loop via Cursor's `stop` and `subagentStop` hooks. Loop ceilings are enforced by OMCU-owned durable state (`.omcu/persist.json`), not solely by host hook counters.
+- Continuation limits are strictly monotonic: `consumed_loops` increments atomically under lock before returning a follow-up message.
+- Missing, non-integer, negative, non-finite, or decreasing host counters fail closed.
+- Duplicate hook events are deduplicated by event/loop identity and consume at most one slot.
+- Schema v1 states migrate safely into schema v2 without resetting active loop budgets.
+- All decisions run in locked atomic transactions; `persist done` and `persist stop` win concurrent continuation races.
+
 ## Cursor-backed modes
 
 ```sh

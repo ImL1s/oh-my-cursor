@@ -3,6 +3,12 @@ import { MAX_PERSIST_LOOPS, normalizePersistState, type PersistState } from './s
 export interface PersistHookInput {
   readonly status?: unknown;
   readonly loop_count?: unknown;
+  readonly event_id?: unknown;
+  readonly eventId?: unknown;
+  readonly session_id?: unknown;
+  readonly sessionId?: unknown;
+  readonly turn_id?: unknown;
+  readonly turnId?: unknown;
 }
 
 export interface PersistDecision {
@@ -10,6 +16,29 @@ export interface PersistDecision {
   readonly reason: string;
   readonly followup_message?: string;
   readonly loop_count?: number;
+  readonly next_state?: PersistState;
+}
+
+export function deriveEventId(input: PersistHookInput): string {
+  if (typeof input.event_id === 'string' && input.event_id.trim() !== '') {
+    return input.event_id.trim();
+  }
+  if (typeof input.eventId === 'string' && input.eventId.trim() !== '') {
+    return input.eventId.trim();
+  }
+  const parts: string[] = [];
+  if (typeof input.session_id === 'string' && input.session_id.trim() !== '') {
+    parts.push(`session:${input.session_id.trim()}`);
+  } else if (typeof input.sessionId === 'string' && input.sessionId.trim() !== '') {
+    parts.push(`session:${input.sessionId.trim()}`);
+  }
+  if (typeof input.turn_id === 'string' && input.turn_id.trim() !== '') {
+    parts.push(`turn:${input.turn_id.trim()}`);
+  } else if (typeof input.turnId === 'string' && input.turnId.trim() !== '') {
+    parts.push(`turn:${input.turnId.trim()}`);
+  }
+  parts.push(`loop:${input.loop_count}`);
+  return parts.join(':');
 }
 
 /**
@@ -18,40 +47,86 @@ export interface PersistDecision {
  * Safety posture: OPT-IN. Continues ONLY when a valid, active persist state is
  * present AND every guard passes. Any doubt — missing/malformed state, a
  * non-'completed' status (user abort or hard error), an exhausted loop budget,
- * a passed deadline, or an operator-set done flag — returns a normal stop.
- * Cursor owns the loop_count budget (bounded by loop_limit); the omcu CLI owns
- * the goal/ceiling/deadline/done flag. This function never mutates state.
+ * a passed deadline, a missing/decreased/duplicate host counter, or an operator-set
+ * done flag — returns a normal stop.
  */
 export function decidePersist(rawState: unknown, hookInput: unknown, nowMs: number): PersistDecision {
   const state = normalizePersistState(rawState);
-  if (state === null || state.active !== true) return { continue: false, reason: 'no_active_persist_state' };
+  if (state === null) return { continue: false, reason: 'no_active_persist_state' };
+  if (state.active !== true && state.done !== true) return { continue: false, reason: 'no_active_persist_state' };
 
   const input = (hookInput && typeof hookInput === 'object' && !Array.isArray(hookInput)
     ? hookInput : {}) as PersistHookInput;
 
-  // Fail-safe: continue ONLY on an explicit clean 'completed'. A missing or
-  // non-string status is treated as a non-completed turn (abort/error/unknown)
-  // and halts — never default an incomplete payload into a continuation.
+  // Fail-safe: continue ONLY on an explicit clean 'completed'.
   if (input.status !== 'completed') {
-    const label = typeof input.status === 'string' ? input.status : 'missing';
+    const label = typeof input.status === 'string' && input.status.trim() !== ''
+      ? input.status.trim() : 'missing';
     return { continue: false, reason: `status_${label}` };
   }
 
   if (state.done === true) return { continue: false, reason: 'goal_marked_done' };
+  if (state.active !== true) return { continue: false, reason: 'no_active_persist_state' };
 
   if (!Number.isSafeInteger(nowMs) || nowMs >= state.deadline_ms) {
     return { continue: false, reason: 'deadline_reached' };
   }
 
-  const rawLoop = Number(input.loop_count);
-  const observedLoops = Number.isFinite(rawLoop) && rawLoop >= 0 ? Math.floor(rawLoop) : 0;
-  if (observedLoops >= state.max_loops) return { continue: false, reason: 'loop_budget_exhausted' };
+  const rawLoop = input.loop_count;
+  if (
+    rawLoop === undefined ||
+    rawLoop === null ||
+    typeof rawLoop !== 'number' ||
+    !Number.isSafeInteger(rawLoop) ||
+    rawLoop < 0 ||
+    rawLoop > MAX_PERSIST_LOOPS
+  ) {
+    return { continue: false, reason: 'loop_count_invalid' };
+  }
+
+  if (state.last_host_loop_count !== null && rawLoop < state.last_host_loop_count) {
+    return { continue: false, reason: 'loop_count_decreased' };
+  }
+
+  const baselineConsumed = state.legacy_v1
+    ? Math.max(state.consumed_loops, rawLoop)
+    : state.consumed_loops;
+
+  if (baselineConsumed >= state.max_loops || rawLoop >= state.max_loops) {
+    return { continue: false, reason: 'loop_budget_exhausted' };
+  }
+
+  const eventId = deriveEventId(input);
+  if (state.last_event_id !== null && eventId === state.last_event_id) {
+    return { continue: false, reason: 'duplicate_event' };
+  }
+  if (state.last_host_loop_count !== null && rawLoop === state.last_host_loop_count) {
+    return { continue: false, reason: 'duplicate_event' };
+  }
+
+  const nextConsumed = baselineConsumed + 1;
+  const next_state: PersistState = {
+    schema_version: 2,
+    active: true,
+    goal: state.goal,
+    max_loops: state.max_loops,
+    consumed_loops: nextConsumed,
+    last_host_loop_count: rawLoop,
+    revision: state.revision + 1,
+    deadline_ms: state.deadline_ms,
+    created_at_ms: state.created_at_ms,
+    done: false,
+    last_event_id: eventId,
+    last_decision_at_ms: nowMs,
+    last_decision_reason: 'persist_active',
+  };
 
   return {
     continue: true,
     reason: 'persist_active',
-    loop_count: observedLoops,
-    followup_message: buildFollowupMessage(state, observedLoops),
+    loop_count: rawLoop,
+    next_state,
+    followup_message: buildFollowupMessage(state, baselineConsumed),
   };
 }
 
