@@ -288,18 +288,21 @@ export class LeaseStore {
       }
     };
     checkRun();
+    const runFile = withinStateRoot(this.root, 'runs', safeKey(runId, 'run_id'), 'state.json');
     const file = this.file(runId, leaseName);
-    return withDirectoryLock(file, () => {
-      assertCliMutationAuthority(this.authority);
-      checkRun();
-      const current = this.read(runId, leaseName);
-      const rawNow = this.now();
-      const mutatedMs = current !== null ? Math.max(rawNow.getTime(), Date.parse(current.mutation.mutated_at)) : rawNow.getTime();
-      const now = new Date(mutatedMs);
-      if (current !== null && Date.parse(current.expires_at) > now.getTime() && current.owner !== owner) throw new Error('E_LEASE_HELD');
-      const lease: LeaseV1 = { store_kind: 'run_lease', schema_version: 1, repository_id: 'OMCU', run_id: runId, lease_name: leaseName, owner, generation: (current?.generation ?? 0) + 1, expires_at: new Date(now.getTime() + ttlMs).toISOString(), mutation: proof(this.authority, now) };
-      atomicWriteJson(file, lease);
-      return lease;
+    return withDirectoryLock(runFile, () => {
+      return withDirectoryLock(file, () => {
+        assertCliMutationAuthority(this.authority);
+        checkRun();
+        const current = this.read(runId, leaseName);
+        const rawNow = this.now();
+        const mutatedMs = current !== null ? Math.max(rawNow.getTime(), Date.parse(current.mutation.mutated_at)) : rawNow.getTime();
+        const now = new Date(mutatedMs);
+        if (current !== null && Date.parse(current.expires_at) > now.getTime() && current.owner !== owner) throw new Error('E_LEASE_HELD');
+        const lease: LeaseV1 = { store_kind: 'run_lease', schema_version: 1, repository_id: 'OMCU', run_id: runId, lease_name: leaseName, owner, generation: (current?.generation ?? 0) + 1, expires_at: new Date(now.getTime() + ttlMs).toISOString(), mutation: proof(this.authority, now) };
+        atomicWriteJson(file, lease);
+        return lease;
+      });
     });
   }
   async release(runId: string, leaseName: string, owner: string, generation: number): Promise<void> {
