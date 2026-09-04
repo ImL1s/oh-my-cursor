@@ -374,6 +374,36 @@ describe('serveMcpStdio framing and transport', () => {
     const parsedList = JSON.parse(lines[1]!);
     expect(parsedList.id).toBe(2);
     expect(parsedList.result.tools).toHaveLength(4);
+    const searchTool = parsedList.result.tools.find((t: { name: string }) => t.name === 'omcu.memory.search');
+    expect(searchTool.inputSchema.properties.limit).toEqual({
+      type: 'integer',
+      minimum: 1,
+      maximum: 100,
+    });
+  });
+
+  it('handles small chunk fragmentation without quadratic copying or data loss', async () => {
+    const root = projectStateRoot(workspace());
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const responses: string[] = [];
+
+    output.on('data', (chunk) => responses.push(chunk.toString('utf8')));
+    const serverPromise = serveMcpStdio(root, input, output);
+
+    const message = JSON.stringify({ jsonrpc: '2.0', id: 'frag-1', method: 'ping' }) + '\n';
+    for (let i = 0; i < message.length; i++) {
+      input.write(Buffer.from(message[i]!, 'utf8'));
+    }
+
+    input.end();
+    await serverPromise;
+
+    const lines = responses.join('').split('\n').filter(Boolean);
+    expect(lines).toHaveLength(1);
+    const parsed = JSON.parse(lines[0]!);
+    expect(parsed.id).toBe('frag-1');
+    expect(parsed.result).toEqual({});
   });
 
   it('handles parse error and NUL byte correctly in stream', async () => {

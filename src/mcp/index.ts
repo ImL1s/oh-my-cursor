@@ -51,8 +51,8 @@ export const MCP_TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string' },
-        limit: { type: 'number' },
+        query: { type: 'string', maxLength: 4096 },
+        limit: { type: 'integer', minimum: 1, maximum: 100 },
       },
       required: ['query'],
       additionalProperties: false,
@@ -466,7 +466,8 @@ export async function* readBoundedLines(
   input: Readable,
   maxLineBytes: number = MAX_MCP_LINE_BYTES,
 ): AsyncGenerator<BoundedLineResult> {
-  let buffer = Buffer.alloc(0);
+  let chunks: Buffer[] = [];
+  let accumulatedBytes = 0;
   let discarding = false;
 
   for await (const rawChunk of input) {
@@ -480,13 +481,15 @@ export async function* readBoundedLines(
         const remaining = chunkBuf.subarray(offset);
         if (discarding) {
           offset = chunkBuf.length;
-        } else if (buffer.length + remaining.length > maxLineBytes) {
+        } else if (accumulatedBytes + remaining.length > maxLineBytes) {
           discarding = true;
-          buffer = Buffer.alloc(0);
+          chunks = [];
+          accumulatedBytes = 0;
           yield { error: 'E_MCP_LINE_TOO_LARGE' };
           offset = chunkBuf.length;
         } else {
-          buffer = Buffer.concat([buffer, remaining]);
+          chunks.push(remaining);
+          accumulatedBytes += remaining.length;
           offset = chunkBuf.length;
         }
       } else {
@@ -495,12 +498,15 @@ export async function* readBoundedLines(
 
         if (discarding) {
           discarding = false;
-        } else if (buffer.length + segment.length > maxLineBytes) {
-          buffer = Buffer.alloc(0);
+        } else if (accumulatedBytes + segment.length > maxLineBytes) {
+          chunks = [];
+          accumulatedBytes = 0;
           yield { error: 'E_MCP_LINE_TOO_LARGE' };
         } else {
-          const fullLineBuf = Buffer.concat([buffer, segment]);
-          buffer = Buffer.alloc(0);
+          chunks.push(segment);
+          const fullLineBuf = Buffer.concat(chunks);
+          chunks = [];
+          accumulatedBytes = 0;
           let lineStr = fullLineBuf.toString('utf8');
           if (lineStr.endsWith('\r')) {
             lineStr = lineStr.slice(0, -1);
@@ -511,11 +517,14 @@ export async function* readBoundedLines(
     }
   }
 
-  if (!discarding && buffer.length > 0) {
-    if (buffer.length > maxLineBytes) {
+  if (!discarding && accumulatedBytes > 0) {
+    if (accumulatedBytes > maxLineBytes) {
       yield { error: 'E_MCP_LINE_TOO_LARGE' };
     } else {
-      let lineStr = buffer.toString('utf8');
+      const fullLineBuf = Buffer.concat(chunks);
+      chunks = [];
+      accumulatedBytes = 0;
+      let lineStr = fullLineBuf.toString('utf8');
       if (lineStr.endsWith('\r')) {
         lineStr = lineStr.slice(0, -1);
       }
