@@ -898,5 +898,44 @@ describe('Journal primitive', () => {
     // Ensure head.json was NOT recreated with sequence 0
     expect(fs.existsSync(headPath)).toBe(false);
   });
+
+  it('classifies trailing blank line in active segment as incomplete_tail and repairs cleanly', async () => {
+    const streamDir = path.join(tempDir, 'trailing-blank-stream');
+    const journal = new Journal<{ msg: string }>(streamDir, 'trailing-blank');
+
+    await journal.append({ kind: 'msg', payload: { msg: 'first' } });
+    expect(journal.verify().ok).toBe(true);
+
+    const activeSegPath = path.join(streamDir, 'segments', '00000001.jsonl');
+    const originalContent = fs.readFileSync(activeSegPath);
+
+    // Simulate extra newline at the end of the active segment
+    fs.appendFileSync(activeSegPath, '\n');
+
+    // verify() MUST report incomplete_tail and repairable: true
+    const v = journal.verify();
+    expect(v.ok).toBe(false);
+    expect(v.status).toBe('incomplete_tail');
+    expect(v.repairable).toBe(true);
+    expect(v.error?.code).toBe('E_JOURNAL_INCOMPLETE_TAIL');
+    expect(v.error?.message).toContain('trailing blank line');
+    expect(v.uncommitted_tail_bytes).toBe(1);
+
+    // append() refuses because active segment has trailing blank line
+    await expect(journal.append({ kind: 'msg', payload: { msg: 'second' } }))
+      .rejects.toThrow('E_JOURNAL_INCOMPLETE_TAIL');
+
+    // repairIncompleteTail() truncates the trailing newline
+    const receipt = await journal.repairIncompleteTail();
+    expect(receipt.segment).toBe('00000001.jsonl');
+    expect(receipt.truncated_bytes).toBe(1);
+    expect(fs.readFileSync(activeSegPath)).toEqual(originalContent);
+
+    // Stream is now valid and append succeeds
+    expect(journal.verify().ok).toBe(true);
+    const r2 = await journal.append({ kind: 'msg', payload: { msg: 'second' } });
+    expect(r2.sequence).toBe(2);
+  });
 });
+
 

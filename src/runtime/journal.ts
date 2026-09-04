@@ -1089,10 +1089,26 @@ export class Journal<T = unknown> {
         const lineStr = lineBytes.toString('utf8');
         if (lineStr.trim() === '') {
           // Empty line
-          if (isLastSegment && offset + lineLength === buffer.length) {
-            // Trailing extra newline
-            offset += lineLength;
-            continue;
+          if (isLastSegment && totalValid >= head.head_sequence) {
+            const rest = buffer.subarray(offset).toString('utf8');
+            if (rest.trim() === '') {
+              return {
+                ok: false,
+                status: 'incomplete_tail',
+                stream_id: this.streamId,
+                total_records: totalValid,
+                head_sequence: head.head_sequence,
+                head_digest: head.head_digest,
+                error: {
+                  code: 'E_JOURNAL_INCOMPLETE_TAIL',
+                  message: 'Active segment has trailing blank line',
+                  segment: segName,
+                  byte_offset: offset,
+                },
+                repairable: true,
+                uncommitted_tail_bytes: buffer.length - offset,
+              };
+            }
           }
           return {
             ok: false,
