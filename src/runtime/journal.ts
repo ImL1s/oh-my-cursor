@@ -1,7 +1,14 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { atomicWriteJson, withDirectoryLock, withDirectoryLockSync } from './atomic.js';
+import {
+  assertDirectoryIdentity,
+  atomicWriteJson,
+  secureFilePath,
+  withDirectoryLock,
+  withDirectoryLockSync,
+} from './atomic.js';
+import type { SecuredFilePath } from './atomic.js';
 import { redact } from './redaction.js';
 
 export interface JournalRecord<T = unknown> {
@@ -148,10 +155,11 @@ export function assertSafeStreamId(streamId: string): string {
 
 function syncPathToDisk(targetPath: string): void {
   if (!fs.existsSync(targetPath)) return;
-  const stat = fs.statSync(targetPath);
+  const stat = fs.lstatSync(targetPath);
+  if (stat.isSymbolicLink()) return;
   if (stat.isDirectory()) {
     try {
-      const fd = fs.openSync(targetPath, 'r');
+      const fd = fs.openSync(targetPath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
       try {
         fs.fsyncSync(fd);
       } finally {
@@ -165,9 +173,13 @@ function syncPathToDisk(targetPath: string): void {
 
   let fd: number;
   try {
-    fd = fs.openSync(targetPath, 'r+');
+    fd = fs.openSync(targetPath, fs.constants.O_RDWR | (fs.constants.O_NOFOLLOW ?? 0));
   } catch {
-    fd = fs.openSync(targetPath, 'r');
+    try {
+      fd = fs.openSync(targetPath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+    } catch {
+      return;
+    }
   }
   try {
     fs.fsyncSync(fd);
@@ -439,16 +451,22 @@ export class Journal<T = unknown> {
       return true;
     }
     const segmentsDir = this.segmentsDir();
-    if (fs.existsSync(segmentsDir) && fs.readdirSync(segmentsDir).length > 0) {
-      return true;
+    if (fs.existsSync(segmentsDir)) {
+      const stat = fs.lstatSync(segmentsDir);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) return true;
+      if (fs.readdirSync(segmentsDir).length > 0) return true;
     }
     const receiptsDir = this.receiptsDir();
-    if (fs.existsSync(receiptsDir) && fs.readdirSync(receiptsDir).length > 0) {
-      return true;
+    if (fs.existsSync(receiptsDir)) {
+      const stat = fs.lstatSync(receiptsDir);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) return true;
+      if (fs.readdirSync(receiptsDir).length > 0) return true;
     }
     const quarantineDir = this.quarantineDir();
-    if (fs.existsSync(quarantineDir) && fs.readdirSync(quarantineDir).length > 0) {
-      return true;
+    if (fs.existsSync(quarantineDir)) {
+      const stat = fs.lstatSync(quarantineDir);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) return true;
+      if (fs.readdirSync(quarantineDir).length > 0) return true;
     }
     return false;
   }
@@ -487,9 +505,32 @@ export class Journal<T = unknown> {
     const initialSegment = segmentFileName(1);
     const initialSegmentPath = path.join(this.segmentsDir(), initialSegment);
     if (!fs.existsSync(initialSegmentPath)) {
-      fs.writeFileSync(initialSegmentPath, '', { mode: 0o600 });
-      syncPathToDisk(initialSegmentPath);
-      syncPathToDisk(this.segmentsDir());
+      try {
+        const secured = secureFilePath(initialSegmentPath, 'E_JOURNAL');
+        const fd = fs.openSync(
+          secured.file,
+          fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0),
+          0o600
+        );
+        try {
+          fs.fsyncSync(fd);
+          fs.fchmodSync(fd, 0o600);
+        } finally {
+          fs.closeSync(fd);
+        }
+        assertDirectoryIdentity(secured.parent, secured.parentIdentity, 'E_JOURNAL');
+        syncPathToDisk(this.segmentsDir());
+      } catch (error) {
+        throw new Error('E_JOURNAL_CORRUPT', { cause: error });
+      }
+    } else {
+      const segStat = fs.lstatSync(initialSegmentPath);
+      if (segStat.isSymbolicLink() || !segStat.isFile()) {
+        throw new Error('E_JOURNAL_CORRUPT');
+      }
+      if (typeof process.getuid === 'function' && segStat.uid !== process.getuid()) {
+        throw new Error('E_JOURNAL_CORRUPT');
+      }
     }
 
     const head: JournalHead = {
@@ -564,13 +605,32 @@ export class Journal<T = unknown> {
       }
 
       fs.mkdirSync(this.segmentsDir(), { recursive: true, mode: 0o700 });
+      const segDirStat = fs.lstatSync(this.segmentsDir());
+      if (segDirStat.isSymbolicLink() || !segDirStat.isDirectory()) {
+        throw new Error('E_JOURNAL_CORRUPT');
+      }
+      if (typeof process.getuid === 'function' && segDirStat.uid !== process.getuid()) {
+        throw new Error('E_JOURNAL_CORRUPT');
+      }
+
       let activeSegment = head.active_segment;
       let activeSegmentPath = path.join(this.segmentsDir(), activeSegment);
 
-      let currentSegmentBytes = fs.existsSync(activeSegmentPath) ? fs.statSync(activeSegmentPath).size : 0;
-      let currentSegmentRecords = typeof head.active_segment_records === 'number'
-        ? head.active_segment_records
-        : (fs.existsSync(activeSegmentPath) ? fs.readFileSync(activeSegmentPath, 'utf8').trim().split(/\r?\n/).filter(Boolean).length : 0);
+      let currentSegmentBytes = 0;
+      let currentSegmentRecords = 0;
+      if (fs.existsSync(activeSegmentPath)) {
+        const segStat = fs.lstatSync(activeSegmentPath);
+        if (segStat.isSymbolicLink() || !segStat.isFile()) {
+          throw new Error('E_JOURNAL_CORRUPT');
+        }
+        if (typeof process.getuid === 'function' && segStat.uid !== process.getuid()) {
+          throw new Error('E_JOURNAL_CORRUPT');
+        }
+        currentSegmentBytes = segStat.size;
+        currentSegmentRecords = typeof head.active_segment_records === 'number'
+          ? head.active_segment_records
+          : fs.readFileSync(activeSegmentPath, 'utf8').trim().split(/\r?\n/).filter(Boolean).length;
+      }
       let activeSegmentIndex = parseSegmentIndex(activeSegment) ?? 1;
 
       let isNewSegment = !fs.existsSync(activeSegmentPath);
@@ -588,16 +648,61 @@ export class Journal<T = unknown> {
         isNewSegment = true;
       }
 
+      let secured: SecuredFilePath;
+      try {
+        secured = secureFilePath(activeSegmentPath, 'E_JOURNAL');
+      } catch (error) {
+        throw new Error('E_JOURNAL_CORRUPT', { cause: error });
+      }
+
+      let existingStat: fs.Stats | null = null;
+      if (fs.existsSync(secured.file)) {
+        existingStat = fs.lstatSync(secured.file);
+        if (existingStat.isSymbolicLink() || !existingStat.isFile()) {
+          throw new Error('E_JOURNAL_CORRUPT');
+        }
+        if (typeof process.getuid === 'function' && existingStat.uid !== process.getuid()) {
+          throw new Error('E_JOURNAL_CORRUPT');
+        }
+      }
+
       // Append and fsync active segment file before updating head
       const buffer = Buffer.from(line, 'utf8');
-      const fd = fs.openSync(activeSegmentPath, 'a', 0o600);
+      const openFlags = fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | (fs.constants.O_NOFOLLOW ?? 0);
+      let fd: number;
       try {
+        fd = fs.openSync(secured.file, openFlags, 0o600);
+      } catch (error) {
+        throw new Error('E_JOURNAL_CORRUPT', { cause: error });
+      }
+      try {
+        const openedStat = fs.fstatSync(fd);
+        if (!openedStat.isFile()) {
+          throw new Error('E_JOURNAL_CORRUPT');
+        }
+        if (typeof process.getuid === 'function' && openedStat.uid !== process.getuid()) {
+          throw new Error('E_JOURNAL_CORRUPT');
+        }
+        if (existingStat !== null && (openedStat.dev !== existingStat.dev || openedStat.ino !== existingStat.ino)) {
+          throw new Error('E_JOURNAL_CORRUPT');
+        }
+        try {
+          assertDirectoryIdentity(secured.parent, secured.parentIdentity, 'E_JOURNAL');
+        } catch (error) {
+          throw new Error('E_JOURNAL_CORRUPT', { cause: error });
+        }
+
         writeAllSync(fd, buffer);
         fs.fsyncSync(fd);
+        fs.fchmodSync(fd, 0o600);
       } finally {
         fs.closeSync(fd);
       }
-      fs.chmodSync(activeSegmentPath, 0o600);
+      try {
+        assertDirectoryIdentity(secured.parent, secured.parentIdentity, 'E_JOURNAL');
+      } catch (error) {
+        throw new Error('E_JOURNAL_CORRUPT', { cause: error });
+      }
 
       if (isNewSegment) {
         syncPathToDisk(this.segmentsDir());
@@ -623,8 +728,27 @@ export class Journal<T = unknown> {
   private listSegments(): string[] {
     const segmentsDir = this.segmentsDir();
     if (!fs.existsSync(segmentsDir)) return [];
-    return fs
-      .readdirSync(segmentsDir)
+    const dirStat = fs.lstatSync(segmentsDir);
+    if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) {
+      throw new Error('E_JOURNAL_CORRUPT');
+    }
+    if (typeof process.getuid === 'function' && dirStat.uid !== process.getuid()) {
+      throw new Error('E_JOURNAL_CORRUPT');
+    }
+    const entries = fs.readdirSync(segmentsDir);
+    for (const name of entries) {
+      if (parseSegmentIndex(name) !== null) {
+        const segPath = path.join(segmentsDir, name);
+        const stat = fs.lstatSync(segPath);
+        if (stat.isSymbolicLink() || !stat.isFile()) {
+          throw new Error('E_JOURNAL_CORRUPT');
+        }
+        if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) {
+          throw new Error('E_JOURNAL_CORRUPT');
+        }
+      }
+    }
+    return entries
       .filter((name) => parseSegmentIndex(name) !== null)
       .sort();
   }
@@ -653,7 +777,14 @@ export class Journal<T = unknown> {
       throw new Error('E_JOURNAL_CORRUPT');
     }
 
-    const stat = fs.statSync(activeSegmentPath);
+    const stat = fs.lstatSync(activeSegmentPath);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw new Error('E_JOURNAL_CORRUPT');
+    }
+    if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) {
+      throw new Error('E_JOURNAL_CORRUPT');
+    }
+
     if (head.head_sequence === 0) {
       if (stat.size > 0) {
         throw new Error('E_JOURNAL_INCOMPLETE_TAIL');
@@ -668,8 +799,20 @@ export class Journal<T = unknown> {
     // Read the tail of the active segment up to maxRecordBytes + 128 bytes
     const readLen = Math.min(stat.size, limits.maxRecordBytes + 128);
     const buf = Buffer.alloc(readLen);
-    const fd = fs.openSync(activeSegmentPath, 'r');
+    let fd: number;
     try {
+      fd = fs.openSync(activeSegmentPath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+    } catch (error) {
+      throw new Error('E_JOURNAL_CORRUPT', { cause: error });
+    }
+    try {
+      const fstat = fs.fstatSync(fd);
+      if (!fstat.isFile() || fstat.dev !== stat.dev || fstat.ino !== stat.ino) {
+        throw new Error('E_JOURNAL_CORRUPT');
+      }
+      if (typeof process.getuid === 'function' && fstat.uid !== process.getuid()) {
+        throw new Error('E_JOURNAL_CORRUPT');
+      }
       let readBytes = 0;
       while (readBytes < readLen) {
         const bytesRead = fs.readSync(fd, buf, readBytes, readLen - readBytes, stat.size - readLen + readBytes);
@@ -898,6 +1041,32 @@ export class Journal<T = unknown> {
       };
     }
 
+    const streamStat = fs.lstatSync(this.streamDir);
+    if (streamStat.isSymbolicLink() || !streamStat.isDirectory()) {
+      return {
+        ok: false,
+        status: 'corrupt',
+        stream_id: this.streamId,
+        total_records: 0,
+        head_sequence: 0,
+        head_digest: null,
+        error: { code: 'E_JOURNAL_CORRUPT', message: 'Stream directory is not a directory or is a symbolic link' },
+        repairable: false,
+      };
+    }
+    if (typeof process.getuid === 'function' && streamStat.uid !== process.getuid()) {
+      return {
+        ok: false,
+        status: 'corrupt',
+        stream_id: this.streamId,
+        total_records: 0,
+        head_sequence: 0,
+        head_digest: null,
+        error: { code: 'E_JOURNAL_CORRUPT', message: 'Stream directory is not owned by current user' },
+        repairable: false,
+      };
+    }
+
     let meta: JournalMeta;
     try {
       const read = this.readMeta();
@@ -984,7 +1153,21 @@ export class Journal<T = unknown> {
       };
     }
 
-    const segments = this.listSegments();
+    let segments: string[];
+    try {
+      segments = this.listSegments();
+    } catch (error) {
+      return {
+        ok: false,
+        status: 'corrupt',
+        stream_id: this.streamId,
+        total_records: 0,
+        head_sequence: 0,
+        head_digest: null,
+        error: { code: 'E_JOURNAL_CORRUPT', message: (error as Error).message },
+        repairable: false,
+      };
+    }
     if (segments.length === 0) {
       if (head.head_sequence === 0) {
         if (
@@ -1599,12 +1782,24 @@ export class Journal<T = unknown> {
         throw new Error('E_JOURNAL_CORRUPT');
       }
 
-      const originalBytes = fs.statSync(segmentPath).size;
+      const segmentStat = fs.lstatSync(segmentPath);
+      if (segmentStat.isSymbolicLink() || !segmentStat.isFile()) {
+        throw new Error('E_JOURNAL_CORRUPT');
+      }
+      if (typeof process.getuid === 'function' && segmentStat.uid !== process.getuid()) {
+        throw new Error('E_JOURNAL_CORRUPT');
+      }
+
+      const originalBytes = segmentStat.size;
       const repairedBytes = byteOffset;
       const truncatedBytes = originalBytes - repairedBytes;
 
       fs.mkdirSync(this.quarantineDir(), { recursive: true, mode: 0o700 });
       fs.mkdirSync(this.receiptsDir(), { recursive: true, mode: 0o700 });
+      const qStat = fs.lstatSync(this.quarantineDir());
+      if (qStat.isSymbolicLink() || !qStat.isDirectory()) throw new Error('E_JOURNAL_CORRUPT');
+      const rStat = fs.lstatSync(this.receiptsDir());
+      if (rStat.isSymbolicLink() || !rStat.isDirectory()) throw new Error('E_JOURNAL_CORRUPT');
 
       const timestamp = this.now().getTime();
       let nonce = crypto.randomBytes(6).toString('hex');

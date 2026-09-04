@@ -1042,6 +1042,51 @@ describe('Journal primitive', () => {
     fs.writeFileSync(metaPath, JSON.stringify({ ...validMeta, max_segment_bytes: -100 }), 'utf8');
     expect(() => journal.readMeta()).toThrow('E_JOURNAL_CORRUPT');
   });
+
+  it('rejects symlinked segment file and symlinked segments directory with E_JOURNAL_CORRUPT', async () => {
+    const streamDir = path.join(tempDir, 'symlink-rejection');
+    const journal = new Journal<{ msg: string }>(streamDir, 'symlink-stream');
+
+    await journal.append({ kind: 'msg', payload: { msg: 'first' } });
+
+    // Target file outside .omcu
+    const outsideDir = path.join(tempDir, 'outside-target');
+    fs.mkdirSync(outsideDir, { recursive: true });
+    const outsideFile = path.join(outsideDir, 'target.txt');
+    fs.writeFileSync(outsideFile, 'safe-content', { mode: 0o644 });
+
+    // Test 1: Active segment replaced by a symlink to outside file
+    const activeSegPath = path.join(streamDir, 'segments', '00000001.jsonl');
+    fs.unlinkSync(activeSegPath);
+    fs.symlinkSync(outsideFile, activeSegPath);
+
+    // append must refuse with E_JOURNAL_CORRUPT and not write to or chmod outsideFile
+    await expect(journal.append({ kind: 'msg', payload: { msg: 'second' } }))
+      .rejects.toThrow('E_JOURNAL_CORRUPT');
+    expect(fs.readFileSync(outsideFile, 'utf8')).toBe('safe-content');
+    const outsideStat = fs.statSync(outsideFile);
+    expect(outsideStat.mode & 0o777).toBe(0o644);
+
+    // verify must detect corruption
+    const v1 = journal.verify();
+    expect(v1.ok).toBe(false);
+    expect(v1.status).toBe('corrupt');
+    expect(v1.error?.code).toBe('E_JOURNAL_CORRUPT');
+
+    // Test 2: segments directory replaced by a symlink to an outside directory
+    fs.unlinkSync(activeSegPath);
+    const segDir = path.join(streamDir, 'segments');
+    fs.rmSync(segDir, { recursive: true, force: true });
+    fs.symlinkSync(outsideDir, segDir);
+
+    await expect(journal.append({ kind: 'msg', payload: { msg: 'third' } }))
+      .rejects.toThrow('E_JOURNAL_CORRUPT');
+
+    const v2 = journal.verify();
+    expect(v2.ok).toBe(false);
+    expect(v2.status).toBe('corrupt');
+    expect(v2.error?.code).toBe('E_JOURNAL_CORRUPT');
+  });
 });
 
 
