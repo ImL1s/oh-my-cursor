@@ -166,23 +166,56 @@ export function validateMcpTargetSafe(target: string): void {
   }
 }
 
-export function resolveMcpReceiptPath(target: string, projectRoot: string, customReceipt?: string): string {
-  if (customReceipt !== undefined && customReceipt.trim() !== '') {
-    return path.resolve(projectRoot, customReceipt);
-  }
+export function validateTargetAndReceiptDistinct(target: string, receiptPath: string): void {
   const resolvedTarget = path.resolve(target);
-  const resolvedProject = path.resolve(projectRoot);
-  const omcuDir = path.join(resolvedProject, '.omcu');
-  if (fs.existsSync(omcuDir) && fs.lstatSync(omcuDir).isDirectory()) {
-    return path.join(omcuDir, 'mcp-install-receipt.json');
+  const resolvedReceipt = path.resolve(receiptPath);
+  if (resolvedTarget === resolvedReceipt) {
+    throw new Error(
+      `E_MCP_RECEIPT_ALIAS_TARGET: Receipt file cannot resolve to the same path as target file: ${resolvedReceipt}`,
+    );
   }
-  return path.join(path.dirname(resolvedTarget), '.omcu-mcp-receipt.json');
+  if (fs.existsSync(resolvedTarget) && fs.existsSync(resolvedReceipt)) {
+    try {
+      const statTarget = fs.statSync(resolvedTarget);
+      const statReceipt = fs.statSync(resolvedReceipt);
+      if (statTarget.dev === statReceipt.dev && statTarget.ino === statReceipt.ino) {
+        throw new Error(
+          `E_MCP_RECEIPT_ALIAS_TARGET: Receipt file aliases target file via hard link: ${resolvedReceipt}`,
+        );
+      }
+    } catch (err) {
+      if ((err as Error).message.startsWith('E_MCP_RECEIPT_ALIAS_TARGET')) {
+        throw err;
+      }
+    }
+  }
+}
+
+export function resolveMcpReceiptPath(target: string, projectRoot: string, customReceipt?: string): string {
+  let resolvedReceipt: string;
+  if (customReceipt !== undefined && customReceipt.trim() !== '') {
+    resolvedReceipt = path.resolve(projectRoot, customReceipt);
+  } else {
+    const resolvedTarget = path.resolve(target);
+    const resolvedProject = path.resolve(projectRoot);
+    const omcuDir = path.join(resolvedProject, '.omcu');
+    if (fs.existsSync(omcuDir) && fs.lstatSync(omcuDir).isDirectory()) {
+      resolvedReceipt = path.join(omcuDir, 'mcp-install-receipt.json');
+    } else {
+      resolvedReceipt = path.join(path.dirname(resolvedTarget), '.omcu-mcp-receipt.json');
+    }
+  }
+  validateTargetAndReceiptDistinct(target, resolvedReceipt);
+  return resolvedReceipt;
 }
 
 export function findMcpReceipt(target: string, projectRoot: string, customReceipt?: string): string | null {
   const resolvedTarget = path.resolve(target);
   if (customReceipt !== undefined && customReceipt.trim() !== '') {
     const resolved = path.resolve(projectRoot, customReceipt);
+    if (resolved === resolvedTarget) {
+      return null;
+    }
     if (!fs.existsSync(resolved)) {
       return null;
     }
@@ -694,6 +727,8 @@ export async function installMcpServer(options: McpInstallOptions = {}): Promise
   const home = path.resolve(options.homeDir ?? os.homedir());
   const pkgRoot = path.resolve(options.packageRoot ?? process.cwd());
   const expectedLauncher = resolveMcpLauncher({ homeDir: home, packageRoot: pkgRoot, cwd });
+  const receiptPath = resolveMcpReceiptPath(target, cwd, options.receiptFile);
+  validateTargetAndReceiptDistinct(target, receiptPath);
   const targetDir = path.dirname(target);
 
   if (!fs.existsSync(targetDir)) {
@@ -824,6 +859,10 @@ export async function installMcpServer(options: McpInstallOptions = {}): Promise
 export async function uninstallMcpServer(options: McpUninstallOptions = {}): Promise<McpUninstallResult> {
   const cwd = path.resolve(options.cwd ?? process.cwd());
   const target = resolveMcpTargetFile(options.targetFile, cwd);
+
+  if (options.receiptFile !== undefined && options.receiptFile.trim() !== '') {
+    validateTargetAndReceiptDistinct(target, path.resolve(cwd, options.receiptFile));
+  }
 
   const targetDir = path.dirname(target);
   if (!fs.existsSync(targetDir)) {

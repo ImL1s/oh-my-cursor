@@ -334,6 +334,27 @@ describe('MCP lifecycle management (Issue #17)', () => {
       expect(parsedB.mcpServers['oh-my-cursor']).toBeDefined();
     });
 
+    it('refuses install and uninstall with E_MCP_RECEIPT_ALIAS_TARGET when receipt aliases target', async () => {
+      const dir = makeDir();
+      const target = path.join(dir, '.cursor', 'mcp.json');
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, JSON.stringify({ mcpServers: {} }));
+
+      // Install with receiptFile pointing to target
+      await expect(
+        installMcpServer({ targetFile: target, receiptFile: target, cwd: dir }),
+      ).rejects.toThrow('E_MCP_RECEIPT_ALIAS_TARGET');
+
+      // Uninstall with receiptFile pointing to target
+      await expect(
+        uninstallMcpServer({ targetFile: target, receiptFile: target, cwd: dir }),
+      ).rejects.toThrow('E_MCP_RECEIPT_ALIAS_TARGET');
+
+      // Ensure target wasn't corrupted
+      const parsed = JSON.parse(fs.readFileSync(target, 'utf8'));
+      expect(parsed.mcpServers).toBeDefined();
+    });
+
     it('uninstall dry-run previews removal without changing file or receipt', async () => {
       const dir = makeDir();
       const target = path.join(dir, '.cursor', 'mcp.json');
