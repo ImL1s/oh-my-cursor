@@ -116,6 +116,9 @@ function mcpStatusExitCode(result: McpStatusResult): number {
   if (result.state === 'malformed' || result.state === 'unsafe-target' || result.state === 'foreign-conflict') {
     return 1;
   }
+  if (result.configured_server !== null && !result.executable_exists) {
+    return 1;
+  }
   if (result.health !== null && !result.health.ok) {
     return 1;
   }

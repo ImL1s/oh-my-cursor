@@ -721,5 +721,31 @@ describe('MCP lifecycle management (Issue #17)', () => {
       expect(code).toBe(0);
       expect(fs.existsSync(target)).toBe(true);
     });
+
+    it('returns exit code 1 in mcp status --no-probe when configured executable does not exist', async () => {
+      const cwd = makeDir('missing-exec-');
+      const h = harness(cwd);
+      const target = path.join(cwd, '.cursor', 'mcp.json');
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+
+      // Configure a server pointing to a nonexistent executable
+      fs.writeFileSync(
+        target,
+        JSON.stringify({
+          mcpServers: {
+            'oh-my-cursor': {
+              command: path.join(cwd, 'nonexistent', 'bin', 'omcu'),
+              args: ['mcp', 'serve'],
+            },
+          },
+        }),
+      );
+
+      const code = await runCli(['mcp', 'status', '--file', target, '--no-probe'], h.dependencies, h.io);
+      expect(code).toBe(1);
+      const output = JSON.parse(h.stdout.at(-1)!);
+      expect(output.executable_exists).toBe(false);
+      expect(output.configured_server).not.toBeNull();
+    });
   });
 });
