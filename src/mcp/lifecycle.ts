@@ -604,9 +604,20 @@ export async function probeMcpHealth(
               void finish({ ok: false, error: `E_MCP_INIT_FAILED: ${msg.error.message}` });
               return;
             }
-            protocolVersion = msg.result?.protocolVersion;
-            serverName = msg.result?.serverInfo?.name;
-            serverVersion = msg.result?.serverInfo?.version;
+            if (typeof msg.result !== 'object' || msg.result === null) {
+              void finish({ ok: false, error: 'E_MCP_INIT_INVALID: Missing or invalid result in initialize response' });
+              return;
+            }
+            protocolVersion = msg.result.protocolVersion;
+            serverName = msg.result.serverInfo?.name;
+            serverVersion = msg.result.serverInfo?.version;
+            if (typeof protocolVersion !== 'string' || typeof serverName !== 'string') {
+              void finish({
+                ok: false,
+                error: 'E_MCP_INIT_INVALID: Response for initialize must include protocolVersion and serverInfo.name',
+              });
+              return;
+            }
             stage = 'waiting_tools';
             childStdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }) + '\n');
           } else if (stage === 'waiting_tools' && msg.id === 2) {
@@ -614,7 +625,14 @@ export async function probeMcpHealth(
               void finish({ ok: false, error: `E_MCP_TOOLS_FAILED: ${msg.error.message}` });
               return;
             }
-            const tools = Array.isArray(msg.result?.tools) ? msg.result.tools : [];
+            if (typeof msg.result !== 'object' || msg.result === null || !Array.isArray(msg.result.tools)) {
+              void finish({
+                ok: false,
+                error: 'E_MCP_TOOLS_INVALID: Response for tools/list must contain a tools array',
+              });
+              return;
+            }
+            const tools = msg.result.tools;
             stage = 'done';
             void finish({
               ok: true,

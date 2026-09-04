@@ -504,6 +504,33 @@ describe('MCP lifecycle management (Issue #17)', () => {
       expect(report.tools_count).toBe(0);
       expect(elapsed).toBeLessThan(4000);
     });
+
+    it('rejects malformed initialize response with E_MCP_INIT_INVALID', async () => {
+      const server: McpServerConfig = {
+        command: process.execPath,
+        args: [
+          '-e',
+          'console.log(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }));',
+        ],
+      };
+      const report = await probeMcpHealth(server, 2000);
+      expect(report.ok).toBe(false);
+      expect(report.error).toContain('E_MCP_INIT_INVALID');
+    });
+
+    it('rejects malformed tools/list response with E_MCP_TOOLS_INVALID', async () => {
+      const server: McpServerConfig = {
+        command: process.execPath,
+        args: [
+          '-e',
+          'console.log(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05", serverInfo: { name: "test-stub", version: "1.0.0" } } }));' +
+          'console.log(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { tools: "not-an-array" } }));',
+        ],
+      };
+      const report = await probeMcpHealth(server, 2000);
+      expect(report.ok).toBe(false);
+      expect(report.error).toContain('E_MCP_TOOLS_INVALID');
+    });
   });
 
   describe('CLI command integration', () => {

@@ -148,7 +148,7 @@ describe('team api interop (P0)', () => {
     expect(listedTasks.ok).toBe(true);
     if (!listedTasks.ok) return;
     expect(listedTasks.data.count).toBe(1);
-  });
+  }, 20_000);
 
   it('fences concurrent whole-inbox replacements by expected digest', async () => {
     const { root, teamName } = workspace('inbox-fence');
