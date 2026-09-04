@@ -1872,8 +1872,14 @@ export class Journal<T = unknown> {
         const lineLength = line.lineLength;
 
         if (!line.hasNewline) {
+          const tailBytes = segStat.size - offset;
           // File ended without newline
-          if (isLastSegment && totalValid >= head.head_sequence) {
+          if (
+            isLastSegment &&
+            totalValid >= head.head_sequence &&
+            !line.tooLarge &&
+            tailBytes <= meta.max_record_bytes
+          ) {
             incompleteTailSegment = segName;
             incompleteTailByteOffset = offset;
             return {
@@ -1890,7 +1896,7 @@ export class Journal<T = unknown> {
                 byte_offset: offset,
               },
               repairable: true,
-              uncommitted_tail_bytes: segStat.size - offset,
+              uncommitted_tail_bytes: tailBytes,
             };
           } else {
             return {
@@ -1901,8 +1907,10 @@ export class Journal<T = unknown> {
               head_sequence: head.head_sequence,
               head_digest: head.head_digest,
               error: {
-                code: 'E_JOURNAL_CORRUPT',
-                message: isLastSegment
+                code: line.tooLarge || tailBytes > meta.max_record_bytes ? 'E_JOURNAL_RECORD_TOO_LARGE' : 'E_JOURNAL_CORRUPT',
+                message: line.tooLarge || tailBytes > meta.max_record_bytes
+                  ? `Active segment tail (${tailBytes} bytes) exceeds maximum record bytes (${meta.max_record_bytes})`
+                  : isLastSegment
                   ? 'Committed record in active segment is missing trailing newline'
                   : 'Non-active segment is missing trailing newline',
                 segment: segName,
@@ -1989,6 +1997,25 @@ export class Journal<T = unknown> {
           record = JSON.parse(lineStr) as JournalRecord<T>;
         } catch (jsonErr) {
           if (isLastSegment && offset + lineLength === segStat.size && totalValid >= head.head_sequence) {
+            const tailBytes = segStat.size - offset;
+            if (line.tooLarge || tailBytes > meta.max_record_bytes) {
+              return {
+                ok: false,
+                status: 'corrupt',
+                stream_id: this.streamId,
+                total_records: totalValid,
+                head_sequence: head.head_sequence,
+                head_digest: head.head_digest,
+                error: {
+                  code: 'E_JOURNAL_RECORD_TOO_LARGE',
+                  message: `Active segment tail (${tailBytes} bytes) exceeds maximum record bytes (${meta.max_record_bytes})`,
+                  segment: segName,
+                  sequence: expectedSeq,
+                  byte_offset: offset,
+                },
+                repairable: false,
+              };
+            }
             // Uncommitted last line of active segment is invalid JSON
             return {
               ok: false,
@@ -2004,7 +2031,7 @@ export class Journal<T = unknown> {
                 byte_offset: offset,
               },
               repairable: true,
-              uncommitted_tail_bytes: segStat.size - offset,
+              uncommitted_tail_bytes: tailBytes,
             };
           }
           return {
@@ -2338,6 +2365,23 @@ export class Journal<T = unknown> {
         const extraSeg = extraSegments[0]!;
         const extraPath = path.join(this.segmentsDir(), extraSeg);
         const extraBytes = fs.existsSync(extraPath) ? fs.statSync(extraPath).size : 0;
+        if (extraBytes > meta.max_segment_bytes + meta.max_record_bytes) {
+          return {
+            ok: false,
+            status: 'corrupt',
+            stream_id: this.streamId,
+            total_records: totalValid,
+            head_sequence: head.head_sequence,
+            head_digest: head.head_digest,
+            error: {
+              code: 'E_JOURNAL_CORRUPT',
+              message: `Uncommitted rotated segment ${extraSeg} size (${extraBytes}) exceeds maximum segment bytes`,
+              segment: extraSeg,
+              byte_offset: 0,
+            },
+            repairable: false,
+          };
+        }
         return {
           ok: false,
           status: 'incomplete_tail',
@@ -2373,6 +2417,24 @@ export class Journal<T = unknown> {
       const tailByteOffset = firstUncommittedByteOffset ?? lastValidCommittedByteOffset;
       const tailSegPath = path.join(this.segmentsDir(), tailSegment);
       const tailSize = fs.existsSync(tailSegPath) ? fs.statSync(tailSegPath).size : 0;
+      const uncommittedTailBytes = tailSize - tailByteOffset;
+      if (uncommittedTailBytes > meta.max_segment_bytes + meta.max_record_bytes) {
+        return {
+          ok: false,
+          status: 'corrupt',
+          stream_id: this.streamId,
+          total_records: totalValid,
+          head_sequence: head.head_sequence,
+          head_digest: head.head_digest,
+          error: {
+            code: 'E_JOURNAL_CORRUPT',
+            message: `Uncommitted tail size (${uncommittedTailBytes}) exceeds limit`,
+            segment: tailSegment,
+            byte_offset: tailByteOffset,
+          },
+          repairable: false,
+        };
+      }
       return {
         ok: false,
         status: 'incomplete_tail',
@@ -2387,7 +2449,7 @@ export class Journal<T = unknown> {
           byte_offset: tailByteOffset,
         },
         repairable: true,
-        uncommitted_tail_bytes: tailSize - tailByteOffset,
+        uncommitted_tail_bytes: uncommittedTailBytes,
       };
     }
 
@@ -2444,6 +2506,48 @@ export class Journal<T = unknown> {
       const repairedBytes = byteOffset;
       const truncatedBytes = originalBytes - repairedBytes;
 
+      const meta = this.readMeta();
+      if (!meta) {
+        throw new Error('E_JOURNAL_CORRUPT');
+      }
+      const maxRecordBytes = meta.max_record_bytes;
+      const maxSegmentBytes = meta.max_segment_bytes;
+
+      const head = this.readHead();
+      if (!head) {
+        throw new Error('E_JOURNAL_CORRUPT');
+      }
+      const headActiveIndex = parseSegmentIndex(head.active_segment) ?? 1;
+      const targetSegIndex = parseSegmentIndex(segment);
+      const isExtraRotatedSegment = targetSegIndex !== null && targetSegIndex > headActiveIndex;
+
+      const maxAllowedTailBytes = isExtraRotatedSegment
+        ? maxSegmentBytes + maxRecordBytes
+        : maxRecordBytes;
+
+      if (
+        truncatedBytes < 0 ||
+        truncatedBytes > maxAllowedTailBytes ||
+        originalBytes > maxSegmentBytes + maxRecordBytes
+      ) {
+        throw new Error('E_JOURNAL_NON_TAIL_CORRUPTION');
+      }
+
+      // Check all orphaned segments are within limits before initiating any backup copies
+      const allSegments = this.listSegments();
+      for (const seg of allSegments) {
+        const idx = parseSegmentIndex(seg);
+        if (idx !== null && ((targetSegIndex !== null && idx > targetSegIndex) || idx > headActiveIndex)) {
+          const extraPath = path.join(this.segmentsDir(), seg);
+          if (fs.existsSync(extraPath)) {
+            const extraStat = fs.lstatSync(extraPath);
+            if (extraStat.size > maxSegmentBytes + maxRecordBytes) {
+              throw new Error('E_JOURNAL_NON_TAIL_CORRUPTION');
+            }
+          }
+        }
+      }
+
       fs.mkdirSync(this.quarantineDir(), { recursive: true, mode: 0o700 });
       fs.mkdirSync(this.receiptsDir(), { recursive: true, mode: 0o700 });
       const qStat = fs.lstatSync(this.quarantineDir());
@@ -2469,7 +2573,6 @@ export class Journal<T = unknown> {
       fs.copyFileSync(segmentPath, backupFile, fs.constants.COPYFILE_EXCL);
       syncPathToDisk(backupFile);
 
-      const head = this.readHead()!;
       const receiptMaterial = {
         schema_version: 1 as const,
         store_kind: 'journal_repair_receipt' as const,
@@ -2505,9 +2608,6 @@ export class Journal<T = unknown> {
       fs.truncateSync(segmentPath, repairedBytes);
       syncPathToDisk(segmentPath);
 
-      const headActiveIndex = parseSegmentIndex(head.active_segment) ?? 1;
-      const targetSegIndex = parseSegmentIndex(segment);
-
       // If segment is empty and was created beyond head.active_segment, unlink it so no orphaned segment remains
       if (targetSegIndex !== null && targetSegIndex > headActiveIndex && repairedBytes === 0) {
         if (fs.existsSync(segmentPath)) {
@@ -2516,7 +2616,6 @@ export class Journal<T = unknown> {
       }
 
       // If there are segments created after this target segment or after head.active_segment, quarantine and unlink them
-      const allSegments = this.listSegments();
       for (const seg of allSegments) {
         const idx = parseSegmentIndex(seg);
         if (idx !== null && ((targetSegIndex !== null && idx > targetSegIndex) || idx > headActiveIndex)) {

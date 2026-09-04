@@ -1550,6 +1550,53 @@ describe('Journal primitive', () => {
     expect(vHead.status).toBe('corrupt');
     expect(vHead.error?.code).toBe('E_JOURNAL_CORRUPT');
   });
+
+  it('refuses oversized tails as incomplete_tail and prevents copying repair backups', async () => {
+    const streamDir = path.join(tempDir, 'oversized-tail-stream');
+    const journal = new Journal<{ msg: string }>(streamDir, 'oversized-tail', {
+      maxSegmentBytes: 1000,
+      maxRecordBytes: 300,
+    });
+    await journal.append({ kind: 'msg', payload: { msg: 'committed-record' } });
+
+    const segPath = path.join(streamDir, 'segments', '00000001.jsonl');
+    const committedSize = fs.statSync(segPath).size;
+    const quarantineDir = path.join(streamDir, 'quarantine');
+
+    // Case 1: Active segment has an unterminated tail exceeding maxRecordBytes
+    const oversizedUnterminated = 'x'.repeat(500); // 500 > maxRecordBytes (300)
+    fs.appendFileSync(segPath, oversizedUnterminated);
+
+    const v1 = journal.verify();
+    expect(v1.ok).toBe(false);
+    expect(v1.status).toBe('corrupt');
+    expect(v1.repairable).toBe(false);
+    expect(v1.error?.code).toBe('E_JOURNAL_RECORD_TOO_LARGE');
+
+    // Attempting repair must reject with E_JOURNAL_NON_TAIL_CORRUPTION without copying to quarantine
+    await expect(journal.repairIncompleteTail()).rejects.toThrow('E_JOURNAL_NON_TAIL_CORRUPTION');
+    if (fs.existsSync(quarantineDir)) {
+      expect(fs.readdirSync(quarantineDir)).toHaveLength(0);
+    }
+
+    // Reset back to committed records
+    fs.truncateSync(segPath, committedSize);
+
+    // Case 2: Active segment has an invalid JSON tail (with newline) exceeding maxRecordBytes
+    const oversizedInvalidJson = '{"broken": "' + 'y'.repeat(500) + '"}\n';
+    fs.appendFileSync(segPath, oversizedInvalidJson);
+
+    const v2 = journal.verify();
+    expect(v2.ok).toBe(false);
+    expect(v2.status).toBe('corrupt');
+    expect(v2.repairable).toBe(false);
+    expect(v2.error?.code).toBe('E_JOURNAL_RECORD_TOO_LARGE');
+
+    await expect(journal.repairIncompleteTail()).rejects.toThrow('E_JOURNAL_NON_TAIL_CORRUPTION');
+    if (fs.existsSync(quarantineDir)) {
+      expect(fs.readdirSync(quarantineDir)).toHaveLength(0);
+    }
+  });
 });
 
 
