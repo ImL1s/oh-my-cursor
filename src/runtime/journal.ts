@@ -627,6 +627,25 @@ export class Journal<T = unknown> {
     const segments = this.listSegments();
     if (segments.length === 0) {
       if (head.head_sequence === 0) {
+        if (
+          head.total_records !== 0 ||
+          head.total_bytes !== 0 ||
+          (head.active_segment_records !== undefined && head.active_segment_records !== 0)
+        ) {
+          return {
+            ok: false,
+            status: 'corrupt',
+            stream_id: this.streamId,
+            total_records: 0,
+            head_sequence: 0,
+            head_digest: null,
+            error: {
+              code: 'E_JOURNAL_HEAD_MISMATCH',
+              message: 'Head counters nonzero for empty stream',
+            },
+            repairable: false,
+          };
+        }
         return {
           ok: true,
           status: 'valid',
@@ -657,6 +676,9 @@ export class Journal<T = unknown> {
     let firstUncommittedByteOffset: number | null = null;
     let incompleteTailSegment: string | null = null;
     let incompleteTailByteOffset: number | null = null;
+    let scannedTotalBytes = 0;
+    let scannedActiveSegmentRecords = 0;
+    let lastCommittedSegment: string | null = null;
 
     for (let segIdx = 0; segIdx < segments.length; segIdx++) {
       const segName = segments[segIdx]!;
@@ -923,6 +945,14 @@ export class Journal<T = unknown> {
         totalValid++;
         offset += lineLength;
 
+        if (record.sequence <= head.head_sequence) {
+          scannedTotalBytes += lineLength;
+          lastCommittedSegment = segName;
+          if (segName === head.active_segment) {
+            scannedActiveSegmentRecords++;
+          }
+        }
+
         if (record.sequence === head.head_sequence) {
           lastValidCommittedByteOffset = offset;
         }
@@ -950,6 +980,71 @@ export class Journal<T = unknown> {
           repairable: false,
         };
       }
+
+      if (head.total_records !== totalValid) {
+        return {
+          ok: false,
+          status: 'corrupt',
+          stream_id: this.streamId,
+          total_records: totalValid,
+          head_sequence: head.head_sequence,
+          head_digest: head.head_digest,
+          error: {
+            code: 'E_JOURNAL_HEAD_MISMATCH',
+            message: `Head total_records mismatch: head has ${head.total_records}, scanned ${totalValid}`,
+          },
+          repairable: false,
+        };
+      }
+
+      if (head.total_bytes !== scannedTotalBytes) {
+        return {
+          ok: false,
+          status: 'corrupt',
+          stream_id: this.streamId,
+          total_records: totalValid,
+          head_sequence: head.head_sequence,
+          head_digest: head.head_digest,
+          error: {
+            code: 'E_JOURNAL_HEAD_MISMATCH',
+            message: `Head total_bytes mismatch: head has ${head.total_bytes}, scanned ${scannedTotalBytes}`,
+          },
+          repairable: false,
+        };
+      }
+
+      if (head.head_sequence > 0 && lastCommittedSegment !== null && head.active_segment !== lastCommittedSegment) {
+        return {
+          ok: false,
+          status: 'corrupt',
+          stream_id: this.streamId,
+          total_records: totalValid,
+          head_sequence: head.head_sequence,
+          head_digest: head.head_digest,
+          error: {
+            code: 'E_JOURNAL_HEAD_MISMATCH',
+            message: `Head active_segment mismatch: head has ${head.active_segment}, scanned last committed segment is ${lastCommittedSegment}`,
+          },
+          repairable: false,
+        };
+      }
+
+      if (head.active_segment_records !== undefined && head.active_segment_records !== scannedActiveSegmentRecords) {
+        return {
+          ok: false,
+          status: 'corrupt',
+          stream_id: this.streamId,
+          total_records: totalValid,
+          head_sequence: head.head_sequence,
+          head_digest: head.head_digest,
+          error: {
+            code: 'E_JOURNAL_HEAD_MISMATCH',
+            message: `Head active_segment_records mismatch: head has ${head.active_segment_records}, scanned ${scannedActiveSegmentRecords}`,
+          },
+          repairable: false,
+        };
+      }
+
       return {
         ok: true,
         status: 'valid',

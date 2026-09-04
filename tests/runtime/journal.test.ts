@@ -471,4 +471,44 @@ describe('Journal primitive', () => {
     expect(v.repairable).toBe(false);
     await expect(journal.repairIncompleteTail()).rejects.toThrow('E_JOURNAL_NON_TAIL_CORRUPTION');
   });
+
+  it('detects stale or corrupt head counters during verify and reports corrupt status', async () => {
+    const streamDir = path.join(tempDir, 'corrupt-counters');
+    const journal = new Journal<{ x: number }>(streamDir, 'counters');
+
+    await journal.append({ kind: 'x', payload: { x: 1 } });
+    await journal.append({ kind: 'x', payload: { x: 2 } });
+    expect(journal.verify().ok).toBe(true);
+
+    const headFile = path.join(streamDir, 'head.json');
+    const validHead = JSON.parse(fs.readFileSync(headFile, 'utf8'));
+
+    // 1. Lower total_records
+    fs.writeFileSync(headFile, JSON.stringify({ ...validHead, total_records: 1 }));
+    let v = journal.verify();
+    expect(v.ok).toBe(false);
+    expect(v.status).toBe('corrupt');
+    expect(v.error?.code).toBe('E_JOURNAL_HEAD_MISMATCH');
+    expect(v.error?.message).toContain('total_records mismatch');
+
+    // 2. Corrupt active_segment_records
+    fs.writeFileSync(headFile, JSON.stringify({ ...validHead, active_segment_records: 0 }));
+    v = journal.verify();
+    expect(v.ok).toBe(false);
+    expect(v.status).toBe('corrupt');
+    expect(v.error?.code).toBe('E_JOURNAL_HEAD_MISMATCH');
+    expect(v.error?.message).toContain('active_segment_records mismatch');
+
+    // 3. Corrupt total_bytes
+    fs.writeFileSync(headFile, JSON.stringify({ ...validHead, total_bytes: 9999 }));
+    v = journal.verify();
+    expect(v.ok).toBe(false);
+    expect(v.status).toBe('corrupt');
+    expect(v.error?.code).toBe('E_JOURNAL_HEAD_MISMATCH');
+    expect(v.error?.message).toContain('total_bytes mismatch');
+
+    // Restoring valid head restores valid status
+    fs.writeFileSync(headFile, JSON.stringify(validHead));
+    expect(journal.verify().ok).toBe(true);
+  });
 });

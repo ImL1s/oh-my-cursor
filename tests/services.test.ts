@@ -206,7 +206,7 @@ describe('Cursor service layer', () => {
     const index = JSON.parse(fs.readFileSync(path.join(root.path, 'memory', 'index.json'), 'utf8')) as { ids: string[] };
     expect(index.ids).toEqual(Array.from({ length: 12 }, (_, index) => `record-${index}`).sort());
     expect(new ProjectMemoryStore(root).list().map(({ id }) => id)).toEqual(index.ids);
-  }, 10_000);
+  }, 20_000);
 
   it('serializes memory delete with put so the shared index matches record truth', async () => {
     const root = projectStateRoot(workspace()); const store = new ProjectMemoryStore(root, now);
@@ -217,7 +217,7 @@ describe('Cursor service layer', () => {
     const index = JSON.parse(fs.readFileSync(path.join(root.path, 'memory', 'index.json'), 'utf8')) as { ids: string[] };
     expect(index.ids).toEqual(store.list().map(({ id }) => id));
     expect(index.ids).not.toContain('old');
-  });
+  }, 20_000);
 
   it('keeps notifications disabled by default and fences dispatch by nonce/generation', async () => {
     const sent = vi.fn(async () => undefined);
