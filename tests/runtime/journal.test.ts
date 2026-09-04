@@ -868,4 +868,35 @@ describe('Journal primitive', () => {
     const r2 = await journal.append({ kind: 'msg', payload: { msg: 'second' } });
     expect(r2.sequence).toBe(2);
   });
+
+  it('refuses to reinitialize a journal whose head is missing when artifacts exist, and reports corrupt in verify', async () => {
+    const streamDir = path.join(tempDir, 'missing-head-stream');
+    const journal = new Journal<{ msg: string }>(streamDir, 'missing-head');
+
+    await journal.append({ kind: 'msg', payload: { msg: 'first' } });
+    expect(journal.verify().ok).toBe(true);
+
+    const headPath = path.join(streamDir, 'head.json');
+    const metaPath = path.join(streamDir, 'meta.json');
+    const originalMeta = fs.readFileSync(metaPath, 'utf8');
+
+    // Simulate catastrophic crash/corruption where head.json is removed
+    fs.rmSync(headPath);
+
+    // verify() should fail closed with status: 'corrupt' and E_JOURNAL_CORRUPT
+    const v = journal.verify();
+    expect(v.ok).toBe(false);
+    expect(v.status).toBe('corrupt');
+    expect(v.error?.code).toBe('E_JOURNAL_CORRUPT');
+    expect(v.error?.message).toContain('head.json is missing');
+
+    // init() MUST throw E_JOURNAL_CORRUPT and refuse to overwrite existing stream
+    expect(() => journal.init()).toThrow('E_JOURNAL_CORRUPT');
+
+    // Ensure meta.json was not modified/overwritten
+    expect(fs.readFileSync(metaPath, 'utf8')).toBe(originalMeta);
+    // Ensure head.json was NOT recreated with sequence 0
+    expect(fs.existsSync(headPath)).toBe(false);
+  });
 });
+

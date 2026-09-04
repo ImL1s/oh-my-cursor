@@ -343,4 +343,59 @@ describe('team mailbox primitives', () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]?.body).toBe(largeBody);
   });
+
+  it('migrates legacy JSON mailbox to journal asynchronously and handles concurrent access', async () => {
+    const { root } = workspace();
+    initializeTeamState(root, {
+      teamName: 'legacy-mail',
+      task: 'migrate legacy messages',
+      workers: [{ name: 'one', owned_paths: ['a'] }, { name: 'two', owned_paths: ['b'] }],
+    });
+
+    // Write a legacy JSON mailbox file with multiple messages before any journal exists
+    const legacyFile = teamMailboxPath(root, 'legacy-mail', 'two');
+    const legacyData = {
+      worker: 'two',
+      messages: [
+        {
+          message_id: 'msg-legacy-1',
+          from_worker: 'one',
+          to_worker: 'two',
+          body: 'legacy unread message',
+          created_at: '2026-08-01T10:00:00.000Z',
+        },
+        {
+          message_id: 'msg-legacy-2',
+          from_worker: 'one',
+          to_worker: 'two',
+          body: 'legacy delivered message',
+          created_at: '2026-08-01T10:05:00.000Z',
+          delivered_at: '2026-08-01T10:06:00.000Z',
+        },
+      ],
+    };
+    fs.writeFileSync(legacyFile, JSON.stringify(legacyData, null, 2), 'utf8');
+
+    // Concurrent reads should both await migration cleanly and observe consistent state
+    const [read1, read2] = await Promise.all([
+      listMailboxMessages(root, 'legacy-mail', 'two', { includeDelivered: true }),
+      listMailboxMessages(root, 'legacy-mail', 'two', { includeDelivered: true }),
+    ]);
+
+    expect(read1).toHaveLength(2);
+    expect(read2).toHaveLength(2);
+    expect(read1[0]?.message_id).toBe('msg-legacy-1');
+    expect(read1[0]?.delivered_at).toBeUndefined();
+    expect(read1[1]?.message_id).toBe('msg-legacy-2');
+    expect(read1[1]?.delivered_at).toBe('2026-08-01T10:06:00.000Z');
+
+    // Send a new message, which should append after the migrated events
+    const newMsg = await sendDirectMessage(root, 'legacy-mail', 'one', 'two', 'new message after migration');
+    expect(newMsg.body).toBe('new message after migration');
+
+    const all = await listMailboxMessages(root, 'legacy-mail', 'two', { includeDelivered: true });
+    expect(all).toHaveLength(3);
+    expect(all[2]?.message_id).toBe(newMsg.message_id);
+  });
 });
+

@@ -73,24 +73,54 @@ function mailboxJournal(root: StateRoot, teamName: string, workerName: string, n
   });
 }
 
-function migrateLegacyMailboxIfNeeded(root: StateRoot, teamName: string, workerName: string, journal: Journal<TeamMailboxEvent>): void {
-  const file = teamMailboxPath(root, teamName, workerName);
-  if (!fs.existsSync(file)) return;
-  const legacy = readMailboxUnlocked(root, teamName, workerName);
-  if (legacy.messages.length === 0) return;
-  const head = journal.readHead();
-  if (head !== null && head.head_sequence > 0) return;
+const migrationPromises = new Map<string, Promise<void>>();
 
-  journal.init();
-  for (const message of legacy.messages) {
-    journal.append({ kind: 'send', payload: { kind: 'send', message }, at: message.created_at });
-    if (message.delivered_at !== undefined) {
-      journal.append({
-        kind: 'delivered',
-        payload: { kind: 'delivered', message_id: message.message_id, delivered_at: message.delivered_at },
-        at: message.delivered_at,
-      });
+async function migrateLegacyMailboxIfNeeded(
+  root: StateRoot,
+  teamName: string,
+  workerName: string,
+  journal: Journal<TeamMailboxEvent>,
+): Promise<void> {
+  const migrationKey = `${root.path}:${teamName}:${workerName}`;
+  const existingPromise = migrationPromises.get(migrationKey);
+  if (existingPromise !== undefined) {
+    await existingPromise;
+    return;
+  }
+
+  const promise = (async () => {
+    const file = teamMailboxPath(root, teamName, workerName);
+    if (!fs.existsSync(file)) return;
+    const legacy = readMailboxUnlocked(root, teamName, workerName);
+    if (legacy.messages.length === 0) return;
+    const head = journal.readHead();
+    if (head !== null && head.head_sequence > 0) return;
+
+    for (const message of legacy.messages) {
+      const currentMessages = journal.readHead()?.head_sequence ? readMessagesFromJournal(journal) : [];
+      const exists = currentMessages.some((m) => m.message_id === message.message_id);
+      if (!exists) {
+        await journal.append({ kind: 'send', payload: { kind: 'send', message }, at: message.created_at });
+      }
+      if (message.delivered_at !== undefined) {
+        const afterMessages = readMessagesFromJournal(journal);
+        const deliveredMsg = afterMessages.find((m) => m.message_id === message.message_id);
+        if (deliveredMsg && deliveredMsg.delivered_at !== message.delivered_at) {
+          await journal.append({
+            kind: 'delivered',
+            payload: { kind: 'delivered', message_id: message.message_id, delivered_at: message.delivered_at },
+            at: message.delivered_at,
+          });
+        }
+      }
     }
+  })();
+
+  migrationPromises.set(migrationKey, promise);
+  try {
+    await promise;
+  } finally {
+    migrationPromises.delete(migrationKey);
   }
 }
 
@@ -119,7 +149,7 @@ export async function listMailboxMessages(
 ): Promise<readonly TeamMailboxMessage[]> {
   const legacy = readMailboxUnlocked(root, teamName, workerName);
   const journal = mailboxJournal(root, teamName, workerName, () => new Date());
-  migrateLegacyMailboxIfNeeded(root, teamName, workerName, journal);
+  await migrateLegacyMailboxIfNeeded(root, teamName, workerName, journal);
 
   const head = journal.readHead();
   let messages: TeamMailboxMessage[];
@@ -158,7 +188,7 @@ export async function sendDirectMessage(
   return withDirectoryLock(teamMailboxPath(root, teamName, to), async () => {
     readMailboxUnlocked(root, teamName, to);
     const journal = mailboxJournal(root, teamName, to, now);
-    migrateLegacyMailboxIfNeeded(root, teamName, to, journal);
+    await migrateLegacyMailboxIfNeeded(root, teamName, to, journal);
 
     const existingMessages = journal.readHead()?.head_sequence
       ? readMessagesFromJournal(journal)
@@ -203,7 +233,7 @@ export async function markMessageDelivered(
   return withDirectoryLock(teamMailboxPath(root, teamName, worker), async () => {
     readMailboxUnlocked(root, teamName, worker);
     const journal = mailboxJournal(root, teamName, worker, now);
-    migrateLegacyMailboxIfNeeded(root, teamName, worker, journal);
+    await migrateLegacyMailboxIfNeeded(root, teamName, worker, journal);
 
     const messages = journal.readHead()?.head_sequence
       ? readMessagesFromJournal(journal)

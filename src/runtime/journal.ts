@@ -428,6 +428,25 @@ export class Journal<T = unknown> {
     }
   }
 
+  private hasArtifacts(): boolean {
+    if (fs.existsSync(this.metaPath()) || fs.existsSync(this.headPath())) {
+      return true;
+    }
+    const segmentsDir = this.segmentsDir();
+    if (fs.existsSync(segmentsDir) && fs.readdirSync(segmentsDir).length > 0) {
+      return true;
+    }
+    const receiptsDir = this.receiptsDir();
+    if (fs.existsSync(receiptsDir) && fs.readdirSync(receiptsDir).length > 0) {
+      return true;
+    }
+    const quarantineDir = this.quarantineDir();
+    if (fs.existsSync(quarantineDir) && fs.readdirSync(quarantineDir).length > 0) {
+      return true;
+    }
+    return false;
+  }
+
   init(): JournalHead {
     return withDirectoryLockSync(this.streamDir, () => this.initUnlocked());
   }
@@ -437,6 +456,10 @@ export class Journal<T = unknown> {
     if (existingHead !== null) {
       this.resolveLimits();
       return existingHead;
+    }
+
+    if (this.hasArtifacts()) {
+      throw new Error('E_JOURNAL_CORRUPT');
     }
 
     const now = this.now();
@@ -869,6 +892,18 @@ export class Journal<T = unknown> {
     try {
       const read = this.readMeta();
       if (read === null) {
+        if (this.hasArtifacts()) {
+          return {
+            ok: false,
+            status: 'corrupt',
+            stream_id: this.streamId,
+            total_records: 0,
+            head_sequence: 0,
+            head_digest: null,
+            error: { code: 'E_JOURNAL_CORRUPT', message: 'meta.json is missing from nonempty stream' },
+            repairable: false,
+          };
+        }
         return {
           ok: false,
           status: 'absent',
@@ -916,12 +951,12 @@ export class Journal<T = unknown> {
       if (read === null) {
         return {
           ok: false,
-          status: 'absent',
+          status: 'corrupt',
           stream_id: this.streamId,
           total_records: 0,
           head_sequence: 0,
           head_digest: null,
-          error: { code: 'E_JOURNAL_ABSENT', message: 'head.json is missing' },
+          error: { code: 'E_JOURNAL_CORRUPT', message: 'head.json is missing' },
           repairable: false,
         };
       }
