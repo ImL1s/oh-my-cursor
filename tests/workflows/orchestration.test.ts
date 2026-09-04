@@ -327,4 +327,31 @@ describe('workflow orchestration', () => {
     const hydrated = persistence.read(plan.run_id);
     expect(hydrated.events).toHaveLength(1);
   });
+
+  it('supports workflow task receipt with large stdout/stderr beyond 64 KiB without E_JOURNAL_RECORD_TOO_LARGE', async () => {
+    const persistence = store();
+    const plan = planWorkflow(new WorkflowRegistry().register(definition()), 'large-receipt-run', 'large-receipt');
+    const record = await persistence.create(plan);
+
+    // Create a task receipt with ~256 KiB stdout (far beyond 64 KiB default journal limit)
+    const largeStdout = 'A'.repeat(256 * 1024);
+    const receiptEvent = appendWorkflowEvent([], plan.run_id, 'task_receipt', {
+      task_id: '1-plan',
+      attempt: 1,
+      status: 'passed',
+      stdout: largeStdout,
+      stderr: '',
+    });
+
+    // Appending this large event must succeed without E_JOURNAL_RECORD_TOO_LARGE
+    const updated = await persistence.append(plan.run_id, record.revision, receiptEvent);
+    expect(updated.events).toHaveLength(1);
+    expect((updated.events[0]?.payload as any).stdout).toBe(largeStdout);
+
+    // Subsequent read correctly hydrates the large event from the journal
+    const hydrated = persistence.read(plan.run_id);
+    expect(hydrated.events).toHaveLength(1);
+    expect((hydrated.events[0]?.payload as any).stdout).toBe(largeStdout);
+  });
 });
+

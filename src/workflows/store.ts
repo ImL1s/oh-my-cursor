@@ -14,6 +14,9 @@ import {
 import { withinStateRoot, type StateRoot } from '../runtime/state-root.js';
 import { digestObject, eventDigest, validateWorkflowDefinition, type WorkflowDefinition, type WorkflowJournalEvent, type WorkflowPlan } from './schema.js';
 
+export const WORKFLOW_JOURNAL_MAX_RECORD_BYTES = 4 * 1024 * 1024; // 4 MiB provides ample envelope headroom for 1 MiB stdout + 1 MiB stderr + receipt metadata
+export const WORKFLOW_JOURNAL_MAX_SEGMENT_BYTES = 16 * 1024 * 1024; // 16 MiB per segment
+
 /** Current durable workflow run schema. V1 is read-only migration input. */
 export interface WorkflowRunRecord {
   readonly schema_version: 2;
@@ -207,7 +210,11 @@ export class WorkflowPersistenceStore {
   }
 
   private eventJournal(runId: string): Journal<WorkflowJournalEntry> {
-    return new Journal<WorkflowJournalEntry>(this.journalDir(runId), `workflows/${safe(runId, 'run_id')}`, { now: this.now });
+    return new Journal<WorkflowJournalEntry>(this.journalDir(runId), `workflows/${safe(runId, 'run_id')}`, {
+      now: this.now,
+      maxRecordBytes: WORKFLOW_JOURNAL_MAX_RECORD_BYTES,
+      maxSegmentBytes: WORKFLOW_JOURNAL_MAX_SEGMENT_BYTES,
+    });
   }
 
   private async migrateLegacyEvents(current: WorkflowRunRecord, journal: Journal<WorkflowJournalEntry>): Promise<void> {
@@ -215,9 +222,6 @@ export class WorkflowPersistenceStore {
       const head = journal.readHead();
       const startIndex = head !== null ? head.head_sequence : 0;
       if (startIndex < current.events.length) {
-        if (head === null) {
-          journal.init();
-        }
         for (let i = startIndex; i < current.events.length; i++) {
           const event = current.events[i]!;
           await journal.append({

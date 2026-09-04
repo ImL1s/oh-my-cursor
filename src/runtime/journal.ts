@@ -518,6 +518,10 @@ export class Journal<T = unknown> {
       const limits = this.resolveLimits();
       this.assertNoIncompleteTail(head, limits);
 
+      if (head.total_records !== head.head_sequence) {
+        throw new Error('E_JOURNAL_CORRUPT');
+      }
+
       if (expectedHead !== undefined) {
         if (head.head_sequence !== expectedHead.sequence || head.head_digest !== expectedHead.digest) {
           throw new Error('E_JOURNAL_HEAD_MISMATCH');

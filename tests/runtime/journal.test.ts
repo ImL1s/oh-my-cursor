@@ -936,6 +936,32 @@ describe('Journal primitive', () => {
     const r2 = await journal.append({ kind: 'msg', payload: { msg: 'second' } });
     expect(r2.sequence).toBe(2);
   });
+
+  it('rejects append with E_JOURNAL_CORRUPT when head.total_records mismatches head.head_sequence', async () => {
+    const streamDir = path.join(tempDir, 'corrupted-head-counter');
+    const journal = new Journal<{ msg: string }>(streamDir, 'corrupted-counter', {
+      maxStreamRecords: 2,
+    });
+
+    await journal.append({ kind: 'msg', payload: { msg: 'first' } });
+    await journal.append({ kind: 'msg', payload: { msg: 'second' } });
+
+    // Stream has reached maxStreamRecords (2)
+    // Tamper with head.json to lower total_records to 0 while keeping head_sequence at 2
+    const headPath = path.join(streamDir, 'head.json');
+    const head = JSON.parse(fs.readFileSync(headPath, 'utf8'));
+    fs.writeFileSync(headPath, JSON.stringify({ ...head, total_records: 0 }), 'utf8');
+
+    // append() must NOT trust the corrupted total_records to permit an append beyond maxStreamRecords
+    // It must reject with E_JOURNAL_CORRUPT
+    await expect(journal.append({ kind: 'msg', payload: { msg: 'third' } }))
+      .rejects.toThrow('E_JOURNAL_CORRUPT');
+
+    // Verify head.json was not rewritten or corrupted further
+    const afterHead = JSON.parse(fs.readFileSync(headPath, 'utf8'));
+    expect(afterHead.head_sequence).toBe(2);
+  });
 });
+
 
 
