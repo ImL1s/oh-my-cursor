@@ -68,7 +68,7 @@ describe('Workflow resume and durable retries', () => {
   it('max_attempts exhaustion', async () => {
     const adapter = new CursorAgentAdapter('cursor-agent', async () => ({ code: 1, stdout: 'fail', stderr: '' }));
     const registry = new WorkflowRegistry();
-    const definition = registry.register(w
+    const definition = registry.register({
       schema_version: 1,
       name: 'fail-workflow',
       version: '1.0.0',
