@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { installOrUpdate, readCurrentInstall, uninstall } from './lifecycle.js';
 import { runSetupDoctor } from './doctor.js';
 import { verifySha256Sums } from './digest.js';
+import { extractReleaseArchive } from './archive.js';
 
 function option(argv: readonly string[], name: string): string | undefined {
   const index = argv.indexOf(name);
@@ -18,26 +19,7 @@ function required(argv: readonly string[], name: string): string {
 }
 
 function extractArchive(archive: string, checksums: string): { root: string; cleanup: () => void } {
-  verifySha256Sums(archive, checksums);
-  const listed = spawnSync('tar', ['-tzf', archive], { encoding: 'utf8', timeout: 30_000 });
-  if (listed.status !== 0) throw new Error('E_RELEASE_ARCHIVE_LIST_FAILED');
-  const entries = listed.stdout.split(/\r?\n/).filter(Boolean);
-  if (entries.length === 0 || entries.some((entry) => path.isAbsolute(entry) || entry.split('/').includes('..'))) {
-    throw new Error('E_RELEASE_ARCHIVE_UNSAFE');
-  }
-  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-release-'));
-  const extracted = spawnSync('tar', ['-xzf', archive, '-C', temporary], { encoding: 'utf8', timeout: 60_000 });
-  if (extracted.status !== 0) {
-    fs.rmSync(temporary, { recursive: true, force: true });
-    throw new Error('E_RELEASE_ARCHIVE_EXTRACT_FAILED');
-  }
-  const candidates = [temporary, ...fs.readdirSync(temporary).map((name) => path.join(temporary, name))]
-    .filter((candidate) => fs.existsSync(path.join(candidate, 'package.json')));
-  if (candidates.length !== 1) {
-    fs.rmSync(temporary, { recursive: true, force: true });
-    throw new Error('E_RELEASE_ARCHIVE_ROOT_INVALID');
-  }
-  return { root: candidates[0]!, cleanup: () => fs.rmSync(temporary, { recursive: true, force: true }) };
+  return extractReleaseArchive(path.resolve(archive), path.resolve(checksums));
 }
 
 async function main(argv: readonly string[]): Promise<number> {
