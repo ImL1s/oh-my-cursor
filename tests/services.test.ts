@@ -254,6 +254,43 @@ describe('Cursor service layer', () => {
     await expect(wiki.render('run-1', 0, 'stale', [])).rejects.toThrow('E_GENERATION_CONFLICT');
   });
 
+  it('supports tracker record with detail near 64 KiB without E_JOURNAL_RECORD_TOO_LARGE', async () => {
+    const root = projectStateRoot(workspace());
+    const tracker = new LifecycleTracker(root, now);
+    await tracker.record('run-large', 'created');
+
+    // Create a detail object with ~60 KiB of data across entries
+    const detail: Record<string, string> = {};
+    for (let i = 0; i < 30; i++) {
+      detail[`field_${i}`] = 'y'.repeat(2000);
+    }
+    const event = await tracker.record('run-large', 'started', detail);
+    expect(event.phase).toBe('started');
+
+    const history = tracker.history('run-large');
+    expect(history).toHaveLength(2);
+    expect((history[1]?.detail as any)?.field_0).toBe('y'.repeat(2000));
+  });
+
+  it('does not fail tracker.record when legacy jsonl mirror encounters write failure', async () => {
+    const root = projectStateRoot(workspace());
+    const tracker = new LifecycleTracker(root, now);
+    await tracker.record('run-mirror-fail', 'created');
+
+    const legacyFile = path.join(root.path, 'tracker', 'run-mirror-fail.jsonl');
+    // Replace legacy jsonl file with directory to cause appendFileSync to fail
+    fs.unlinkSync(legacyFile);
+    fs.mkdirSync(legacyFile);
+
+    // Authoritative journal append should still succeed
+    const event = await tracker.record('run-mirror-fail', 'started', { ok: true });
+    expect(event.phase).toBe('started');
+
+    const history = tracker.history('run-mirror-fail');
+    expect(history).toHaveLength(2);
+    expect(history[1]?.phase).toBe('started');
+  });
+
   it('offers only fixed MCP read/proposal tools and structurally refuses authority and shell fields', async () => {
     const root = projectStateRoot(workspace()); const memory = new ProjectMemoryStore(root, now);
     await memory.put('known fact', {}, 'fact');

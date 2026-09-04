@@ -12,12 +12,19 @@ const transitions: Record<LifecyclePhase, readonly LifecyclePhase[]> = {
 };
 function safe(value: string): string { if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value)) throw new Error('E_TRACKER_SUBJECT_INVALID'); return value; }
 
+export const TRACKER_JOURNAL_MAX_RECORD_BYTES = 128 * 1024; // 128 KiB covers up to 64 KiB detail payload + envelope overhead
+export const TRACKER_JOURNAL_MAX_SEGMENT_BYTES = 4 * 1024 * 1024; // 4 MiB
+
 export class LifecycleTracker {
   constructor(private readonly root: StateRoot, private readonly now: () => Date = () => new Date()) {}
   private file(id: string): string { return withinStateRoot(this.root, 'tracker', `${safe(id)}.jsonl`); }
   private journalDir(id: string): string { return withinStateRoot(this.root, 'tracker', 'journals', safe(id)); }
   private journal(id: string): Journal<LifecycleEvent> {
-    return new Journal<LifecycleEvent>(this.journalDir(id), `tracker/${safe(id)}`, { now: this.now });
+    return new Journal<LifecycleEvent>(this.journalDir(id), `tracker/${safe(id)}`, {
+      now: this.now,
+      maxRecordBytes: TRACKER_JOURNAL_MAX_RECORD_BYTES,
+      maxSegmentBytes: TRACKER_JOURNAL_MAX_SEGMENT_BYTES,
+    });
   }
 
   private migrateLegacy(id: string, journal: Journal<LifecycleEvent>): void {
@@ -75,9 +82,13 @@ export class LifecycleTracker {
 
       await journal.append({ kind: phase, payload: event, at: event.at });
 
-      fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-      fs.appendFileSync(file, `${JSON.stringify(event)}\n`, { mode: 0o600 });
-      fs.chmodSync(file, 0o600);
+      try {
+        fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+        fs.appendFileSync(file, `${JSON.stringify(event)}\n`, { mode: 0o600 });
+        fs.chmodSync(file, 0o600);
+      } catch {
+        // Non-authoritative legacy mirror write is best-effort after authoritative journal append
+      }
       return event;
     });
   }
