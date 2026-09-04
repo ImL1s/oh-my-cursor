@@ -112,7 +112,7 @@ export const COMMAND_SCHEMAS: Readonly<Record<string, CommandSchema>> = Object.f
   version: { stateAccess: 'none' },
   setup: { stateAccess: 'none', options: [{ name: '--source', kind: 'string' }, { name: '--state-root', kind: 'string' }, { name: '--init-project-state', kind: 'flag', stateAccess: 'write-ensure' }] },
   update: { stateAccess: 'none', options: [{ name: '--source', kind: 'string' }, { name: '--state-root', kind: 'string' }, { name: '--init-project-state', kind: 'flag', stateAccess: 'write-ensure' }] },
-  doctor: { stateAccess: 'none', options: [{ name: '--repair-owner', kind: 'flag', stateAccess: 'write-existing' }] },
+  doctor: { stateAccess: 'none', options: [{ name: '--repair-owner', kind: 'flag', stateAccess: 'write-existing' }, { name: '--repair-journals', kind: 'flag', stateAccess: 'write-existing' }] },
   uninstall: {
     stateAccess: 'none',
     options: [

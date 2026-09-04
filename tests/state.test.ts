@@ -583,4 +583,40 @@ describe('CLI integration for cancellation and state transition invariants', () 
     expect(h1.stderr).toEqual([]);
     expect(h2.stderr).toEqual([]);
   });
+
+  it('migrates legacy events.jsonl into journal and supports readEvents', async () => {
+    const root = projectStateRoot(workspace());
+    const authority = createCliMutationAuthority(root);
+    const store = new RunStateStore(root, authority);
+    await store.create('run-migrate', 'test migration');
+
+    // Manually create legacy events.jsonl
+    const runDir = path.join(root.path, 'runs', 'run-migrate');
+    const legacyEvent = {
+      store_kind: 'run_event',
+      schema_version: 1,
+      repository_id: 'OMCU',
+      run_id: 'run-migrate',
+      sequence: 1,
+      type: 'legacy_init',
+      at: '2026-07-23T01:00:00.000Z',
+      payload: { old: true },
+      mutation: {
+        source: 'omcu-cli',
+        owner_token_sha256: 'a'.repeat(64),
+        writer_pid: process.pid,
+        mutated_at: '2026-07-23T01:00:00.000Z',
+      },
+    };
+    fs.writeFileSync(path.join(runDir, 'events.jsonl'), `${JSON.stringify(legacyEvent)}\n`);
+
+    // Appending a new event should migrate legacy event and append new event at seq 2
+    const ev2 = await store.appendEvent('run-migrate', 'step2', { count: 2 });
+    expect(ev2.sequence).toBe(2);
+
+    const allEvents = store.readEvents('run-migrate');
+    expect(allEvents).toHaveLength(2);
+    expect(allEvents[0]?.type).toBe('legacy_init');
+    expect(allEvents[1]?.type).toBe('step2');
+  });
 });

@@ -1,11 +1,13 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { atomicWriteJson, withDirectoryLock } from '../runtime/atomic.js';
+import { withDirectoryLock } from '../runtime/atomic.js';
+import { Journal } from '../runtime/journal.js';
 import type { StateRoot } from '../runtime/state-root.js';
 import {
   assertSafeWorkerName,
   LEADER_MAILBOX,
   readTeamConfig,
+  teamMailboxJournalDir,
   teamMailboxPath,
 } from './state-root.js';
 
@@ -23,6 +25,10 @@ export interface TeamMailbox {
   readonly worker: string;
   readonly messages: readonly TeamMailboxMessage[];
 }
+
+export type TeamMailboxEvent =
+  | { readonly kind: 'send'; readonly message: TeamMailboxMessage }
+  | { readonly kind: 'delivered'; readonly message_id: string; readonly delivered_at: string };
 
 function assertMailboxMessage(raw: unknown): TeamMailboxMessage {
   if (raw === null || typeof raw !== 'object') throw new Error('E_TEAM_MAILBOX_CORRUPT');
@@ -55,8 +61,47 @@ function readMailboxUnlocked(root: StateRoot, teamName: string, workerName: stri
   }
 }
 
-function writeMailboxUnlocked(root: StateRoot, teamName: string, mailbox: TeamMailbox): void {
-  atomicWriteJson(teamMailboxPath(root, teamName, mailbox.worker), mailbox);
+function mailboxJournal(root: StateRoot, teamName: string, workerName: string, now: () => Date): Journal<TeamMailboxEvent> {
+  const dir = teamMailboxJournalDir(root, teamName, workerName);
+  return new Journal<TeamMailboxEvent>(dir, `team/${teamName}/mailbox/${workerName}`, { now });
+}
+
+function migrateLegacyMailboxIfNeeded(root: StateRoot, teamName: string, workerName: string, journal: Journal<TeamMailboxEvent>): void {
+  const file = teamMailboxPath(root, teamName, workerName);
+  if (!fs.existsSync(file)) return;
+  const legacy = readMailboxUnlocked(root, teamName, workerName);
+  if (legacy.messages.length === 0) return;
+  const head = journal.readHead();
+  if (head !== null && head.head_sequence > 0) return;
+
+  journal.init();
+  for (const message of legacy.messages) {
+    journal.append({ kind: 'send', payload: { kind: 'send', message }, at: message.created_at });
+    if (message.delivered_at !== undefined) {
+      journal.append({
+        kind: 'delivered',
+        payload: { kind: 'delivered', message_id: message.message_id, delivered_at: message.delivered_at },
+        at: message.delivered_at,
+      });
+    }
+  }
+}
+
+function readMessagesFromJournal(journal: Journal<TeamMailboxEvent>): TeamMailboxMessage[] {
+  const records = journal.readRange();
+  const messagesMap = new Map<string, TeamMailboxMessage>();
+  for (const rec of records) {
+    const event = rec.payload;
+    if (event.kind === 'send') {
+      messagesMap.set(event.message.message_id, event.message);
+    } else if (event.kind === 'delivered') {
+      const existing = messagesMap.get(event.message_id);
+      if (existing) {
+        messagesMap.set(event.message_id, { ...existing, delivered_at: event.delivered_at });
+      }
+    }
+  }
+  return Array.from(messagesMap.values());
 }
 
 export async function listMailboxMessages(
@@ -65,9 +110,20 @@ export async function listMailboxMessages(
   workerName: string,
   options: { readonly includeDelivered?: boolean } = {},
 ): Promise<readonly TeamMailboxMessage[]> {
-  const mailbox = readMailboxUnlocked(root, teamName, workerName);
-  if (options.includeDelivered === false) return mailbox.messages.filter((message) => message.delivered_at === undefined);
-  return mailbox.messages;
+  const legacy = readMailboxUnlocked(root, teamName, workerName);
+  const journal = mailboxJournal(root, teamName, workerName, () => new Date());
+  migrateLegacyMailboxIfNeeded(root, teamName, workerName, journal);
+
+  const head = journal.readHead();
+  let messages: TeamMailboxMessage[];
+  if (head !== null && head.head_sequence > 0) {
+    messages = readMessagesFromJournal(journal);
+  } else {
+    messages = [...legacy.messages];
+  }
+
+  if (options.includeDelivered === false) return messages.filter((message) => message.delivered_at === undefined);
+  return messages;
 }
 
 export async function sendDirectMessage(
@@ -92,9 +148,16 @@ export async function sendDirectMessage(
     throw new Error('E_TEAM_WORKER_NOT_FOUND');
   }
 
-  return withDirectoryLock(teamMailboxPath(root, teamName, to), () => {
-    const mailbox = readMailboxUnlocked(root, teamName, to);
-    const existing = mailbox.messages.find((candidate) =>
+  return withDirectoryLock(teamMailboxPath(root, teamName, to), async () => {
+    readMailboxUnlocked(root, teamName, to);
+    const journal = mailboxJournal(root, teamName, to, now);
+    migrateLegacyMailboxIfNeeded(root, teamName, to, journal);
+
+    const existingMessages = journal.readHead()?.head_sequence
+      ? readMessagesFromJournal(journal)
+      : readMailboxUnlocked(root, teamName, to).messages;
+
+    const existing = existingMessages.find((candidate) =>
       candidate.from_worker === from
       && candidate.to_worker === to
       && candidate.body === trimmed
@@ -108,7 +171,13 @@ export async function sendDirectMessage(
       body: trimmed,
       created_at: now().toISOString(),
     };
-    writeMailboxUnlocked(root, teamName, { worker: to, messages: [...mailbox.messages, message] });
+
+    await journal.append({
+      kind: 'send',
+      payload: { kind: 'send', message },
+      at: message.created_at,
+    });
+
     return message;
   });
 }
@@ -124,16 +193,26 @@ export async function markMessageDelivered(
   const id = messageId.trim();
   if (id === '') throw new Error('E_TEAM_MESSAGE_ID_REQUIRED');
 
-  return withDirectoryLock(teamMailboxPath(root, teamName, worker), () => {
-    const mailbox = readMailboxUnlocked(root, teamName, worker);
-    const index = mailbox.messages.findIndex((message) => message.message_id === id);
-    if (index < 0) return false;
-    const current = mailbox.messages[index]!;
-    if (current.delivered_at !== undefined) return true;
-    const updated: TeamMailboxMessage = { ...current, delivered_at: now().toISOString() };
-    const messages = [...mailbox.messages];
-    messages[index] = updated;
-    writeMailboxUnlocked(root, teamName, { worker, messages });
+  return withDirectoryLock(teamMailboxPath(root, teamName, worker), async () => {
+    readMailboxUnlocked(root, teamName, worker);
+    const journal = mailboxJournal(root, teamName, worker, now);
+    migrateLegacyMailboxIfNeeded(root, teamName, worker, journal);
+
+    const messages = journal.readHead()?.head_sequence
+      ? readMessagesFromJournal(journal)
+      : readMailboxUnlocked(root, teamName, worker).messages;
+
+    const target = messages.find((m) => m.message_id === id);
+    if (!target) return false;
+    if (target.delivered_at !== undefined) return true;
+
+    const deliveredAt = now().toISOString();
+    await journal.append({
+      kind: 'delivered',
+      payload: { kind: 'delivered', message_id: id, delivered_at: deliveredAt },
+      at: deliveredAt,
+    });
+
     return true;
   });
 }

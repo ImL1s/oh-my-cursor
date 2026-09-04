@@ -109,4 +109,109 @@ describe('Cursor setup doctor', () => {
     expect(report.ok).toBe(false);
     expect(report.checks.find((check) => check.id === 'plugin_dir')).toMatchObject({ status: 'fail' });
   });
+
+  it('inspects journals and repairs incomplete tails with receipt under doctor', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-doctor-journal-'));
+    try {
+      fs.mkdirSync(path.join(root, '.cursor-plugin'), { recursive: true });
+      fs.writeFileSync(path.join(root, '.cursor-plugin', 'plugin.json'), JSON.stringify({
+        name: 'oh-my-cursor', version: '1.0.0',
+      }));
+      fs.mkdirSync(path.join(root, '.omcu', 'runs', 'r1', 'journal', 'segments'), { recursive: true });
+      fs.mkdirSync(path.join(root, '.omcu', 'runs', 'r1', 'journal', 'receipts'), { recursive: true });
+
+      // Create a journal with incomplete tail
+      const journalDir = path.join(root, '.omcu', 'runs', 'r1', 'journal');
+      fs.writeFileSync(path.join(journalDir, 'meta.json'), JSON.stringify({
+        schema_version: 1,
+        stream_id: 'runs/r1',
+        created_at: new Date().toISOString(),
+        max_record_bytes: 65536,
+        max_segment_bytes: 2097152,
+        max_segment_records: 5000,
+        max_stream_records: 100000,
+      }));
+      fs.writeFileSync(path.join(journalDir, 'head.json'), JSON.stringify({
+        schema_version: 1,
+        stream_id: 'runs/r1',
+        head_sequence: 0,
+        head_digest: null,
+        active_segment: '00000001.jsonl',
+        total_records: 0,
+        total_bytes: 0,
+        updated_at: new Date().toISOString(),
+      }));
+      // Write incomplete uncommitted bytes into active segment
+      fs.writeFileSync(path.join(journalDir, 'segments', '00000001.jsonl'), '{"incomplete');
+
+      const runner: CommandRunner = {
+        async run(_command, args) {
+          if (args[0] === '--version') return { code: 0, stdout: '2026.07.20\n', stderr: '' };
+          if (args[0] === 'status') return { code: 0, stdout: 'authenticated\n', stderr: '' };
+          return { code: 0, stdout: '--version --help status --plugin-dir', stderr: '' };
+        },
+      };
+
+      // 1. Without repair: doctor reports warn on journal_tail
+      const reportWarn = await runSetupDoctor({ packageRoot: root, projectRoot: root, runner });
+      expect(reportWarn.checks.find((c) => c.id === 'journal_tail')?.status).toBe('warn');
+
+      // 2. With repair: doctor repairs incomplete tail with receipt
+      const reportRepair = await runSetupDoctor({ packageRoot: root, projectRoot: root, runner, repairJournals: true });
+      expect(reportRepair.checks.find((c) => c.id === 'journal_repaired')?.status).toBe('pass');
+
+      // 3. After repair: clean inspection passes
+      const reportClean = await runSetupDoctor({ packageRoot: root, projectRoot: root, runner });
+      expect(reportClean.checks.find((c) => c.id === 'journal_integrity')?.status).toBe('pass');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when doctor detects non-tail corrupted journal', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-doctor-corrupt-'));
+    try {
+      fs.mkdirSync(path.join(root, '.cursor-plugin'), { recursive: true });
+      fs.writeFileSync(path.join(root, '.cursor-plugin', 'plugin.json'), JSON.stringify({
+        name: 'oh-my-cursor', version: '1.0.0',
+      }));
+      const journalDir = path.join(root, '.omcu', 'runs', 'r2', 'journal');
+      fs.mkdirSync(path.join(journalDir, 'segments'), { recursive: true });
+      fs.writeFileSync(path.join(journalDir, 'meta.json'), JSON.stringify({
+        schema_version: 1,
+        stream_id: 'runs/r2',
+        created_at: new Date().toISOString(),
+        max_record_bytes: 65536,
+        max_segment_bytes: 2097152,
+        max_segment_records: 5000,
+        max_stream_records: 100000,
+      }));
+      fs.writeFileSync(path.join(journalDir, 'head.json'), JSON.stringify({
+        schema_version: 1,
+        stream_id: 'runs/r2',
+        head_sequence: 5, // Head points ahead of empty records
+        head_digest: 'a'.repeat(64),
+        active_segment: '00000001.jsonl',
+        total_records: 5,
+        total_bytes: 100,
+        updated_at: new Date().toISOString(),
+      }));
+      fs.writeFileSync(path.join(journalDir, 'segments', '00000001.jsonl'), '');
+
+      const runner: CommandRunner = {
+        async run(_command, args) {
+          if (args[0] === '--version') return { code: 0, stdout: '2026.07.20\n', stderr: '' };
+          if (args[0] === 'status') return { code: 0, stdout: 'authenticated\n', stderr: '' };
+          return { code: 0, stdout: '--version --help status --plugin-dir', stderr: '' };
+        },
+      };
+
+      const report = await runSetupDoctor({ packageRoot: root, projectRoot: root, runner });
+      expect(report.ok).toBe(false);
+      expect(report.exit_code).toBe(1);
+      expect(report.checks.find((c) => c.id === 'journal_corrupt')?.status).toBe('fail');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

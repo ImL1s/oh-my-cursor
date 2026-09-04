@@ -239,7 +239,7 @@ Do not edit this block manually; it is generated from `COMMAND_SCHEMAS`.
 - `omcu version` | options: none | positionals: none
 - `omcu setup` | options: --source:string; --state-root:string; --init-project-state:flag | positionals: none
 - `omcu update` | options: --source:string; --state-root:string; --init-project-state:flag | positionals: none
-- `omcu doctor` | options: --repair-owner:flag | positionals: none
+- `omcu doctor` | options: --repair-owner:flag; --repair-journals:flag | positionals: none
 - `omcu uninstall` | options: --receipt:string; --state-root:string; --purge-project-state:flag | positionals: none
 - `omcu capabilities` | options: none | positionals: none
 - `omcu capabilities discover` | options: none | positionals: none

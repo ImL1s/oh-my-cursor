@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { atomicWriteJson, withDirectoryLock } from '../runtime/atomic.js';
+import { Journal } from '../runtime/journal.js';
 import {
   observeStartIdentity,
   processNonceSha256,
@@ -193,10 +194,36 @@ export class WorkflowPersistenceStore {
     });
   }
 
+  private journalDir(runId: string): string {
+    return withinStateRoot(this.root, 'workflows', 'runs', safe(runId, 'run_id'), 'events_journal');
+  }
+
+  private eventJournal(runId: string): Journal<WorkflowJournalEvent> {
+    return new Journal<WorkflowJournalEvent>(this.journalDir(runId), `workflows/${safe(runId, 'run_id')}`, { now: this.now });
+  }
+
+  private migrateLegacyEvents(current: WorkflowRunRecord, journal: Journal<WorkflowJournalEvent>): void {
+    if (current.events.length > 0) {
+      const head = journal.readHead();
+      if (head === null || head.head_sequence === 0) {
+        journal.init();
+        for (const event of current.events) {
+          journal.append({ kind: event.kind, payload: event, at: this.now().toISOString() });
+        }
+      }
+    }
+  }
+
   read(runId: string): WorkflowRunRecord {
     const file = this.recordFile(runId);
     try {
-      const record = normalizeRecord(readJson<unknown>(file), runId);
+      const journal = this.eventJournal(runId);
+      let record = normalizeRecord(readJson<unknown>(file), runId);
+      const journalHead = journal.readHead();
+      if (journalHead !== null && journalHead.head_sequence > 0) {
+        const events = journal.readRange().map((r) => r.payload);
+        record = { ...record, events, event_head_sha256: events.at(-1)?.event_sha256 ?? null };
+      }
       validateRecord(record, runId);
       return record;
     } catch (error) {
@@ -207,22 +234,38 @@ export class WorkflowPersistenceStore {
 
   async append(runId: string, expectedRevision: number, event: WorkflowJournalEvent): Promise<WorkflowRunRecord> {
     const file = this.recordFile(runId);
-    return this.withLock(file, () => {
+    const journal = this.eventJournal(runId);
+    return this.withLock(file, async () => {
       const current = this.read(runId);
       if (current.revision !== expectedRevision) throw new Error('E_WORKFLOW_REVISION_CONFLICT');
+      this.migrateLegacyEvents(current, journal);
+
       if (event.run_id !== runId || event.sequence !== current.events.length + 1 || event.previous_event_sha256 !== current.event_head_sha256) throw new Error('E_WORKFLOW_EVENT_FENCE');
       const { event_sha256: claimedDigest, ...material } = event;
       if (eventDigest(material) !== claimedDigest) throw new Error('E_WORKFLOW_EVENT_DIGEST');
+
+      await journal.append({ kind: event.kind, payload: event, at: this.now().toISOString() });
+
+      const updatedEvents = [...current.events, event];
       const next: WorkflowRunRecord = {
         ...current,
         revision: current.revision + 1,
-        events: [...current.events, event],
+        events: updatedEvents,
         event_head_sha256: event.event_sha256,
         updated_at: this.now().toISOString(),
       };
-      this.writeJson(file, next);
+      this.writeJson(file, { ...next, events: [] });
       return next;
     });
+  }
+
+  readEvents(runId: string): readonly WorkflowJournalEvent[] {
+    const journal = this.eventJournal(runId);
+    const head = journal.readHead();
+    if (head !== null && head.head_sequence > 0) {
+      return journal.readRange().map((r) => r.payload);
+    }
+    return this.read(runId).events;
   }
 
   async acquireExecutionLease(

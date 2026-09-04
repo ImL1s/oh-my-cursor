@@ -27,10 +27,16 @@ export async function handleLifecycle(context: CliContext): Promise<number | nul
   }
   if (command === 'doctor') {
     const repairOwner = flagValue(context, '--repair-owner');
+    const repairJournals = flagValue(context, '--repair-journals');
     const quarantinedOwner = repairOwner
       ? quarantineInvalidCliOwnerRecord(context.root)
       : null;
-    const report = await runSetupDoctor({ packageRoot: context.packageRoot, projectRoot: context.cwd, homeDir: context.homeDir });
+    const report = await runSetupDoctor({
+      packageRoot: context.packageRoot,
+      projectRoot: context.cwd,
+      homeDir: context.homeDir,
+      repairJournals,
+    });
     printJson(context.io, repairOwner
       ? { ...report, owner_repair: { repaired: quarantinedOwner !== null, quarantine_path: quarantinedOwner } }
       : report);
