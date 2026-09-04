@@ -270,24 +270,35 @@ export function readMcpInstallReceipt(receiptPath: string): McpInstallReceipt {
 }
 
 export function areServerConfigsEqual(
-  a: McpServerConfig | null | undefined,
-  b: McpServerConfig | null | undefined,
+  a: unknown,
+  b: unknown,
 ): boolean {
   if (!a || !b) return a === b;
-  if (a.command !== b.command) return false;
-  if (a.args.length !== b.args.length) return false;
-  for (let i = 0; i < a.args.length; i++) {
-    if (a.args[i] !== b.args[i]) return false;
+  if (typeof a !== 'object' || typeof b !== 'object' || Array.isArray(a) || Array.isArray(b)) return false;
+  const aObj = a as Partial<McpServerConfig>;
+  const bObj = b as Partial<McpServerConfig>;
+  if (typeof aObj.command !== 'string' || typeof bObj.command !== 'string') return false;
+  if (aObj.command !== bObj.command) return false;
+  if (!Array.isArray(aObj.args) || !Array.isArray(bObj.args)) return false;
+  if (aObj.args.length !== bObj.args.length) return false;
+  for (let i = 0; i < aObj.args.length; i++) {
+    if (aObj.args[i] !== bObj.args[i]) return false;
   }
-  if (a.cwd !== undefined && b.cwd !== undefined && a.cwd !== b.cwd) return false;
-  const aEnv = a.env ?? {};
-  const bEnv = b.env ?? {};
-  const aKeys = Object.keys(aEnv).sort();
-  const bKeys = Object.keys(bEnv).sort();
+  if (aObj.cwd !== bObj.cwd) {
+    if (aObj.cwd !== undefined || bObj.cwd !== undefined) return false;
+  }
+  const aEnv = aObj.env;
+  const bEnv = bObj.env;
+  if (aEnv !== undefined && (typeof aEnv !== 'object' || aEnv === null || Array.isArray(aEnv))) return false;
+  if (bEnv !== undefined && (typeof bEnv !== 'object' || bEnv === null || Array.isArray(bEnv))) return false;
+  const aEnvObj = (aEnv ?? {}) as Record<string, unknown>;
+  const bEnvObj = (bEnv ?? {}) as Record<string, unknown>;
+  const aKeys = Object.keys(aEnvObj).sort();
+  const bKeys = Object.keys(bEnvObj).sort();
   if (aKeys.length !== bKeys.length) return false;
   for (let i = 0; i < aKeys.length; i++) {
     const k = aKeys[i]!;
-    if (k !== bKeys[i] || aEnv[k] !== bEnv[k]) return false;
+    if (k !== bKeys[i] || aEnvObj[k] !== bEnvObj[k]) return false;
   }
   return true;
 }

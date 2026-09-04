@@ -12,6 +12,7 @@ import {
   readMcpInstallReceipt,
   findMcpReceipt,
   repairOwnedMcpServerSync,
+  areServerConfigsEqual,
   type McpServerConfig,
 } from '../src/mcp/lifecycle.js';
 import { PACKAGE_VERSION } from '../src/version.js';
@@ -165,6 +166,49 @@ describe('MCP lifecycle management (Issue #17)', () => {
       // Verify original file was preserved
       const parsed = JSON.parse(fs.readFileSync(target, 'utf8'));
       expect(parsed.mcpServers['oh-my-cursor'].command).toBe('foreign-binary');
+    });
+
+    it('tolerates malformed or unknown server objects in areServerConfigsEqual without throwing', () => {
+      expect(areServerConfigsEqual({ command: 'test' }, { command: 'test', args: [] })).toBe(false);
+      expect(areServerConfigsEqual({ command: 'test', args: null }, { command: 'test', args: [] })).toBe(false);
+      expect(areServerConfigsEqual({ command: 'test', args: 'not-array' }, { command: 'test', args: [] })).toBe(false);
+      expect(areServerConfigsEqual(null, undefined)).toBe(false);
+      expect(areServerConfigsEqual('string', { command: 'test', args: [] })).toBe(false);
+      expect(areServerConfigsEqual(123, 123)).toBe(false);
+    });
+
+    it('handles hand-edited malformed server entry gracefully with E_MCP_SERVER_COLLISION and repairs with --replace', async () => {
+      const dir = makeDir();
+      const target = path.join(dir, '.cursor', 'mcp.json');
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      const home = path.join(dir, 'home');
+      const binDir = path.join(home, '.local', 'bin');
+      fs.mkdirSync(binDir, { recursive: true });
+      const shim = path.join(binDir, 'omcu');
+      fs.writeFileSync(shim, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+
+      // Hand-edited entry that has command matching expected launcher but omits args
+      fs.writeFileSync(
+        target,
+        JSON.stringify({
+          mcpServers: {
+            'oh-my-cursor': { command: shim },
+          },
+        }),
+      );
+
+      // Without --replace: throws structured E_MCP_SERVER_COLLISION, NOT generic TypeError
+      await expect(installMcpServer({ targetFile: target, homeDir: home, cwd: dir })).rejects.toThrow(
+        'E_MCP_SERVER_COLLISION',
+      );
+
+      // With --replace: successfully overwrites and repairs the invalid entry
+      const result = await installMcpServer({ targetFile: target, homeDir: home, cwd: dir, replace: true });
+      expect(result.installed).toBe(true);
+      expect(result.action).toBe('replace');
+
+      const parsed = JSON.parse(fs.readFileSync(target, 'utf8'));
+      expect(parsed.mcpServers['oh-my-cursor'].args).toEqual(['mcp-server']);
     });
 
     it('replaces foreign server with --replace and records previous config in receipt', async () => {
