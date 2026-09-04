@@ -1099,6 +1099,123 @@ export class Journal<T = unknown> {
     return matchedRecords;
   }
 
+  private hasPendingRepairIntents(): boolean {
+    const rDir = this.receiptsDir();
+    if (!fs.existsSync(rDir)) return false;
+    try {
+      const stat = fs.lstatSync(rDir);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) return false;
+      return fs.readdirSync(rDir).some((f) => f.startsWith('repair-') && f.endsWith('.intent.json'));
+    } catch {
+      return false;
+    }
+  }
+
+  private recoverPendingRepairIntentsUnlocked(): void {
+    const rDir = this.receiptsDir();
+    if (!fs.existsSync(rDir)) return;
+    try {
+      const rStat = fs.lstatSync(rDir);
+      if (rStat.isSymbolicLink() || !rStat.isDirectory()) return;
+      const entries = fs.readdirSync(rDir);
+      for (const entry of entries) {
+        if (!entry.startsWith('repair-') || !entry.endsWith('.intent.json')) continue;
+        const intentFile = path.join(rDir, entry);
+        try {
+          const stat = fs.lstatSync(intentFile);
+          if (stat.isSymbolicLink() || !stat.isFile()) continue;
+          const raw = fs.readFileSync(intentFile, 'utf8');
+          const intent = JSON.parse(raw) as {
+            store_kind?: string;
+            stream_id?: string;
+            repaired_at?: string;
+            segment?: string;
+            original_bytes?: number;
+            repaired_bytes?: number;
+            truncated_bytes?: number;
+            backup_file?: string;
+            head_sequence?: number;
+            head_digest?: string | null;
+            receipt_sha256?: string;
+            final_receipt_path?: string;
+          };
+          if (
+            intent.store_kind === 'journal_repair_intent' &&
+            intent.stream_id === this.streamId &&
+            typeof intent.segment === 'string' &&
+            typeof intent.repaired_bytes === 'number' &&
+            typeof intent.final_receipt_path === 'string' &&
+            typeof intent.receipt_sha256 === 'string'
+          ) {
+            const segPath = path.join(this.segmentsDir(), intent.segment);
+            let truncated = false;
+            if (!fs.existsSync(segPath)) {
+              truncated = true;
+            } else {
+              const segStat = fs.lstatSync(segPath);
+              if (segStat.isFile() && segStat.size <= intent.repaired_bytes) {
+                truncated = true;
+              }
+            }
+            if (truncated) {
+              if (!fs.existsSync(intent.final_receipt_path)) {
+                const receipt: JournalRepairReceipt = {
+                  schema_version: 1,
+                  store_kind: 'journal_repair_receipt',
+                  stream_id: intent.stream_id,
+                  repaired_at: intent.repaired_at ?? this.now().toISOString(),
+                  segment: intent.segment,
+                  original_bytes: intent.original_bytes ?? 0,
+                  repaired_bytes: intent.repaired_bytes,
+                  truncated_bytes: intent.truncated_bytes ?? 0,
+                  backup_file: intent.backup_file ?? '',
+                  head_sequence: intent.head_sequence ?? 0,
+                  head_digest: intent.head_digest ?? null,
+                  receipt_sha256: intent.receipt_sha256,
+                };
+                atomicWriteJson(intent.final_receipt_path, receipt);
+                syncPathToDisk(intent.final_receipt_path);
+              }
+            }
+            if (fs.existsSync(intentFile)) {
+              fs.unlinkSync(intentFile);
+            }
+            syncPathToDisk(rDir);
+          }
+        } catch {
+          // Ignore failure on specific intent file
+        }
+      }
+    } catch {
+      // Ignore scan failure
+    }
+  }
+
+  listReceipts(): readonly JournalRepairReceipt[] {
+    const dir = this.receiptsDir();
+    if (!fs.existsSync(dir)) return [];
+    if (this.hasPendingRepairIntents()) {
+      try {
+        withDirectoryLockSync(this.streamDir, () => this.recoverPendingRepairIntentsUnlocked());
+      } catch {}
+    }
+    try {
+      const files = fs.readdirSync(dir)
+        .filter((f) => f.startsWith('repair-') && f.endsWith('.json') && !f.endsWith('.intent.json'))
+        .sort();
+      const receipts: JournalRepairReceipt[] = [];
+      for (const file of files) {
+        try {
+          const raw = fs.readFileSync(path.join(dir, file), 'utf8');
+          receipts.push(JSON.parse(raw) as JournalRepairReceipt);
+        } catch {}
+      }
+      return receipts;
+    } catch {
+      return [];
+    }
+  }
+
   verify(): JournalVerificationResult {
     if (!fs.existsSync(this.streamDir)) {
       return {
@@ -1137,6 +1254,12 @@ export class Journal<T = unknown> {
         error: { code: 'E_JOURNAL_CORRUPT', message: 'Stream directory is not owned by current user' },
         repairable: false,
       };
+    }
+
+    if (this.hasPendingRepairIntents()) {
+      try {
+        withDirectoryLockSync(this.streamDir, () => this.recoverPendingRepairIntentsUnlocked());
+      } catch {}
     }
 
     let meta: JournalMeta;
@@ -1873,25 +1996,60 @@ export class Journal<T = unknown> {
       const rStat = fs.lstatSync(this.receiptsDir());
       if (rStat.isSymbolicLink() || !rStat.isDirectory()) throw new Error('E_JOURNAL_CORRUPT');
 
+      this.recoverPendingRepairIntentsUnlocked();
+
       const timestamp = this.now().getTime();
       let nonce = crypto.randomBytes(6).toString('hex');
       let backupFile = path.join(this.quarantineDir(), `${segment}.tail-corrupt-${timestamp}-${nonce}`);
       let receiptPath = path.join(this.receiptsDir(), `repair-${timestamp}-${nonce}.json`);
+      let intentPath = path.join(this.receiptsDir(), `repair-${timestamp}-${nonce}.intent.json`);
 
-      while (fs.existsSync(backupFile) || fs.existsSync(receiptPath)) {
+      while (fs.existsSync(backupFile) || fs.existsSync(receiptPath) || fs.existsSync(intentPath)) {
         nonce = crypto.randomBytes(6).toString('hex');
         backupFile = path.join(this.quarantineDir(), `${segment}.tail-corrupt-${timestamp}-${nonce}`);
         receiptPath = path.join(this.receiptsDir(), `repair-${timestamp}-${nonce}.json`);
+        intentPath = path.join(this.receiptsDir(), `repair-${timestamp}-${nonce}.intent.json`);
       }
 
       fs.copyFileSync(segmentPath, backupFile, fs.constants.COPYFILE_EXCL);
       syncPathToDisk(backupFile);
 
+      const head = this.readHead()!;
+      const receiptMaterial = {
+        schema_version: 1 as const,
+        store_kind: 'journal_repair_receipt' as const,
+        stream_id: this.streamId,
+        repaired_at: this.now().toISOString(),
+        segment,
+        original_bytes: originalBytes,
+        repaired_bytes: repairedBytes,
+        truncated_bytes: truncatedBytes,
+        backup_file: backupFile,
+        head_sequence: head.head_sequence,
+        head_digest: head.head_digest,
+      };
+
+      const receiptSha256 = sha256(canonicalJson(receiptMaterial));
+      const receipt: JournalRepairReceipt = {
+        ...receiptMaterial,
+        receipt_sha256: receiptSha256,
+      };
+
+      // Persist recoverable repair intent before irreversible modifications
+      const intentData = {
+        ...receipt,
+        store_kind: 'journal_repair_intent' as const,
+        final_receipt_path: receiptPath,
+        intent_at: this.now().toISOString(),
+      };
+      atomicWriteJson(intentPath, intentData);
+      syncPathToDisk(intentPath);
+      syncPathToDisk(this.receiptsDir());
+
       // Truncate the segment to the last valid committed byte offset
       fs.truncateSync(segmentPath, repairedBytes);
       syncPathToDisk(segmentPath);
 
-      const head = this.readHead()!;
       const headActiveIndex = parseSegmentIndex(head.active_segment) ?? 1;
       const targetSegIndex = parseSegmentIndex(segment);
 
@@ -1926,27 +2084,14 @@ export class Journal<T = unknown> {
       syncPathToDisk(this.quarantineDir());
       syncPathToDisk(this.segmentsDir());
       syncPathToDisk(this.streamDir);
-      const receiptMaterial = {
-        schema_version: 1 as const,
-        store_kind: 'journal_repair_receipt' as const,
-        stream_id: this.streamId,
-        repaired_at: this.now().toISOString(),
-        segment,
-        original_bytes: originalBytes,
-        repaired_bytes: repairedBytes,
-        truncated_bytes: truncatedBytes,
-        backup_file: backupFile,
-        head_sequence: head.head_sequence,
-        head_digest: head.head_digest,
-      };
-
-      const receiptSha256 = sha256(canonicalJson(receiptMaterial));
-      const receipt: JournalRepairReceipt = {
-        ...receiptMaterial,
-        receipt_sha256: receiptSha256,
-      };
 
       atomicWriteJson(receiptPath, receipt);
+      syncPathToDisk(receiptPath);
+
+      if (fs.existsSync(intentPath)) {
+        fs.unlinkSync(intentPath);
+      }
+      syncPathToDisk(this.receiptsDir());
 
       return receipt;
     });

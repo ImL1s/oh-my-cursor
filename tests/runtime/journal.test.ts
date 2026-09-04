@@ -1163,6 +1163,59 @@ describe('Journal primitive', () => {
 
     await expect(journal.append({ kind: 'msg', payload: { msg: 'third' } })).rejects.toThrow('E_JOURNAL_CORRUPT');
   });
+
+  it('recovers pending repair intent and publishes finalized receipt after simulated crash', async () => {
+    const streamDir = path.join(tempDir, 'intent-crash-recovery');
+    const journal = new Journal<{ msg: string }>(streamDir, 'intent-stream');
+
+    await journal.append({ kind: 'msg', payload: { msg: 'first' } });
+    const head = journal.readHead()!;
+    const segPath = path.join(streamDir, 'segments', '00000001.jsonl');
+    const committedSize = fs.statSync(segPath).size;
+
+    // Simulate an incomplete tail write
+    fs.appendFileSync(segPath, '{"uncommitted": "data"');
+
+    // Simulate crash after writing repair intent and truncating, but before writing receipt.json
+    fs.truncateSync(segPath, committedSize);
+
+    const timestamp = 1234567890;
+    const nonce = 'abcdef123456';
+    const finalReceiptPath = path.join(streamDir, 'receipts', `repair-${timestamp}-${nonce}.json`);
+    const intentPath = path.join(streamDir, 'receipts', `repair-${timestamp}-${nonce}.intent.json`);
+
+    fs.mkdirSync(path.join(streamDir, 'receipts'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(intentPath, JSON.stringify({
+      schema_version: 1,
+      store_kind: 'journal_repair_intent',
+      stream_id: 'intent-stream',
+      repaired_at: new Date(timestamp).toISOString(),
+      segment: '00000001.jsonl',
+      original_bytes: committedSize + 20,
+      repaired_bytes: committedSize,
+      truncated_bytes: 20,
+      backup_file: path.join(streamDir, 'quarantine', '00000001.jsonl.tail-corrupt-1234567890-abcdef123456'),
+      head_sequence: head.head_sequence,
+      head_digest: head.head_digest,
+      final_receipt_path: finalReceiptPath,
+      receipt_sha256: 'f'.repeat(64),
+    }), 'utf8');
+
+    // Initially, final receipt does not exist
+    expect(fs.existsSync(finalReceiptPath)).toBe(false);
+    expect(fs.existsSync(intentPath)).toBe(true);
+
+    // Calling verify or listReceipts must automatically recover and publish the final receipt
+    const v = journal.verify();
+    expect(v.ok).toBe(true);
+    expect(fs.existsSync(finalReceiptPath)).toBe(true);
+    expect(fs.existsSync(intentPath)).toBe(false);
+
+    const receipts = journal.listReceipts();
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]?.stream_id).toBe('intent-stream');
+    expect(receipts[0]?.repaired_bytes).toBe(committedSize);
+  });
 });
 
 

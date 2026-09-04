@@ -245,15 +245,27 @@ export class RunStateStore {
     if (fs.existsSync(legacyFile)) {
       const head = journal.readHead();
       if (head === null || head.head_sequence === 0) {
-        journal.init();
         const content = fs.readFileSync(legacyFile, 'utf8');
         const lines = content.trim().split(/\r?\n/).filter(Boolean);
+        const parsedEvents: RunEventV1[] = [];
         for (const line of lines) {
+          let parsed: RunEventV1;
           try {
-            const parsed = JSON.parse(line) as RunEventV1;
+            parsed = JSON.parse(line) as RunEventV1;
+          } catch (error) {
+            throw new Error('E_EVENT_CORRUPT', { cause: error });
+          }
+          if (!parsed || typeof parsed !== 'object' || typeof parsed.type !== 'string' || typeof parsed.sequence !== 'number') {
+            throw new Error('E_EVENT_CORRUPT');
+          }
+          parsedEvents.push(parsed);
+        }
+        journal.init();
+        for (const parsed of parsedEvents) {
+          try {
             await journal.append({ kind: parsed.type, payload: parsed, at: parsed.at });
-          } catch {
-            // ignore bad legacy lines during migration
+          } catch (error) {
+            throw new Error('E_EVENT_CORRUPT', { cause: error });
           }
         }
       }
@@ -315,7 +327,18 @@ export class RunStateStore {
     if (fs.existsSync(legacyFile)) {
       const head = journal.readHead();
       if (head === null || head.head_sequence === 0) {
-        return fs.readFileSync(legacyFile, 'utf8').trim().split(/\r?\n/).filter(Boolean).map((l) => JSON.parse(l) as RunEventV1);
+        try {
+          return fs.readFileSync(legacyFile, 'utf8').trim().split(/\r?\n/).filter(Boolean).map((l) => {
+            const parsed = JSON.parse(l) as RunEventV1;
+            if (!parsed || typeof parsed !== 'object' || typeof parsed.type !== 'string' || typeof parsed.sequence !== 'number') {
+              throw new Error('E_EVENT_CORRUPT');
+            }
+            return parsed;
+          });
+        } catch (error) {
+          if ((error as Error).message === 'E_EVENT_CORRUPT') throw error;
+          throw new Error('E_EVENT_CORRUPT', { cause: error });
+        }
       }
     }
     return journal.readRange().map((r) => r.payload);

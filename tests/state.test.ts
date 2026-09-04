@@ -620,6 +620,24 @@ describe('CLI integration for cancellation and state transition invariants', () 
     expect(allEvents[1]?.type).toBe('step2');
   });
 
+  it('fails closed with E_EVENT_CORRUPT when legacy events.jsonl contains corrupt lines during migration', async () => {
+    const root = projectStateRoot(workspace());
+    const authority = createCliMutationAuthority(root);
+    const store = new RunStateStore(root, authority);
+    await store.create('run-corrupt-legacy', 'test corrupt migration');
+
+    const runDir = path.join(root.path, 'runs', 'run-corrupt-legacy');
+    const legacyFile = path.join(runDir, 'events.jsonl');
+    fs.writeFileSync(legacyFile, '{"valid": true}\n{malformed_json\n');
+
+    // appendEvent must fail with E_EVENT_CORRUPT
+    await expect(store.appendEvent('run-corrupt-legacy', 'step', { ok: true }))
+      .rejects.toThrow('E_EVENT_CORRUPT');
+
+    // readEvents must also fail with E_EVENT_CORRUPT
+    expect(() => store.readEvents('run-corrupt-legacy')).toThrow('E_EVENT_CORRUPT');
+  });
+
   it('does not fail appendEvent when legacy events.jsonl mirror encounters write failure', async () => {
     const root = projectStateRoot(workspace());
     const authority = createCliMutationAuthority(root);
