@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runCli } from '../src/cli/application.js';
 import {
   inspectMcpStatus,
@@ -421,6 +421,55 @@ describe('MCP lifecycle management (Issue #17)', () => {
 
       // Receipt must NOT have been removed
       expect(findMcpReceipt(target, dir)).not.toBeNull();
+    });
+
+    it('rolls back target file changes when receipt removal fails', async () => {
+      const dir = makeDir();
+      const target = path.join(dir, '.cursor', 'mcp.json');
+      const home = path.join(dir, 'home');
+      const customReceipt = path.join(dir, 'receipt.json');
+
+      const foreignConfig: McpServerConfig = { command: 'foreign-binary', args: ['--serve'] };
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, JSON.stringify({ mcpServers: { 'oh-my-cursor': foreignConfig } }));
+
+      // Install with replace into target and custom receipt
+      await installMcpServer({
+        targetFile: target,
+        receiptFile: customReceipt,
+        homeDir: home,
+        cwd: dir,
+        replace: true,
+      });
+
+      // Target now has OMCU installed
+      const installedTargetRaw = fs.readFileSync(target, 'utf8');
+
+      // Mock rmSync to fail when removing receipt
+      const rmSpy = vi.spyOn(fs, 'rmSync').mockImplementationOnce(() => {
+        throw new Error('Permission denied: mock unlink error');
+      });
+
+      try {
+        await expect(
+          uninstallMcpServer({ targetFile: target, receiptFile: customReceipt, cwd: dir, homeDir: home }),
+        ).rejects.toThrow('E_MCP_RECEIPT_REMOVE_FAILED');
+
+        // Verify target was rolled back to its pre-uninstall state (still has installed OMCU config)
+        expect(fs.readFileSync(target, 'utf8')).toBe(installedTargetRaw);
+
+        // Verify receipt is still present
+        expect(fs.existsSync(customReceipt)).toBe(true);
+      } finally {
+        rmSpy.mockRestore();
+      }
+
+      // After error is resolved, uninstall succeeds and restores original foreign config
+      const uninstalled = await uninstallMcpServer({ targetFile: target, receiptFile: customReceipt, cwd: dir, homeDir: home });
+      expect(uninstalled.action).toBe('restored');
+      expect(uninstalled.restored_config).toEqual(foreignConfig);
+      const parsedAfter = JSON.parse(fs.readFileSync(target, 'utf8'));
+      expect(parsedAfter.mcpServers['oh-my-cursor']).toEqual(foreignConfig);
     });
   });
 

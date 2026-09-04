@@ -4,7 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import readline from 'node:readline';
-import { atomicWriteJson, withDirectoryLock, withDirectoryLockSync } from '../runtime/atomic.js';
+import { atomicWriteJson, atomicWriteText, withDirectoryLock, withDirectoryLockSync } from '../runtime/atomic.js';
 import { PACKAGE_VERSION } from '../version.js';
 
 export interface McpServerConfig {
@@ -840,12 +840,13 @@ export async function installMcpServer(options: McpInstallOptions = {}): Promise
     let existingMode = 0o644;
     let targetStat: fs.Stats | null = null;
     let parsed: Record<string, unknown> = {};
+    let raw = '';
 
     if (fs.existsSync(target)) {
       validateMcpTargetSafe(target);
       targetStat = fs.lstatSync(target);
       existingMode = targetStat.mode & 0o777;
-      const raw = fs.readFileSync(target, 'utf8');
+      raw = fs.readFileSync(target, 'utf8');
       beforeSha256 = sha256(raw);
       parsed = parseMcpJson(raw, target);
     }
@@ -955,7 +956,20 @@ export async function installMcpServer(options: McpInstallOptions = {}): Promise
       created_at: new Date().toISOString(),
     });
 
-    atomicWriteJson(receiptPath, receipt, { mode: 0o600 });
+    try {
+      atomicWriteJson(receiptPath, receipt, { mode: 0o600 });
+    } catch (receiptError) {
+      try {
+        if (beforeSha256 !== null) {
+          atomicWriteText(target, raw, { mode: existingMode });
+        } else {
+          fs.rmSync(target, { force: true });
+        }
+      } catch {}
+      throw new Error(
+        `E_MCP_RECEIPT_WRITE_FAILED: Failed to write install receipt ${receiptPath}: ${(receiptError as Error).message}. Rolled back target file.`,
+      );
+    }
 
     return {
       installed: true,
@@ -1084,9 +1098,28 @@ export async function uninstallMcpServer(options: McpUninstallOptions = {}): Pro
 
     const nextConfig = { ...parsed, mcpServers: nextServers };
     const stat = fs.lstatSync(target);
+
+    // Pre-check that the receipt directory is writable before updating target
+    try {
+      fs.accessSync(path.dirname(receiptPath), fs.constants.W_OK);
+    } catch (accessError) {
+      throw new Error(
+        `E_MCP_RECEIPT_UNWRITABLE: Cannot remove receipt file; directory is not writable: ${path.dirname(receiptPath)}`,
+      );
+    }
+
     atomicWriteJson(target, nextConfig, { mode: stat.mode & 0o777 });
 
-    fs.rmSync(receiptPath, { force: true });
+    try {
+      fs.rmSync(receiptPath, { force: true });
+    } catch (rmError) {
+      try {
+        atomicWriteText(target, raw, { mode: stat.mode & 0o777 });
+      } catch {}
+      throw new Error(
+        `E_MCP_RECEIPT_REMOVE_FAILED: Failed to remove receipt ${receiptPath}: ${(rmError as Error).message}. Rolled back target file.`,
+      );
+    }
 
     return {
       uninstalled: true,
