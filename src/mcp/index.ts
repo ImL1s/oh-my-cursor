@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import readline from 'node:readline';
 import type { Readable, Writable } from 'node:stream';
 import { redact } from '../runtime/redaction.js';
 import {
@@ -11,15 +10,115 @@ import {
 import { withinStateRoot, type StateRoot } from '../runtime/state-root.js';
 import { ProjectMemoryStore } from '../memory/index.js';
 import { readRecovery } from '../recovery/index.js';
+import {
+  MCP_PROTOCOL_VERSION,
+  MCP_SERVER_NAME,
+  PACKAGE_VERSION,
+  SUPPORTED_MCP_PROTOCOL_VERSIONS,
+} from '../version.js';
 
-export interface JsonRpcRequest { readonly jsonrpc: '2.0'; readonly id?: string | number | null; readonly method: string; readonly params?: unknown }
-export interface JsonRpcResponse { readonly jsonrpc: '2.0'; readonly id: string | number | null; readonly result?: unknown; readonly error?: { readonly code: number; readonly message: string } }
-const TOOLS = [
-  { name: 'omcu.memory.search', description: 'Search redacted project memory', inputSchema: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'number' } }, required: ['query'], additionalProperties: false } },
-  { name: 'omcu.memory.show', description: 'Show one redacted project memory', inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false } },
-  { name: 'omcu.recovery.show', description: 'Show an immutable recovery snapshot', inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false } },
-  { name: 'omcu.proposal.write', description: 'Write a redacted non-authoritative proposal', inputSchema: { type: 'object', properties: { id: { type: 'string' }, proposal: {} }, required: ['id', 'proposal'], additionalProperties: false } },
+export interface JsonRpcRequest {
+  readonly jsonrpc: '2.0';
+  readonly id?: string | number | null;
+  readonly method: string;
+  readonly params?: unknown;
+}
+
+export interface JsonRpcResponse {
+  readonly jsonrpc: '2.0';
+  readonly id: string | number | null;
+  readonly result?: unknown;
+  readonly error?: {
+    readonly code: number;
+    readonly message: string;
+    readonly data?: unknown;
+  };
+}
+
+export const JSONRPC_ERRORS = {
+  PARSE_ERROR: -32700,
+  INVALID_REQUEST: -32600,
+  METHOD_NOT_FOUND: -32601,
+  INVALID_PARAMS: -32602,
+  INTERNAL_ERROR: -32603,
+  APPLICATION_ERROR: -32000,
+} as const;
+
+export const MCP_TOOLS = [
+  {
+    name: 'omcu.memory.search',
+    description: 'Search redacted project memory',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', maxLength: 4096 },
+        limit: { type: 'integer', minimum: 1, maximum: 100 },
+      },
+      required: ['query'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'omcu.memory.show',
+    description: 'Show one redacted project memory',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'omcu.recovery.show',
+    description: 'Show an immutable recovery snapshot',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'omcu.proposal.write',
+    description: 'Write a redacted non-authoritative proposal',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        proposal: { type: 'object' },
+      },
+      required: ['id', 'proposal'],
+      additionalProperties: false,
+    },
+  },
 ] as const;
+
+const TOOLS = MCP_TOOLS;
+export const MAX_NESTING_DEPTH = 16;
+export const MAX_PROPOSAL_BYTES = 64 * 1024;
+export const MAX_STRING_LENGTH = 4096;
+export const MAX_OBJECT_ENTRIES = 1000;
+export const MAX_ARRAY_ENTRIES = 1000;
+export const MAX_KEY_LENGTH = 256;
+const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+export function checkStructureBounds(value: unknown, currentDepth = 0): void {
+  if (currentDepth > MAX_NESTING_DEPTH) throw new Error('E_MCP_NESTING_TOO_DEEP');
+  if (value !== null && typeof value === 'object') {
+    if (Array.isArray(value)) {
+      if (value.length > MAX_ARRAY_ENTRIES) throw new Error('E_MCP_ARRAY_TOO_LARGE');
+      for (const item of value) checkStructureBounds(item, currentDepth + 1);
+    } else {
+      const entries = Object.entries(value);
+      if (entries.length > MAX_OBJECT_ENTRIES) throw new Error('E_MCP_OBJECT_TOO_LARGE');
+      for (const [key, child] of entries) {
+        if (key.length > MAX_KEY_LENGTH) throw new Error('E_MCP_KEY_TOO_LONG');
+        checkStructureBounds(child, currentDepth + 1);
+      }
+    }
+  }
+}
+
 function forbiddenName(value: string): boolean {
   return /(?:^|[._-])(passes|verified|shell)(?:$|[._-])/i.test(value) || /^shell[A-Z_]/.test(value);
 }
@@ -35,6 +134,7 @@ function args(params: unknown): Record<string, unknown> {
   return input as Record<string, unknown>;
 }
 function safe(value: unknown): string { if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value)) throw new Error('E_MCP_ID_INVALID'); return value; }
+function unicodeLength(value: string): number { return [...value].length; }
 function toolResult(value: unknown): unknown { return { content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value }; }
 function proposalMatches(file: string, proposal: unknown): boolean {
   let expected: Buffer;
@@ -85,37 +185,530 @@ export function publishProposal(
   }
 }
 
-export function createMcpRequestHandler(root: StateRoot): (request: JsonRpcRequest) => Promise<JsonRpcResponse> {
+export interface McpHandlerOptions {
+  readonly strictLifecycle?: boolean;
+}
+
+export function createMcpRequestHandler(
+  root: StateRoot,
+  options: McpHandlerOptions = {},
+): (request: unknown) => Promise<JsonRpcResponse | undefined> {
   const memory = new ProjectMemoryStore(root);
-  return async (request) => {
-    const id = request.id ?? null;
-    try {
-      const requestedTool = request.params !== null && typeof request.params === 'object' ? (request.params as { name?: unknown }).name : undefined;
-      if (forbiddenName(request.method) || (typeof requestedTool === 'string' && forbiddenName(requestedTool)) || forbiddenStructure(request.params)) throw new Error('E_MCP_STRUCTURAL_REFUSAL');
-      if (request.method === 'initialize') return { jsonrpc: '2.0', id, result: { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'oh-my-cursor', version: '0.1.0' } } };
-      if (request.method === 'notifications/initialized') return { jsonrpc: '2.0', id, result: {} };
-      if (request.method === 'tools/list') return { jsonrpc: '2.0', id, result: { tools: TOOLS } };
-      if (request.method !== 'tools/call' || request.params === null || typeof request.params !== 'object') throw new Error('E_MCP_METHOD_NOT_ALLOWED');
-      const name = (request.params as { name?: unknown }).name; const input = args(request.params);
-      if (name === 'omcu.memory.search') return { jsonrpc: '2.0', id, result: toolResult(memory.search(String(input.query ?? ''), input.limit === undefined ? 20 : Number(input.limit))) };
-      if (name === 'omcu.memory.show') return { jsonrpc: '2.0', id, result: toolResult(memory.show(safe(input.id))) };
-      if (name === 'omcu.recovery.show') return { jsonrpc: '2.0', id, result: toolResult(readRecovery(root, safe(input.id))) };
-      if (name === 'omcu.proposal.write') {
-        const proposalId = safe(input.id); const file = withinStateRoot(root, 'mcp', 'proposals', `${proposalId}.json`);
-        const proposal = { schema_version: 1, id: proposalId, authoritative: false, proposal: redact(input.proposal), created_at: new Date().toISOString() };
-        publishProposal(file, proposal); return { jsonrpc: '2.0', id, result: toolResult(proposal) };
+  let initialized = false;
+
+  return async (rawRequest: unknown): Promise<JsonRpcResponse | undefined> => {
+    // 1. Envelope validation
+    if (rawRequest === null || typeof rawRequest !== 'object' || Array.isArray(rawRequest)) {
+      return {
+        jsonrpc: '2.0',
+        id: null,
+        error: { code: JSONRPC_ERRORS.INVALID_REQUEST, message: 'E_MCP_INVALID_REQUEST' },
+      };
+    }
+
+    const req = rawRequest as Record<string, unknown>;
+    const hasId = Object.prototype.hasOwnProperty.call(req, 'id');
+    const isNotification = !hasId || req.id === undefined;
+    const id: string | number | null = hasId ? (req.id as string | number | null) : null;
+
+    if (hasId && id !== null && typeof id !== 'string' && typeof id !== 'number') {
+      return {
+        jsonrpc: '2.0',
+        id: null,
+        error: { code: JSONRPC_ERRORS.INVALID_REQUEST, message: 'E_MCP_INVALID_ID' },
+      };
+    }
+
+    if (req.jsonrpc !== '2.0') {
+      if (isNotification) return undefined;
+      return {
+        jsonrpc: '2.0',
+        id,
+        error: { code: JSONRPC_ERRORS.INVALID_REQUEST, message: 'E_MCP_INVALID_JSONRPC_VERSION' },
+      };
+    }
+
+    if (typeof req.method !== 'string' || req.method.trim() === '' || req.method.length > 128) {
+      if (isNotification) return undefined;
+      return {
+        jsonrpc: '2.0',
+        id,
+        error: { code: JSONRPC_ERRORS.INVALID_REQUEST, message: 'E_MCP_INVALID_METHOD' },
+      };
+    }
+
+    const method = req.method;
+
+    // 2. Notification handling: notifications must not produce a response
+    if (isNotification) {
+      if (method === 'notifications/initialized' && (!options.strictLifecycle || initialized)) {
+        initialized = true;
       }
+      return undefined;
+    }
+
+    if (method === 'notifications/initialized' || method.startsWith('notifications/')) {
+      return {
+        jsonrpc: '2.0',
+        id,
+        error: { code: JSONRPC_ERRORS.INVALID_REQUEST, message: 'E_MCP_NOTIFICATION_HAS_ID' },
+      };
+    }
+
+    // 3. Lifecycle check (if strictLifecycle is enabled)
+    if (options.strictLifecycle && !initialized && method !== 'initialize' && method !== 'ping') {
+      return {
+        jsonrpc: '2.0',
+        id,
+        error: { code: JSONRPC_ERRORS.INVALID_REQUEST, message: 'E_MCP_NOT_INITIALIZED' },
+      };
+    }
+
+    // 4. Method dispatch
+    try {
+      checkStructureBounds(req.params);
+
+      const requestedTool =
+        req.params !== null && typeof req.params === 'object'
+          ? (req.params as { name?: unknown }).name
+          : undefined;
+
+      if (
+        forbiddenName(method) ||
+        (typeof requestedTool === 'string' && forbiddenName(requestedTool)) ||
+        forbiddenStructure(req.params)
+      ) {
+        throw new Error('E_MCP_STRUCTURAL_REFUSAL');
+      }
+
+      if (method === 'initialize') {
+        let negotiatedProtocolVersion: string = MCP_PROTOCOL_VERSION;
+        if (req.params !== undefined) {
+          if (req.params === null || typeof req.params !== 'object' || Array.isArray(req.params)) {
+            throw new Error('E_MCP_PARAMS_INVALID');
+          }
+          const initParams = req.params as Record<string, unknown>;
+          if (initParams.protocolVersion !== undefined) {
+            if (typeof initParams.protocolVersion !== 'string' || initParams.protocolVersion.trim() === '') {
+              throw new Error('E_MCP_PARAMS_INVALID');
+            }
+            if ((SUPPORTED_MCP_PROTOCOL_VERSIONS as readonly string[]).includes(initParams.protocolVersion)) {
+              negotiatedProtocolVersion = initParams.protocolVersion;
+            }
+          }
+          if (initParams.capabilities !== undefined && (typeof initParams.capabilities !== 'object' || initParams.capabilities === null || Array.isArray(initParams.capabilities))) {
+            throw new Error('E_MCP_PARAMS_INVALID');
+          }
+          if (initParams.clientInfo !== undefined && (typeof initParams.clientInfo !== 'object' || initParams.clientInfo === null || Array.isArray(initParams.clientInfo))) {
+            throw new Error('E_MCP_PARAMS_INVALID');
+          }
+        }
+        initialized = true;
+        return {
+          jsonrpc: '2.0',
+          id,
+          result: {
+            protocolVersion: negotiatedProtocolVersion,
+            capabilities: { tools: {} },
+            serverInfo: { name: MCP_SERVER_NAME, version: PACKAGE_VERSION },
+          },
+        };
+      }
+
+      if (method === 'ping') {
+        return { jsonrpc: '2.0', id, result: {} };
+      }
+
+      if (method === 'tools/list') {
+        if (req.params !== undefined && (req.params === null || typeof req.params !== 'object' || Array.isArray(req.params))) {
+          throw new Error('E_MCP_PARAMS_INVALID');
+        }
+        return { jsonrpc: '2.0', id, result: { tools: MCP_TOOLS } };
+      }
+
+      if (method !== 'tools/call') {
+        return {
+          jsonrpc: '2.0',
+          id,
+          error: { code: JSONRPC_ERRORS.METHOD_NOT_FOUND, message: 'E_MCP_METHOD_NOT_ALLOWED' },
+        };
+      }
+
+      // tools/call handling
+      if (req.params === null || typeof req.params !== 'object' || Array.isArray(req.params)) {
+        throw new Error('E_MCP_PARAMS_INVALID');
+      }
+
+      const params = req.params as { name?: unknown; arguments?: unknown };
+      if (typeof params.name !== 'string') {
+        throw new Error('E_MCP_TOOL_NOT_ALLOWED');
+      }
+
+      const toolName = params.name;
+      const toolDef = MCP_TOOLS.find((t) => t.name === toolName);
+      if (!toolDef) {
+        return {
+          jsonrpc: '2.0',
+          id,
+          error: { code: JSONRPC_ERRORS.INVALID_PARAMS, message: 'E_MCP_TOOL_NOT_ALLOWED' },
+        };
+      }
+
+      if (
+        params.arguments === null ||
+        typeof params.arguments !== 'object' ||
+        Array.isArray(params.arguments)
+      ) {
+        throw new Error('E_MCP_ARGUMENTS_INVALID');
+      }
+
+      const inputArgs = params.arguments as Record<string, unknown>;
+
+      // Schema enforcement: additionalProperties: false
+      const allowedKeys = Object.keys(toolDef.inputSchema.properties);
+      for (const key of Object.keys(inputArgs)) {
+        if (!allowedKeys.includes(key)) {
+          throw new Error('E_MCP_ARGUMENTS_INVALID');
+        }
+      }
+
+      if (toolName === 'omcu.memory.search') {
+        if (typeof inputArgs.query !== 'string' || unicodeLength(inputArgs.query) > MAX_STRING_LENGTH) {
+          throw new Error('E_MCP_ARGUMENTS_INVALID');
+        }
+        let limit = 20;
+        if (inputArgs.limit !== undefined) {
+          if (!Number.isSafeInteger(inputArgs.limit) || (inputArgs.limit as number) < 1 || (inputArgs.limit as number) > 100) {
+            throw new Error('E_MCP_ARGUMENTS_INVALID');
+          }
+          limit = inputArgs.limit as number;
+        }
+        return {
+          jsonrpc: '2.0',
+          id,
+          result: toolResult(memory.search(inputArgs.query, limit)),
+        };
+      }
+
+      if (toolName === 'omcu.memory.show') {
+        const memoryId = safe(inputArgs.id);
+        return {
+          jsonrpc: '2.0',
+          id,
+          result: toolResult(memory.show(memoryId)),
+        };
+      }
+
+      if (toolName === 'omcu.recovery.show') {
+        const recoveryId = safe(inputArgs.id);
+        return {
+          jsonrpc: '2.0',
+          id,
+          result: toolResult(readRecovery(root, recoveryId)),
+        };
+      }
+
+      if (toolName === 'omcu.proposal.write') {
+        const proposalId = safe(inputArgs.id);
+        if (
+          inputArgs.proposal === null ||
+          typeof inputArgs.proposal !== 'object' ||
+          Array.isArray(inputArgs.proposal)
+        ) {
+          throw new Error('E_MCP_ARGUMENTS_INVALID');
+        }
+        const stringified = JSON.stringify(inputArgs.proposal);
+        if (Buffer.byteLength(stringified, 'utf8') > MAX_PROPOSAL_BYTES) {
+          throw new Error('E_MCP_PROPOSAL_TOO_LARGE');
+        }
+        const file = withinStateRoot(root, 'mcp', 'proposals', `${proposalId}.json`);
+        const proposal = {
+          schema_version: 1,
+          id: proposalId,
+          authoritative: false,
+          proposal: redact(inputArgs.proposal),
+          created_at: new Date().toISOString(),
+        };
+        publishProposal(file, proposal);
+        return { jsonrpc: '2.0', id, result: toolResult(proposal) };
+      }
+
       throw new Error('E_MCP_TOOL_NOT_ALLOWED');
-    } catch (error) { return { jsonrpc: '2.0', id, error: { code: -32000, message: error instanceof Error ? error.message : String(error) } }; }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      let code: number = JSONRPC_ERRORS.APPLICATION_ERROR;
+      if (
+        message === 'E_MCP_STRUCTURAL_REFUSAL' ||
+        message === 'E_MCP_NESTING_TOO_DEEP' ||
+        message === 'E_MCP_ARRAY_TOO_LARGE' ||
+        message === 'E_MCP_OBJECT_TOO_LARGE' ||
+        message === 'E_MCP_KEY_TOO_LONG' ||
+        message === 'E_MCP_PARAMS_INVALID' ||
+        message === 'E_MCP_ARGUMENTS_INVALID' ||
+        message === 'E_MCP_ID_INVALID' ||
+        message === 'E_MCP_TOOL_NOT_ALLOWED' ||
+        message === 'E_MCP_PROPOSAL_TOO_LARGE' ||
+        message === 'E_MEMORY_SEARCH_INVALID'
+      ) {
+        code = JSONRPC_ERRORS.INVALID_PARAMS;
+      } else if (message === 'E_MCP_METHOD_NOT_ALLOWED') {
+        code = JSONRPC_ERRORS.METHOD_NOT_FOUND;
+      }
+      return {
+        jsonrpc: '2.0',
+        id,
+        error: { code, message },
+      };
+    }
   };
 }
 
-export async function serveMcpStdio(root: StateRoot, input: Readable = process.stdin, output: Writable = process.stdout): Promise<void> {
-  const handle = createMcpRequestHandler(root); const lines = readline.createInterface({ input, crlfDelay: Infinity });
-  for await (const line of lines) {
-    let response: JsonRpcResponse;
-    try { response = await handle(JSON.parse(line) as JsonRpcRequest); }
-    catch { response = { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'E_MCP_PARSE_ERROR' } }; }
-    output.write(`${JSON.stringify(response)}\n`);
+export const MAX_MCP_LINE_BYTES = 1024 * 1024;
+
+const utf8FatalDecoder = new TextDecoder('utf-8', { fatal: true });
+
+export interface BoundedLineResult {
+  readonly line?: string;
+  readonly error?: 'E_MCP_LINE_TOO_LARGE' | 'E_MCP_INVALID_ENCODING';
+}
+
+export async function* readBoundedLines(
+  input: Readable,
+  maxLineBytes: number = MAX_MCP_LINE_BYTES,
+): AsyncGenerator<BoundedLineResult> {
+  let chunks: Buffer[] = [];
+  let accumulatedBytes = 0;
+  let discarding = false;
+
+  for await (const rawChunk of input) {
+    const chunkBuf = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk as string);
+    let offset = 0;
+
+    while (offset < chunkBuf.length) {
+      const newlineIndex = chunkBuf.indexOf(0x0a, offset);
+
+      if (newlineIndex === -1) {
+        const remaining = chunkBuf.subarray(offset);
+        if (discarding) {
+          offset = chunkBuf.length;
+        } else if (accumulatedBytes + remaining.length > maxLineBytes) {
+          discarding = true;
+          chunks = [];
+          accumulatedBytes = 0;
+          yield { error: 'E_MCP_LINE_TOO_LARGE' };
+          offset = chunkBuf.length;
+        } else {
+          chunks.push(remaining);
+          accumulatedBytes += remaining.length;
+          offset = chunkBuf.length;
+        }
+      } else {
+        const segment = chunkBuf.subarray(offset, newlineIndex);
+        offset = newlineIndex + 1;
+
+        if (discarding) {
+          discarding = false;
+        } else if (accumulatedBytes + segment.length > maxLineBytes) {
+          chunks = [];
+          accumulatedBytes = 0;
+          yield { error: 'E_MCP_LINE_TOO_LARGE' };
+        } else {
+          chunks.push(segment);
+          const fullLineBuf = Buffer.concat(chunks);
+          chunks = [];
+          accumulatedBytes = 0;
+          let lineStr: string;
+          try {
+            lineStr = utf8FatalDecoder.decode(fullLineBuf);
+          } catch {
+            yield { error: 'E_MCP_INVALID_ENCODING' };
+            continue;
+          }
+          if (lineStr.endsWith('\r')) {
+            lineStr = lineStr.slice(0, -1);
+          }
+          yield { line: lineStr };
+        }
+      }
+    }
+  }
+
+  if (!discarding && accumulatedBytes > 0) {
+    if (accumulatedBytes > maxLineBytes) {
+      yield { error: 'E_MCP_LINE_TOO_LARGE' };
+    } else {
+      const fullLineBuf = Buffer.concat(chunks);
+      chunks = [];
+      accumulatedBytes = 0;
+      let lineStr: string;
+      try {
+        lineStr = utf8FatalDecoder.decode(fullLineBuf);
+      } catch {
+        yield { error: 'E_MCP_INVALID_ENCODING' };
+        return;
+      }
+      if (lineStr.endsWith('\r')) {
+        lineStr = lineStr.slice(0, -1);
+      }
+      yield { line: lineStr };
+    }
   }
 }
+
+function isWritableOpen(output: Writable): boolean {
+  if ('destroyed' in output && output.destroyed) return false;
+  if ('writableEnded' in output && output.writableEnded) return false;
+  if ('writable' in output && !output.writable) return false;
+  return true;
+}
+
+export async function writeWithBackpressure(output: Writable, data: string): Promise<boolean> {
+  if (!isWritableOpen(output)) {
+    return false;
+  }
+
+  return new Promise<boolean>((resolve, reject) => {
+    let settled = false;
+    let writeFinished = false;
+    let drainFinished = false;
+    let needsDrain = false;
+
+    const cleanup = () => {
+      output.removeListener('drain', onDrain);
+      output.removeListener('close', onClose);
+      output.removeListener('finish', onClose);
+      output.removeListener('error', onError);
+    };
+
+    const done = (success: boolean) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(success);
+    };
+
+    const fail = (err: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(err);
+    };
+
+    const onDrain = () => {
+      drainFinished = true;
+      if (writeFinished) {
+        done(true);
+      }
+    };
+
+    const onClose = () => {
+      done(false);
+    };
+
+    const onError = (err: unknown) => {
+      fail(err);
+    };
+
+    output.once('error', onError);
+    output.once('close', onClose);
+    output.once('finish', onClose);
+
+    const canWrite = output.write(data, 'utf8', (err) => {
+      if (err) {
+        fail(err);
+        return;
+      }
+      writeFinished = true;
+      if (!needsDrain || drainFinished) {
+        done(true);
+      }
+    });
+
+    if (!canWrite) {
+      needsDrain = true;
+      output.once('drain', onDrain);
+    }
+  });
+}
+
+export async function serveMcpStdio(
+  root: StateRoot,
+  input: Readable = process.stdin,
+  output: Writable = process.stdout,
+  options: McpHandlerOptions = {},
+): Promise<void> {
+  const handle = createMcpRequestHandler(root, options);
+  let streamError: unknown = null;
+  const onOutputError = (err: unknown) => {
+    streamError = err;
+  };
+  output.on('error', onOutputError);
+
+  try {
+    for await (const item of readBoundedLines(input, MAX_MCP_LINE_BYTES)) {
+      if (streamError) {
+        throw streamError;
+      }
+      if (item.error === 'E_MCP_LINE_TOO_LARGE') {
+        const errResponse: JsonRpcResponse = {
+          jsonrpc: '2.0',
+          id: null,
+          error: { code: JSONRPC_ERRORS.INVALID_REQUEST, message: 'E_MCP_LINE_TOO_LARGE' },
+        };
+        if (!(await writeWithBackpressure(output, `${JSON.stringify(errResponse)}\n`))) {
+          break;
+        }
+        continue;
+      }
+      if (item.error === 'E_MCP_INVALID_ENCODING') {
+        const errResponse: JsonRpcResponse = {
+          jsonrpc: '2.0',
+          id: null,
+          error: { code: JSONRPC_ERRORS.PARSE_ERROR, message: 'E_MCP_PARSE_ERROR' },
+        };
+        if (!(await writeWithBackpressure(output, `${JSON.stringify(errResponse)}\n`))) {
+          break;
+        }
+        continue;
+      }
+      const line = item.line ?? '';
+      if (line.trim() === '') {
+        continue;
+      }
+      if (line.includes('\0')) {
+        const errResponse: JsonRpcResponse = {
+          jsonrpc: '2.0',
+          id: null,
+          error: { code: JSONRPC_ERRORS.PARSE_ERROR, message: 'E_MCP_PARSE_ERROR' },
+        };
+        if (!(await writeWithBackpressure(output, `${JSON.stringify(errResponse)}\n`))) {
+          break;
+        }
+        continue;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        const errResponse: JsonRpcResponse = {
+          jsonrpc: '2.0',
+          id: null,
+          error: { code: JSONRPC_ERRORS.PARSE_ERROR, message: 'E_MCP_PARSE_ERROR' },
+        };
+        if (!(await writeWithBackpressure(output, `${JSON.stringify(errResponse)}\n`))) {
+          break;
+        }
+        continue;
+      }
+      const response = await handle(parsed);
+      if (response !== undefined && response !== null) {
+        if (!(await writeWithBackpressure(output, `${JSON.stringify(response)}\n`))) {
+          break;
+        }
+      }
+    }
+  } finally {
+    output.removeListener('error', onOutputError);
+  }
+}
+

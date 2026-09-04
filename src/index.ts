@@ -37,3 +37,10 @@ export * as mcp from './mcp/index.js';
 export * as workflows from './workflows/index.js';
 export * as modes from './modes/index.js';
 export * as team from './team/index.js';
+export {
+  MCP_PROTOCOL_VERSION,
+  MCP_SERVER_NAME,
+  PACKAGE_VERSION,
+  SUPPORTED_MCP_PROTOCOL_VERSIONS,
+} from './version.js';
+

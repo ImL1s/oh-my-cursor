@@ -85,7 +85,7 @@ export class ProjectMemoryStore {
     });
   }
   search(query: string, limit = 20): ProjectMemory[] {
-    if (query.trim() === '' || query.length > 1024 || !Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('E_MEMORY_SEARCH_INVALID');
+    if (query.trim() === '' || [...query].length > 4096 || !Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('E_MEMORY_SEARCH_INVALID');
     const terms = query.toLocaleLowerCase().split(/\s+/).filter(Boolean);
     return this.list().map((record) => ({ record, score: terms.reduce((sum, term) => sum + (record.text.toLocaleLowerCase().includes(term) ? 1 : 0), 0) }))
       .filter(({ score }) => score > 0).sort((a, b) => b.score - a.score || b.record.updated_at.localeCompare(a.record.updated_at)).slice(0, limit).map(({ record }) => record);

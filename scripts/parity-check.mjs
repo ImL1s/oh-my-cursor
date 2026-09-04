@@ -71,4 +71,6 @@ for (const docName of ['cli.md', 'cli.zh.md', 'cli.zh-TW.md']) {
 const manifest = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 for (const asset of ['.cursor-plugin', '.cursor/rules', '.mcp.json', 'agents', 'commands', 'hooks', 'skills', 'templates']) assert.ok(manifest.files.includes(asset), `missing package asset: ${asset}`);
 assert.equal('createCliMutationAuthority' in await import('../dist/src/index.js'), false, 'authority factory must not be public');
+const { PACKAGE_VERSION } = await import('../dist/src/index.js');
+assert.equal(PACKAGE_VERSION, manifest.version, 'PACKAGE_VERSION must match package.json version');
 console.log('CLI_PARITY:PASS');
