@@ -1224,6 +1224,47 @@ describe('Journal primitive', () => {
     expect(receipts[0]?.stream_id).toBe('intent-stream');
     expect(receipts[0]?.repaired_bytes).toBe(committedSize);
   });
+
+  it('bounds segment read and returns corrupt for oversized crafted segment during verify', async () => {
+    const streamDir = path.join(tempDir, 'oversized-crafted-segment');
+    const journal = new Journal<{ msg: string }>(streamDir, 'oversized', {
+      maxSegmentBytes: 500,
+      maxRecordBytes: 250,
+    });
+    await journal.append({ kind: 'msg', payload: { msg: 'first' } });
+
+    // Simulate an oversized record in segment (> maxRecordBytes and > maxSegmentBytes)
+    const segPath = path.join(streamDir, 'segments', '00000001.jsonl');
+    const largeLine = `{"schema_version":1,"sequence":2,"stream_id":"oversized","kind":"msg","payload":{"msg":"${'x'.repeat(2000)}"},"at":"${new Date().toISOString()}","previous_digest":null,"digest":"bad"}\n`;
+    fs.appendFileSync(segPath, largeLine);
+
+    const v = journal.verify();
+    expect(v.ok).toBe(false);
+    expect(v.status).toBe('corrupt');
+    expect(v.error?.code).toBe('E_JOURNAL_RECORD_TOO_LARGE');
+  });
+
+  it('rejects closed non-active segment exceeding maxSegmentBytes without loading into memory', async () => {
+    const streamDir = path.join(tempDir, 'oversized-closed-segment');
+    const journal = new Journal<{ msg: string }>(streamDir, 'closed-seg', {
+      maxSegmentBytes: 350,
+      maxRecordBytes: 300,
+    });
+    // Each record is ~150 bytes, so 2nd or 3rd record rotates to segment 2
+    await journal.append({ kind: 'msg', payload: { msg: 'first' } });
+    await journal.append({ kind: 'msg', payload: { msg: 'second' } });
+    await journal.append({ kind: 'msg', payload: { msg: 'third' } });
+
+    // Segment 1 is closed. Tamper with segment 1 to exceed maxSegmentBytes
+    const seg1Path = path.join(streamDir, 'segments', '00000001.jsonl');
+    fs.appendFileSync(seg1Path, 'x'.repeat(1000) + '\n');
+
+    const v = journal.verify();
+    expect(v.ok).toBe(false);
+    expect(v.status).toBe('corrupt');
+    expect(v.error?.code).toBe('E_JOURNAL_CORRUPT');
+    expect(v.error?.message).toContain('exceeds maximum segment bytes');
+  });
 });
 
 

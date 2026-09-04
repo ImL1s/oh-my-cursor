@@ -297,6 +297,94 @@ function validDate(value: unknown): value is string {
   }
 }
 
+interface ScannedSegmentLine {
+  readonly lineBytes: Buffer;
+  readonly hasNewline: boolean;
+  readonly lineLength: number;
+  readonly offset: number;
+  readonly tooLarge: boolean;
+}
+
+function* scanSegmentLines(
+  segPath: string,
+  maxLineBytes: number,
+): Generator<ScannedSegmentLine> {
+  const fd = fs.openSync(segPath, 'r');
+  try {
+    const CHUNK_SIZE = 64 * 1024;
+    const chunk = Buffer.alloc(CHUNK_SIZE);
+    let fileOffset = 0;
+    let lineStartOffset = 0;
+    let lineBuffers: Buffer[] = [];
+    let currentLineLength = 0;
+
+    while (true) {
+      const bytesRead = fs.readSync(fd, chunk, 0, CHUNK_SIZE, null);
+      if (bytesRead === 0) {
+        if (lineBuffers.length > 0) {
+          const lineBytes = Buffer.concat(lineBuffers);
+          yield {
+            lineBytes,
+            hasNewline: false,
+            lineLength: lineBytes.length,
+            offset: lineStartOffset,
+            tooLarge: currentLineLength > maxLineBytes,
+          };
+        }
+        break;
+      }
+
+      let chunkOffset = 0;
+      while (chunkOffset < bytesRead) {
+        const newlineIdx = chunk.indexOf(0x0a, chunkOffset);
+        if (newlineIdx !== -1 && newlineIdx < bytesRead) {
+          const part = chunk.subarray(chunkOffset, newlineIdx);
+          lineBuffers.push(Buffer.from(part));
+          currentLineLength += part.length;
+          const lineBytes = Buffer.concat(lineBuffers);
+          const lineLength = currentLineLength + 1;
+          const offset = lineStartOffset;
+          const tooLarge = currentLineLength > maxLineBytes;
+
+          lineBuffers = [];
+          currentLineLength = 0;
+          chunkOffset = newlineIdx + 1;
+          lineStartOffset = fileOffset + chunkOffset;
+
+          yield {
+            lineBytes,
+            hasNewline: true,
+            lineLength,
+            offset,
+            tooLarge,
+          };
+        } else {
+          const part = chunk.subarray(chunkOffset, bytesRead);
+          lineBuffers.push(Buffer.from(part));
+          currentLineLength += part.length;
+          chunkOffset = bytesRead;
+
+          if (currentLineLength > maxLineBytes) {
+            yield {
+              lineBytes: Buffer.concat(lineBuffers),
+              hasNewline: false,
+              lineLength: currentLineLength,
+              offset: lineStartOffset,
+              tooLarge: true,
+            };
+            return;
+          }
+        }
+      }
+      fileOffset += bytesRead;
+    }
+  } finally {
+    try {
+      fs.closeSync(fd);
+    } catch {}
+  }
+}
+
 export interface JournalLimits {
   readonly maxRecordBytes: number;
   readonly maxSegmentBytes: number;
@@ -708,6 +796,9 @@ export class Journal<T = unknown> {
         if (typeof process.getuid === 'function' && segStat.uid !== process.getuid()) {
           throw new Error('E_JOURNAL_CORRUPT');
         }
+        if (segStat.size > limits.maxSegmentBytes) {
+          throw new Error('E_JOURNAL_CORRUPT');
+        }
         currentSegmentBytes = segStat.size;
         currentSegmentRecords = typeof head.active_segment_records === 'number'
           ? head.active_segment_records
@@ -978,7 +1069,17 @@ export class Journal<T = unknown> {
 
     for (let i = segments.length - 1; i >= 0 && collected.length < limit; i--) {
       const segmentFile = path.join(this.segmentsDir(), segments[i]!);
-      if (!fs.existsSync(segmentFile)) {
+      let segStat: fs.Stats;
+      try {
+        segStat = fs.lstatSync(segmentFile);
+      } catch {
+        throw new Error('E_JOURNAL_CORRUPT');
+      }
+      if (segStat.isSymbolicLink() || !segStat.isFile() || (typeof process.getuid === 'function' && segStat.uid !== process.getuid())) {
+        throw new Error('E_JOURNAL_CORRUPT');
+      }
+      const limits = this.resolveLimits();
+      if (segStat.size > limits.maxSegmentBytes) {
         throw new Error('E_JOURNAL_CORRUPT');
       }
       const content = fs.readFileSync(segmentFile, 'utf8');
@@ -1049,7 +1150,17 @@ export class Journal<T = unknown> {
     for (const segment of segments) {
       if (committedCount >= head.head_sequence) break;
       const segmentPath = path.join(this.segmentsDir(), segment);
-      if (!fs.existsSync(segmentPath)) {
+      let segStat: fs.Stats;
+      try {
+        segStat = fs.lstatSync(segmentPath);
+      } catch {
+        throw new Error('E_JOURNAL_CORRUPT');
+      }
+      if (segStat.isSymbolicLink() || !segStat.isFile() || (typeof process.getuid === 'function' && segStat.uid !== process.getuid())) {
+        throw new Error('E_JOURNAL_CORRUPT');
+      }
+      const limits = this.resolveLimits();
+      if (segStat.size > limits.maxSegmentBytes) {
         throw new Error('E_JOURNAL_CORRUPT');
       }
       const content = fs.readFileSync(segmentPath, 'utf8');
@@ -1432,17 +1543,74 @@ export class Journal<T = unknown> {
       const segName = segments[segIdx]!;
       const segPath = path.join(this.segmentsDir(), segName);
       const isLastSegment = segIdx === segments.length - 1;
-      const buffer = fs.readFileSync(segPath);
-      let offset = 0;
+
+      let segStat: fs.Stats;
+      try {
+        segStat = fs.lstatSync(segPath);
+      } catch (error) {
+        return {
+          ok: false,
+          status: 'corrupt',
+          stream_id: this.streamId,
+          total_records: totalValid,
+          head_sequence: head.head_sequence,
+          head_digest: head.head_digest,
+          error: { code: 'E_JOURNAL_CORRUPT', message: `Cannot stat segment ${segName}: ${(error as Error).message}` },
+          repairable: false,
+        };
+      }
+      if (segStat.isSymbolicLink() || !segStat.isFile()) {
+        return {
+          ok: false,
+          status: 'corrupt',
+          stream_id: this.streamId,
+          total_records: totalValid,
+          head_sequence: head.head_sequence,
+          head_digest: head.head_digest,
+          error: { code: 'E_JOURNAL_CORRUPT', message: `Segment ${segName} is not a regular file` },
+          repairable: false,
+        };
+      }
+      if (typeof process.getuid === 'function' && segStat.uid !== process.getuid()) {
+        return {
+          ok: false,
+          status: 'corrupt',
+          stream_id: this.streamId,
+          total_records: totalValid,
+          head_sequence: head.head_sequence,
+          head_digest: head.head_digest,
+          error: { code: 'E_JOURNAL_CORRUPT', message: `Segment ${segName} is not owned by current user` },
+          repairable: false,
+        };
+      }
+
+      if (!isLastSegment && segStat.size > meta.max_segment_bytes) {
+        return {
+          ok: false,
+          status: 'corrupt',
+          stream_id: this.streamId,
+          total_records: totalValid,
+          head_sequence: head.head_sequence,
+          head_digest: head.head_digest,
+          error: {
+            code: 'E_JOURNAL_CORRUPT',
+            message: `Segment ${segName} size (${segStat.size}) exceeds maximum segment bytes (${meta.max_segment_bytes})`,
+            segment: segName,
+            byte_offset: 0,
+          },
+          repairable: false,
+        };
+      }
+
       let segCommittedRecords = 0;
       let segCommittedBytes = 0;
 
-      while (offset < buffer.length) {
-        const nextNewline = buffer.indexOf(0x0a, offset);
-        const lineBytes = nextNewline === -1 ? buffer.subarray(offset) : buffer.subarray(offset, nextNewline);
-        const lineLength = nextNewline === -1 ? buffer.length - offset : nextNewline + 1 - offset;
+      for (const line of scanSegmentLines(segPath, Math.max(meta.max_record_bytes, meta.max_segment_bytes))) {
+        let offset = line.offset;
+        const lineBytes = line.lineBytes;
+        const lineLength = line.lineLength;
 
-        if (nextNewline === -1) {
+        if (!line.hasNewline) {
           // File ended without newline
           if (isLastSegment && totalValid >= head.head_sequence) {
             incompleteTailSegment = segName;
@@ -1461,7 +1629,7 @@ export class Journal<T = unknown> {
                 byte_offset: offset,
               },
               repairable: true,
-              uncommitted_tail_bytes: buffer.length - offset,
+              uncommitted_tail_bytes: segStat.size - offset,
             };
           } else {
             return {
@@ -1488,8 +1656,19 @@ export class Journal<T = unknown> {
         if (lineStr.trim() === '') {
           // Empty line
           if (isLastSegment && totalValid >= head.head_sequence) {
-            const rest = buffer.subarray(offset).toString('utf8');
-            if (rest.trim() === '') {
+            const remainingBytes = segStat.size - offset;
+            let isRestBlank = false;
+            if (remainingBytes <= meta.max_record_bytes) {
+              const restBuf = Buffer.alloc(remainingBytes);
+              const fdRest = fs.openSync(segPath, 'r');
+              try {
+                fs.readSync(fdRest, restBuf, 0, remainingBytes, offset);
+                isRestBlank = restBuf.toString('utf8').trim() === '';
+              } finally {
+                try { fs.closeSync(fdRest); } catch {}
+              }
+            }
+            if (isRestBlank) {
               return {
                 ok: false,
                 status: 'incomplete_tail',
@@ -1504,7 +1683,7 @@ export class Journal<T = unknown> {
                   byte_offset: offset,
                 },
                 repairable: true,
-                uncommitted_tail_bytes: buffer.length - offset,
+                uncommitted_tail_bytes: remainingBytes,
               };
             }
           }
@@ -1525,7 +1704,7 @@ export class Journal<T = unknown> {
           };
         }
 
-        if (lineLength > meta.max_record_bytes || lineLength > meta.max_segment_bytes) {
+        if (line.tooLarge || lineLength > meta.max_record_bytes || lineLength > meta.max_segment_bytes) {
           return {
             ok: false,
             status: 'corrupt',
@@ -1548,7 +1727,7 @@ export class Journal<T = unknown> {
         try {
           record = JSON.parse(lineStr) as JournalRecord<T>;
         } catch (jsonErr) {
-          if (isLastSegment && nextNewline + 1 === buffer.length && totalValid >= head.head_sequence) {
+          if (isLastSegment && offset + lineLength === segStat.size && totalValid >= head.head_sequence) {
             // Uncommitted last line of active segment is invalid JSON
             return {
               ok: false,
@@ -1564,7 +1743,7 @@ export class Journal<T = unknown> {
                 byte_offset: offset,
               },
               repairable: true,
-              uncommitted_tail_bytes: buffer.length - offset,
+              uncommitted_tail_bytes: segStat.size - offset,
             };
           }
           return {
