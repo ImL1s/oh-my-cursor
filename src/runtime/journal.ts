@@ -490,17 +490,10 @@ export class Journal<T = unknown> {
       let head = this.readHead();
       if (head === null) {
         head = this.initUnlocked();
-      } else {
-        const verification = this.verify();
-        if (!verification.ok) {
-          if (verification.status === 'incomplete_tail') {
-            throw new Error('E_JOURNAL_INCOMPLETE_TAIL');
-          }
-          throw new Error(verification.error?.code ?? 'E_JOURNAL_CORRUPT');
-        }
       }
 
       const limits = this.resolveLimits();
+      this.assertNoIncompleteTail(head, limits);
 
       if (expectedHead !== undefined) {
         if (head.head_sequence !== expectedHead.sequence || head.head_digest !== expectedHead.digest) {
@@ -601,6 +594,116 @@ export class Journal<T = unknown> {
       .readdirSync(segmentsDir)
       .filter((name) => parseSegmentIndex(name) !== null)
       .sort();
+  }
+
+  private assertNoIncompleteTail(head: JournalHead, limits: JournalLimits): void {
+    const activeIndex = parseSegmentIndex(head.active_segment);
+    if (activeIndex === null) {
+      throw new Error('E_JOURNAL_CORRUPT');
+    }
+
+    // Check if any segment file exists with an index beyond head.active_segment
+    const segments = this.listSegments();
+    if (segments.length > 0) {
+      const lastSeg = segments[segments.length - 1]!;
+      const lastIndex = parseSegmentIndex(lastSeg);
+      if (lastIndex !== null && lastIndex > activeIndex) {
+        throw new Error('E_JOURNAL_INCOMPLETE_TAIL');
+      }
+    }
+
+    const activeSegmentPath = path.join(this.segmentsDir(), head.active_segment);
+    if (!fs.existsSync(activeSegmentPath)) {
+      if (head.head_sequence === 0) {
+        return;
+      }
+      throw new Error('E_JOURNAL_CORRUPT');
+    }
+
+    const stat = fs.statSync(activeSegmentPath);
+    if (head.head_sequence === 0) {
+      if (stat.size > 0) {
+        throw new Error('E_JOURNAL_INCOMPLETE_TAIL');
+      }
+      return;
+    }
+
+    if (stat.size === 0) {
+      throw new Error('E_JOURNAL_CORRUPT');
+    }
+
+    // Read the tail of the active segment up to maxRecordBytes + 128 bytes
+    const readLen = Math.min(stat.size, limits.maxRecordBytes + 128);
+    const buf = Buffer.alloc(readLen);
+    const fd = fs.openSync(activeSegmentPath, 'r');
+    try {
+      let readBytes = 0;
+      while (readBytes < readLen) {
+        const bytesRead = fs.readSync(fd, buf, readBytes, readLen - readBytes, stat.size - readLen + readBytes);
+        if (bytesRead === 0) break;
+        readBytes += bytesRead;
+      }
+      if (readBytes !== readLen) {
+        throw new Error('E_JOURNAL_CORRUPT');
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+
+    // 1. Must end with newline
+    if (buf[buf.length - 1] !== 0x0a) {
+      throw new Error('E_JOURNAL_INCOMPLETE_TAIL');
+    }
+
+    // 2. Locate preceding newline
+    let prevNewline = -1;
+    for (let i = buf.length - 2; i >= 0; i--) {
+      if (buf[i] === 0x0a) {
+        prevNewline = i;
+        break;
+      }
+    }
+
+    if (prevNewline === -1 && readLen < stat.size) {
+      // Last line exceeds maxRecordBytes + 128 or is uncommitted oversized line
+      throw new Error('E_JOURNAL_INCOMPLETE_TAIL');
+    }
+
+    const lastLineBuf = prevNewline === -1 ? buf.subarray(0, buf.length - 1) : buf.subarray(prevNewline + 1, buf.length - 1);
+    let lastLineStr = lastLineBuf.toString('utf8');
+    if (lastLineStr.endsWith('\r')) {
+      lastLineStr = lastLineStr.slice(0, -1);
+    }
+    if (lastLineStr.trim() === '') {
+      throw new Error('E_JOURNAL_INCOMPLETE_TAIL');
+    }
+
+    let record: any;
+    try {
+      record = JSON.parse(lastLineStr);
+    } catch {
+      throw new Error('E_JOURNAL_INCOMPLETE_TAIL');
+    }
+
+    if (typeof record !== 'object' || record === null || typeof record.sequence !== 'number') {
+      throw new Error('E_JOURNAL_INCOMPLETE_TAIL');
+    }
+
+    if (record.sequence > head.head_sequence) {
+      throw new Error('E_JOURNAL_INCOMPLETE_TAIL');
+    }
+
+    if (record.sequence < head.head_sequence) {
+      throw new Error('E_JOURNAL_CORRUPT');
+    }
+
+    if (record.stream_id !== this.streamId) {
+      throw new Error('E_JOURNAL_STREAM_MISMATCH');
+    }
+
+    if (record.digest !== head.head_digest) {
+      throw new Error('E_JOURNAL_DIGEST_MISMATCH');
+    }
   }
 
   tail(limit = 10): JournalRecord<T>[] {

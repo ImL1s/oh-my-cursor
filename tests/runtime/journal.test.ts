@@ -747,4 +747,67 @@ describe('Journal primitive', () => {
       spyOpen.mockRestore();
     }
   });
+
+  it('refuses appends with E_JOURNAL_INCOMPLETE_TAIL when an uncommitted rotated segment exists', async () => {
+    const streamDir = path.join(tempDir, 'refuse-rotated-tail');
+    const journal = new Journal<{ msg: string }>(streamDir, 'refuse-rot-tail', {
+      maxSegmentRecords: 2,
+    });
+
+    await journal.append({ kind: 'msg', payload: { msg: 'first' } });
+    await journal.append({ kind: 'msg', payload: { msg: 'second' } });
+
+    // Segment 1 is active (2 records). Simulate a crash after rotating to segment 2 but before updating head.json
+    const seg2 = path.join(streamDir, 'segments', '00000002.jsonl');
+    const head = journal.readHead()!;
+    const recordMaterial = {
+      schema_version: 1 as const,
+      stream_id: 'refuse-rot-tail',
+      sequence: 3,
+      kind: 'msg',
+      payload: { msg: 'uncommitted' },
+      at: '2026-07-23T00:00:00.000Z',
+      previous_digest: head.head_digest,
+    };
+    const digest = sha256(canonicalJson(recordMaterial));
+    fs.writeFileSync(seg2, `${canonicalJson({ ...recordMaterial, digest })}\n`);
+
+    await expect(journal.append({ kind: 'msg', payload: { msg: 'third' } }))
+      .rejects.toThrow('E_JOURNAL_INCOMPLETE_TAIL');
+
+    await journal.repairIncompleteTail();
+    const r3 = await journal.append({ kind: 'msg', payload: { msg: 'third' } });
+    expect(r3.sequence).toBe(3);
+    expect(journal.verify().ok).toBe(true);
+  });
+
+  it('append performs bounded tail check and does not read historical segments', async () => {
+    const streamDir = path.join(tempDir, 'bounded-append');
+    const journal = new Journal<{ msg: string }>(streamDir, 'bounded-append', {
+      maxSegmentRecords: 1,
+    });
+
+    await journal.append({ kind: 'msg', payload: { msg: 'rec1' } });
+    await journal.append({ kind: 'msg', payload: { msg: 'rec2' } });
+
+    // Now active segment is 00000002.jsonl. Segment 1 is frozen history.
+    // Spy on fs.openSync to ensure segment 1 is never read during append.
+    const seg1Path = path.resolve(path.join(streamDir, 'segments', '00000001.jsonl'));
+    let seg1Read = false;
+
+    const origOpenSync = fs.openSync.bind(fs);
+    const spyOpen = vi.spyOn(fs, 'openSync').mockImplementation((p: any, flags: any, ...rest: any[]) => {
+      if (typeof p === 'string' && path.resolve(p) === seg1Path && (flags === 'r' || flags === 'r+')) {
+        seg1Read = true;
+      }
+      return (origOpenSync as any)(p, flags, ...rest);
+    });
+
+    try {
+      await journal.append({ kind: 'msg', payload: { msg: 'rec3' } });
+      expect(seg1Read).toBe(false);
+    } finally {
+      spyOpen.mockRestore();
+    }
+  });
 });
