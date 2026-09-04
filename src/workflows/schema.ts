@@ -69,10 +69,18 @@ export interface WorkflowJournalEvent {
   readonly event_sha256: string;
 }
 
+export type WorkflowTaskRunState = 'pending' | 'active' | 'passed' | 'blocked' | 'unsupported' | 'attempt_failed_retryable' | 'attempt_failed_terminal' | 'attempt_ambiguous';
+
+export interface WorkflowTaskStatus {
+  readonly task_id: string;
+  readonly status: WorkflowTaskRunState;
+  readonly attempts: readonly WorkflowReceipt[];
+}
+
 export interface WorkflowRunStatus {
   readonly run_id: string;
   readonly status: 'active' | 'complete' | 'failed' | 'blocked' | 'unsupported' | 'ambiguous';
-  readonly receipts: Readonly<Record<string, WorkflowReceipt>>;
+  readonly tasks: Readonly<Record<string, WorkflowTaskStatus>>;
   readonly verified: false;
   readonly verification_authority: 'omcu-cli-only';
 }

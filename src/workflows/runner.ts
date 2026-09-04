@@ -22,21 +22,23 @@ export class WorkflowRunner {
       events.push(event);
     };
     if (events.length === 0) await record('run_started', { plan_sha256: plan.plan_sha256 });
-    let snapshot = replayWorkflow(plan, events);
+    let snapshot = replayWorkflow(definition, plan, events);
     if (snapshot.status !== 'active') return { status: snapshot, events };
     for (const task of plan.tasks) {
-      if (snapshot.receipts[task.task_id] !== undefined) continue;
-      const dependenciesReady = task.depends_on.every((dependency) => snapshot.receipts[dependency]?.status === 'passed');
+      const taskStatus = snapshot.tasks[task.task_id]!;
+      if (taskStatus.status === 'passed' || taskStatus.status === 'attempt_failed_terminal' || taskStatus.status === 'blocked' || taskStatus.status === 'unsupported' || taskStatus.status === 'attempt_ambiguous') continue;
+      
+      const dependenciesReady = task.depends_on.every((dependency) => snapshot.tasks[dependency]?.status === 'passed');
       const stage = definition.stages[task.declaration_index];
       if (stage === undefined) throw new Error('E_WORKFLOW_STAGE_MISSING');
-      let receipt: WorkflowReceipt;
+      let receipt: WorkflowReceipt | undefined = undefined;
       if (!dependenciesReady) {
         receipt = makeReceipt(plan.run_id, task.task_id, 1, 'blocked', [], null, null, null, { error: 'dependency_not_passed' }, definition, this.now());
       } else if (definition.capability_tier === 'unsupported') {
         receipt = makeReceipt(plan.run_id, task.task_id, 1, 'unsupported', [], null, null, null, null, definition, this.now());
       } else {
-        receipt = makeReceipt(plan.run_id, task.task_id, 1, 'failed', [], null, null, null, null, definition, this.now());
-        for (let attempt = 1; attempt <= stage.max_attempts; attempt += 1) {
+        const startAttempt = taskStatus.attempts.length + 1;
+        for (let attempt = startAttempt; attempt <= stage.max_attempts; attempt += 1) {
           const argv = buildPrintArgv(`${stage.prompt}\n\nObjective: ${plan.objective}\nAttempt: ${attempt}/${stage.max_attempts}`, { format: 'json', mode: stage.mode });
           const lease = leases === undefined ? undefined : await leases.acquire(task.task_id);
           try {
@@ -50,12 +52,14 @@ export class WorkflowRunner {
           if (receipt.status === 'passed') break;
         }
       }
-      if (definition.capability_tier === 'unsupported' || !dependenciesReady) await record('task_receipt', receipt);
-      snapshot = replayWorkflow(plan, events);
-      if (receipt.status !== 'passed') break;
+      if (receipt && (definition.capability_tier === 'unsupported' || !dependenciesReady)) await record('task_receipt', receipt);
+      snapshot = replayWorkflow(definition, plan, events);
+      if (snapshot.tasks[task.task_id]?.status !== 'passed') break;
     }
-    await record('run_finished', { receipt_count: Object.keys(replayWorkflow(plan, events).receipts).length });
-    return { status: replayWorkflow(plan, events), events };
+    const finalSnapshot = replayWorkflow(definition, plan, events);
+    const receiptCount = Object.values(finalSnapshot.tasks).reduce((acc, t) => acc + t.attempts.length, 0);
+    await record('run_finished', { receipt_count: receiptCount });
+    return { status: replayWorkflow(definition, plan, events), events };
   }
 }
 

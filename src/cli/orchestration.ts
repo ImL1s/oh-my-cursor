@@ -83,7 +83,8 @@ async function handleWorkflow(action: string | null, context: CliContext): Promi
     printJson(context.io, result.status); return result.status.status === 'complete' ? 0 : 1;
   }
   if (action === 'status' || action === 'replay') {
-    const status = replayWorkflow(record.plan, record.events);
+    const definition = store.readDefinition(record.plan.workflow_name, record.plan.workflow_version);
+    const status = replayWorkflow(definition, record.plan, record.events);
     printJson(context.io, status);
     if (status.status === 'complete') return 0;
     if (status.status === 'active') return 2;
