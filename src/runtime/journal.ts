@@ -91,7 +91,8 @@ export type JournalErrorCode =
   | 'E_JOURNAL_STREAM_ID_INVALID'
   | 'E_JOURNAL_NON_TAIL_CORRUPTION'
   | 'E_JOURNAL_NOT_REPAIRABLE'
-  | 'E_JOURNAL_OPTIONS_INCOMPATIBLE';
+  | 'E_JOURNAL_OPTIONS_INCOMPATIBLE'
+  | 'E_JOURNAL_OPTIONS_INVALID';
 
 export interface JournalVerificationError {
   readonly code: JournalErrorCode;
@@ -318,6 +319,15 @@ export class Journal<T = unknown> {
     this.streamDir = path.resolve(streamDir);
     this.streamId = assertSafeStreamId(streamId);
     this.options = options;
+
+    if (
+      (options.maxRecordBytes !== undefined && (!Number.isSafeInteger(options.maxRecordBytes) || options.maxRecordBytes <= 0)) ||
+      (options.maxSegmentBytes !== undefined && (!Number.isSafeInteger(options.maxSegmentBytes) || options.maxSegmentBytes <= 0)) ||
+      (options.maxSegmentRecords !== undefined && (!Number.isSafeInteger(options.maxSegmentRecords) || options.maxSegmentRecords <= 0)) ||
+      (options.maxStreamRecords !== undefined && (!Number.isSafeInteger(options.maxStreamRecords) || options.maxStreamRecords <= 0))
+    ) {
+      throw new Error('E_JOURNAL_OPTIONS_INVALID');
+    }
     this.maxSegmentBytes = options.maxSegmentBytes ?? DEFAULT_MAX_SEGMENT_BYTES;
     this.maxSegmentRecords = options.maxSegmentRecords ?? DEFAULT_MAX_SEGMENT_RECORDS;
     this.maxStreamRecords = options.maxStreamRecords ?? DEFAULT_MAX_STREAM_RECORDS;

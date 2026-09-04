@@ -629,6 +629,14 @@ describe('Journal primitive', () => {
       maxSegmentBytes: 500,
     })).toThrow('E_JOURNAL_OPTIONS_INCOMPATIBLE');
 
+    // Reject non-positive or non-safe integer options
+    expect(() => new Journal(streamDir, 'incompat', { maxSegmentRecords: 0 })).toThrow('E_JOURNAL_OPTIONS_INVALID');
+    expect(() => new Journal(streamDir, 'incompat', { maxSegmentRecords: -5 })).toThrow('E_JOURNAL_OPTIONS_INVALID');
+    expect(() => new Journal(streamDir, 'incompat', { maxSegmentBytes: 0 })).toThrow('E_JOURNAL_OPTIONS_INVALID');
+    expect(() => new Journal(streamDir, 'incompat', { maxRecordBytes: -1 })).toThrow('E_JOURNAL_OPTIONS_INVALID');
+    expect(() => new Journal(streamDir, 'incompat', { maxStreamRecords: 0 })).toThrow('E_JOURNAL_OPTIONS_INVALID');
+    expect(() => new Journal(streamDir, 'incompat', { maxSegmentBytes: 1.5 })).toThrow('E_JOURNAL_OPTIONS_INVALID');
+
     // 2. Bound single record size to segment bound even if record limit is lower
     const boundDir = path.join(tempDir, 'bound-record-test');
     const boundJournal = new Journal<{ data: string }>(boundDir, 'bound-test', {
