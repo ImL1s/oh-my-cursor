@@ -341,6 +341,32 @@ describe('Cursor service layer', () => {
     await expect(tracker.record('run-corrupt', 'started')).rejects.toThrow('E_TRACKER_CORRUPT');
   });
 
+  it('prefers authoritative tracker journal over non-authoritative corrupt legacy mirror', async () => {
+    const root = projectStateRoot(workspace());
+    const tracker = new LifecycleTracker(root, now);
+    await tracker.record('run-corrupt-mirror', 'created');
+    await tracker.record('run-corrupt-mirror', 'started', { step: 1 });
+
+    const legacyFile = path.join(root.path, 'tracker', 'run-corrupt-mirror.jsonl');
+    // Corrupt the legacy mirror file with invalid trailing JSON (simulating partial write or crash during mirror append)
+    fs.appendFileSync(legacyFile, '{"incomplete_or_corrupt_json\n');
+
+    // Authoritative journal history should still succeed and return complete events
+    const hist = tracker.history('run-corrupt-mirror');
+    expect(hist).toHaveLength(2);
+    expect(hist[0]?.phase).toBe('created');
+    expect(hist[1]?.phase).toBe('started');
+
+    // Authoritative journal record should still succeed without being poisoned by legacy mirror
+    const newEvent = await tracker.record('run-corrupt-mirror', 'completed', { done: true });
+    expect(newEvent.sequence).toBe(3);
+    expect(newEvent.phase).toBe('completed');
+
+    const updatedHist = tracker.history('run-corrupt-mirror');
+    expect(updatedHist).toHaveLength(3);
+    expect(updatedHist[2]?.phase).toBe('completed');
+  });
+
   it('offers only fixed MCP read/proposal tools and structurally refuses authority and shell fields', async () => {
     const root = projectStateRoot(workspace()); const memory = new ProjectMemoryStore(root, now);
     await memory.put('known fact', {}, 'fact');

@@ -27,6 +27,22 @@ export class LifecycleTracker {
     });
   }
 
+  private isMigrated(id: string): boolean {
+    const marker = path.join(this.journalDir(id), '.migrated');
+    return fs.existsSync(marker);
+  }
+
+  private markMigrated(id: string): void {
+    const dir = this.journalDir(id);
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const marker = path.join(dir, '.migrated');
+    if (!fs.existsSync(marker)) {
+      try {
+        fs.writeFileSync(marker, '', { mode: 0o600 });
+      } catch {}
+    }
+  }
+
   private readLegacyEvents(file: string): LifecycleEvent[] {
     if (!fs.existsSync(file)) return [];
     try {
@@ -58,17 +74,38 @@ export class LifecycleTracker {
   }
 
   private async migrateLegacy(id: string, journal: Journal<LifecycleEvent>): Promise<void> {
+    if (this.isMigrated(id)) return;
     const file = this.file(id);
-    if (!fs.existsSync(file)) return;
+    if (!fs.existsSync(file)) {
+      this.markMigrated(id);
+      return;
+    }
     try {
-      if (!fs.statSync(file).isFile()) return;
+      if (!fs.statSync(file).isFile()) {
+        this.markMigrated(id);
+        return;
+      }
     } catch {
       return;
     }
-    const events = this.readLegacyEvents(file);
-    if (events.length === 0) return;
 
     const head = journal.readHead();
+    let events: LifecycleEvent[];
+    try {
+      events = this.readLegacyEvents(file);
+    } catch (error) {
+      if (head !== null && head.head_sequence > 0) {
+        this.markMigrated(id);
+        return;
+      }
+      throw error;
+    }
+
+    if (events.length === 0) {
+      this.markMigrated(id);
+      return;
+    }
+
     const startIndex = head !== null ? head.head_sequence : 0;
     if (startIndex < events.length) {
       if (head === null) {
@@ -83,11 +120,16 @@ export class LifecycleTracker {
         }
       }
     }
+    this.markMigrated(id);
   }
 
   history(id: string): LifecycleEvent[] {
     const journal = this.journal(id);
     const head = journal.readHead();
+    if (this.isMigrated(id)) {
+      return journal.readRange().map((r) => r.payload);
+    }
+
     const file = this.file(id);
     let legacyEvents: LifecycleEvent[] = [];
     if (fs.existsSync(file)) {
@@ -96,6 +138,10 @@ export class LifecycleTracker {
           legacyEvents = this.readLegacyEvents(file);
         }
       } catch (error) {
+        if (head !== null && head.head_sequence > 0) {
+          this.markMigrated(id);
+          return journal.readRange().map((r) => r.payload);
+        }
         throw error;
       }
     }
@@ -105,6 +151,7 @@ export class LifecycleTracker {
       (legacyEvents.length === 0 || head.head_sequence >= legacyEvents.length);
 
     if (shouldLoadJournal) {
+      this.markMigrated(id);
       return journal.readRange().map((r) => r.payload);
     }
     return legacyEvents;

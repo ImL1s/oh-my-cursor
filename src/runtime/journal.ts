@@ -932,13 +932,25 @@ export class Journal<T = unknown> {
       throw new Error('E_JOURNAL_CORRUPT');
     }
 
-    // Check if any segment file exists with an index beyond head.active_segment
+    // Validate that segment sequence starts at 1 and is strictly contiguous up to activeIndex
     const segments = this.listSegments();
-    if (segments.length > 0) {
-      const lastSeg = segments[segments.length - 1]!;
-      const lastIndex = parseSegmentIndex(lastSeg);
-      if (lastIndex !== null && lastIndex > activeIndex) {
-        throw new Error('E_JOURNAL_INCOMPLETE_TAIL');
+    if (segments.length === 0) {
+      if (head.head_sequence > 0 || activeIndex > 1) {
+        throw new Error('E_JOURNAL_CORRUPT');
+      }
+    } else {
+      for (let i = 0; i < segments.length; i++) {
+        const seg = segments[i]!;
+        const segIdx = parseSegmentIndex(seg);
+        if (segIdx === null || segIdx !== i + 1) {
+          throw new Error('E_JOURNAL_CORRUPT');
+        }
+        if (segIdx > activeIndex) {
+          throw new Error('E_JOURNAL_INCOMPLETE_TAIL');
+        }
+      }
+      if (segments.length < activeIndex) {
+        throw new Error('E_JOURNAL_CORRUPT');
       }
     }
 
@@ -1541,6 +1553,22 @@ export class Journal<T = unknown> {
 
     for (let segIdx = 0; segIdx < segments.length; segIdx++) {
       const segName = segments[segIdx]!;
+      const parsedSegIndex = parseSegmentIndex(segName);
+      if (parsedSegIndex === null || parsedSegIndex !== segIdx + 1) {
+        return {
+          ok: false,
+          status: 'corrupt',
+          stream_id: this.streamId,
+          total_records: totalValid,
+          head_sequence: head.head_sequence,
+          head_digest: head.head_digest,
+          error: {
+            code: 'E_JOURNAL_CORRUPT',
+            message: `Segment sequence is not contiguous: expected index ${segIdx + 1} but found ${segName}`,
+          },
+          repairable: false,
+        };
+      }
       const segPath = path.join(this.segmentsDir(), segName);
       const isLastSegment = segIdx === segments.length - 1;
 

@@ -1265,6 +1265,34 @@ describe('Journal primitive', () => {
     expect(v.error?.code).toBe('E_JOURNAL_CORRUPT');
     expect(v.error?.message).toContain('exceeds maximum segment bytes');
   });
+
+  it('rejects gaps in segment sequence before appending and during verify', async () => {
+    const streamDir = path.join(tempDir, 'segment-gap-stream');
+    const journal = new Journal<{ msg: string }>(streamDir, 'gap-stream', {
+      maxSegmentBytes: 350,
+      maxRecordBytes: 300,
+    });
+    // Create at least 2 segments
+    await journal.append({ kind: 'msg', payload: { msg: 'first' } });
+    await journal.append({ kind: 'msg', payload: { msg: 'second' } });
+    await journal.append({ kind: 'msg', payload: { msg: 'third' } });
+
+    const head = journal.readHead();
+    expect(head?.active_segment).toBe('00000003.jsonl');
+
+    // Simulate missing earlier segment (delete 00000001.jsonl)
+    const seg1Path = path.join(streamDir, 'segments', '00000001.jsonl');
+    fs.unlinkSync(seg1Path);
+
+    // Verify should detect the gap and return corrupt
+    const v = journal.verify();
+    expect(v.ok).toBe(false);
+    expect(v.status).toBe('corrupt');
+    expect(v.error?.code).toBe('E_JOURNAL_CORRUPT');
+
+    // Append should reject the gap and fail with E_JOURNAL_CORRUPT
+    await expect(journal.append({ kind: 'msg', payload: { msg: 'fourth' } })).rejects.toThrow('E_JOURNAL_CORRUPT');
+  });
 });
 
 
