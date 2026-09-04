@@ -26,8 +26,7 @@ export class WorkflowRunner {
     if (snapshot.status !== 'active') return { status: snapshot, events };
     for (const task of plan.tasks) {
       const taskStatus = snapshot.tasks[task.task_id]!;
-      if (taskStatus.status === 'passed' || taskStatus.status === 'attempt_failed_terminal' || taskStatus.status === 'blocked' || taskStatus.status === 'unsupported') continue;
-      if (taskStatus.status === 'attempt_ambiguous') throw new Error('E_WORKFLOW_AMBIGUOUS_RESUME');
+      if (taskStatus.status === 'passed' || taskStatus.status === 'attempt_failed_terminal' || taskStatus.status === 'blocked' || taskStatus.status === 'unsupported' || taskStatus.status === 'attempt_ambiguous') continue;
       
       const dependenciesReady = task.depends_on.every((dependency) => snapshot.tasks[dependency]?.status === 'passed');
       const stage = definition.stages[task.declaration_index];
