@@ -134,6 +134,7 @@ function args(params: unknown): Record<string, unknown> {
   return input as Record<string, unknown>;
 }
 function safe(value: unknown): string { if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value)) throw new Error('E_MCP_ID_INVALID'); return value; }
+function unicodeLength(value: string): number { return [...value].length; }
 function toolResult(value: unknown): unknown { return { content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value }; }
 function proposalMatches(file: string, proposal: unknown): boolean {
   let expected: Buffer;
@@ -372,7 +373,7 @@ export function createMcpRequestHandler(
       }
 
       if (toolName === 'omcu.memory.search') {
-        if (typeof inputArgs.query !== 'string' || inputArgs.query.length > MAX_STRING_LENGTH) {
+        if (typeof inputArgs.query !== 'string' || unicodeLength(inputArgs.query) > MAX_STRING_LENGTH) {
           throw new Error('E_MCP_ARGUMENTS_INVALID');
         }
         let limit = 20;

@@ -254,6 +254,31 @@ describe('MCP protocol and handler', () => {
     expect(searchRes.structuredContent).toHaveLength(1);
     expect(searchRes.structuredContent[0]?.id).toBe('alpha');
 
+    // 3,000 emojis = 3,000 code points (<= 4096 maxLength) but 6,000 UTF-16 code units
+    const emojiQuery = await handle({
+      jsonrpc: '2.0',
+      id: 'emoji-search',
+      method: 'tools/call',
+      params: {
+        name: 'omcu.memory.search',
+        arguments: { query: '🎉'.repeat(3000), limit: 10 },
+      },
+    });
+    expect(emojiQuery?.error).toBeUndefined();
+
+    // 4,097 emojis = 4,097 code points (> 4096 maxLength) must be rejected
+    const oversizedEmojiQuery = await handle({
+      jsonrpc: '2.0',
+      id: 'oversized-emoji-search',
+      method: 'tools/call',
+      params: {
+        name: 'omcu.memory.search',
+        arguments: { query: '🎉'.repeat(4097), limit: 10 },
+      },
+    });
+    expect(oversizedEmojiQuery?.error?.code).toBe(JSONRPC_ERRORS.INVALID_PARAMS);
+    expect(oversizedEmojiQuery?.error?.message).toBe('E_MCP_ARGUMENTS_INVALID');
+
     const badId = await handle({
       jsonrpc: '2.0',
       id: 6,
