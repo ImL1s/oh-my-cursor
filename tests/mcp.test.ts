@@ -602,6 +602,38 @@ describe('serveMcpStdio framing and transport', () => {
 
     await expect(serverPromise).rejects.toThrow('EPIPE');
   });
+
+  it('rejects malformed UTF-8 input with E_MCP_PARSE_ERROR', async () => {
+    const root = projectStateRoot(workspace());
+    const input = new PassThrough();
+    const output = new PassThrough();
+
+    const serverPromise = serveMcpStdio(root, input, output);
+
+    const invalidPayload = Buffer.concat([
+      Buffer.from('{"jsonrpc":"2.0","id":1,"method":"omcu.proposal.write","params":{"id":"p1","proposal":{"bad":"'),
+      Buffer.from([0xff, 0xff]),
+      Buffer.from('"}一部}}\n'),
+    ]);
+    input.write(invalidPayload);
+
+    input.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'ping' }) + '\n');
+    input.end();
+
+    await serverPromise;
+
+    const lines = output.read()?.toString('utf8').trim().split('\n') ?? [];
+    expect(lines).toHaveLength(2);
+
+    const firstResponse = JSON.parse(lines[0]);
+    expect(firstResponse.error.code).toBe(JSONRPC_ERRORS.PARSE_ERROR);
+    expect(firstResponse.error.message).toBe('E_MCP_PARSE_ERROR');
+
+    const secondResponse = JSON.parse(lines[1]);
+    expect(secondResponse.id).toBe(2);
+    expect(secondResponse.result).toEqual({});
+  });
 });
+
 
 

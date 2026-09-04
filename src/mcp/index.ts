@@ -465,9 +465,11 @@ export function createMcpRequestHandler(
 
 export const MAX_MCP_LINE_BYTES = 1024 * 1024;
 
+const utf8FatalDecoder = new TextDecoder('utf-8', { fatal: true });
+
 export interface BoundedLineResult {
   readonly line?: string;
-  readonly error?: 'E_MCP_LINE_TOO_LARGE';
+  readonly error?: 'E_MCP_LINE_TOO_LARGE' | 'E_MCP_INVALID_ENCODING';
 }
 
 export async function* readBoundedLines(
@@ -515,7 +517,13 @@ export async function* readBoundedLines(
           const fullLineBuf = Buffer.concat(chunks);
           chunks = [];
           accumulatedBytes = 0;
-          let lineStr = fullLineBuf.toString('utf8');
+          let lineStr: string;
+          try {
+            lineStr = utf8FatalDecoder.decode(fullLineBuf);
+          } catch {
+            yield { error: 'E_MCP_INVALID_ENCODING' };
+            continue;
+          }
           if (lineStr.endsWith('\r')) {
             lineStr = lineStr.slice(0, -1);
           }
@@ -532,7 +540,13 @@ export async function* readBoundedLines(
       const fullLineBuf = Buffer.concat(chunks);
       chunks = [];
       accumulatedBytes = 0;
-      let lineStr = fullLineBuf.toString('utf8');
+      let lineStr: string;
+      try {
+        lineStr = utf8FatalDecoder.decode(fullLineBuf);
+      } catch {
+        yield { error: 'E_MCP_INVALID_ENCODING' };
+        return;
+      }
       if (lineStr.endsWith('\r')) {
         lineStr = lineStr.slice(0, -1);
       }
@@ -640,6 +654,17 @@ export async function serveMcpStdio(
           jsonrpc: '2.0',
           id: null,
           error: { code: JSONRPC_ERRORS.INVALID_REQUEST, message: 'E_MCP_LINE_TOO_LARGE' },
+        };
+        if (!(await writeWithBackpressure(output, `${JSON.stringify(errResponse)}\n`))) {
+          break;
+        }
+        continue;
+      }
+      if (item.error === 'E_MCP_INVALID_ENCODING') {
+        const errResponse: JsonRpcResponse = {
+          jsonrpc: '2.0',
+          id: null,
+          error: { code: JSONRPC_ERRORS.PARSE_ERROR, message: 'E_MCP_PARSE_ERROR' },
         };
         if (!(await writeWithBackpressure(output, `${JSON.stringify(errResponse)}\n`))) {
           break;
