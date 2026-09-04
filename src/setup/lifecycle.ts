@@ -11,6 +11,7 @@ import { createInstallReceipt, readInstallReceipt, writeInstallReceipt, type Ins
 import { runSetupDoctor, type DoctorReport } from './doctor.js';
 import type { CommandRunner } from './types.js';
 import { withInstallLock, withInstallLockSync, type InstallLockOptions } from './lock.js';
+import { repairOwnedMcpServerSync } from '../mcp/lifecycle.js';
 
 export interface InstallInput {
   readonly sourceRoot: string;
@@ -446,6 +447,11 @@ async function installOrUpdateUnlocked(input: InstallInput): Promise<InstallResu
       project_state: projectState, project_state_ownership_marker: projectStateOwnershipMarker,
     });
     fs.rmSync(journalPath, { force: true });
+    try {
+      repairOwnedMcpServerSync({ projectRoot: project, homeDir: home, packageRoot: stage });
+    } catch {
+      // Advisory repair
+    }
     return { receiptPath, receipt, doctor };
   } catch (error) {
     reconcileInstallTransaction(state.path, home, initializeProjectState);

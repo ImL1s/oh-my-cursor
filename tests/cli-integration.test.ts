@@ -10,7 +10,7 @@ import { digestObject, WorkflowPersistenceStore } from '../src/workflows/index.j
 
 function harness(cwd: string) {
   const stdout: string[] = []; const stderr: string[] = [];
-  return { stdout, stderr, io: { stdout: (text: string) => stdout.push(text), stderr: (text: string) => stderr.push(text) }, dependencies: { cwd, packageRoot: path.resolve('.') } };
+  return { stdout, stderr, io: { stdout: (text: string) => stdout.push(text), stderr: (text: string) => stderr.push(text) }, dependencies: { cwd, homeDir: path.join(cwd, 'home'), packageRoot: path.resolve('.') } };
 }
 
 describe('integrated CLI surface', () => {

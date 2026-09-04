@@ -39,7 +39,8 @@ omcu --madmax --tmux …       # 强制 tmux（缺失则失败）
 | `omcu capabilities discover` | 比对实时 Cursor 版本/help 与固定 lock。 |
 | `omcu capabilities native-status` | 运行 `cursor-agent status` 并返回 JSON 封装。 |
 | `omcu native-status` | `capabilities native-status` 的别名。 |
-| `omcu mcp-install [--file <path>]` | 将 `oh-my-cursor` stdio 服务器合并至项目 MCP JSON 文件。 |
+| `omcu mcp status|install|uninstall [--file <path>]` | 检查、安装或安全移除项目 MCP 服务器配置。 |
+| `omcu mcp-install [--file <path>]` | 将 `oh-my-cursor` stdio 服务器合并至项目 MCP JSON 文件（旧版别名）。 |
 | `omcu mcp-server` | 在 stdio 上提供固定的非权威 MCP 工具集。 |
 
 CLI 生命周期路径从来源安装。已验证的离线压缩包请使用 [安装](installation.zh.md) 所述的 `scripts/install.sh` 与 `dist/src/setup/script-entry.js`。
@@ -245,7 +246,11 @@ Do not edit this block manually; it is generated from `COMMAND_SCHEMAS`.
 - `omcu capabilities native-status` | options: none | positionals: none
 - `omcu native-status` | options: none | positionals: none
 - `omcu mcp-server` | options: none | positionals: none
-- `omcu mcp-install` | options: --file:string | positionals: none
+- `omcu mcp` | options: none | positionals: none
+- `omcu mcp status` | options: --file:string; --receipt:string; --no-probe:flag | positionals: none
+- `omcu mcp install` | options: --file:string; --receipt:string; --dry-run:flag; --replace:flag | positionals: none
+- `omcu mcp uninstall` | options: --file:string; --receipt:string; --dry-run:flag | positionals: none
+- `omcu mcp-install` | options: --file:string; --receipt:string; --dry-run:flag; --replace:flag | positionals: none
 - `omcu session` | options: none | positionals: none
 - `omcu session create` | options: none | positionals: none
 - `omcu session list` | options: none | positionals: none

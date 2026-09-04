@@ -39,7 +39,8 @@ The single-token shorthand is used only when the token is more than two edits fr
 | `omcu capabilities discover` | Compare the live Cursor version/help with the pinned lock. |
 | `omcu capabilities native-status` | Run `cursor-agent status` and return a JSON envelope. |
 | `omcu native-status` | Alias for `capabilities native-status`. |
-| `omcu mcp-install [--file <path>]` | Merge an `oh-my-cursor` stdio server into a project MCP JSON file. |
+| `omcu mcp status|install|uninstall [--file <path>]` | Inspect, install, or safely remove project MCP server configuration. |
+| `omcu mcp-install [--file <path>]` | Merge an `oh-my-cursor` stdio server into a project MCP JSON file (legacy alias). |
 | `omcu mcp-server` | Serve the fixed non-authoritative MCP tool set on stdio. |
 
 The CLI lifecycle path installs from source. For verified offline archives, use `scripts/install.sh` and `dist/src/setup/script-entry.js` as described in [Installation](installation.md).
@@ -262,7 +263,11 @@ Do not edit this block manually; it is generated from `COMMAND_SCHEMAS`.
 - `omcu capabilities native-status` | options: none | positionals: none
 - `omcu native-status` | options: none | positionals: none
 - `omcu mcp-server` | options: none | positionals: none
-- `omcu mcp-install` | options: --file:string | positionals: none
+- `omcu mcp` | options: none | positionals: none
+- `omcu mcp status` | options: --file:string; --receipt:string; --no-probe:flag | positionals: none
+- `omcu mcp install` | options: --file:string; --receipt:string; --dry-run:flag; --replace:flag | positionals: none
+- `omcu mcp uninstall` | options: --file:string; --receipt:string; --dry-run:flag | positionals: none
+- `omcu mcp-install` | options: --file:string; --receipt:string; --dry-run:flag; --replace:flag | positionals: none
 - `omcu session` | options: none | positionals: none
 - `omcu session create` | options: none | positionals: none
 - `omcu session list` | options: none | positionals: none
