@@ -255,6 +255,30 @@ describe('Journal primitive', () => {
     await expect(
       journal.append({ kind: 'ok', payload: { data: '3' } }),
     ).rejects.toThrow('E_JOURNAL_LIMIT');
+
+    // Reopened stream with defaults inherits persisted metadata limits
+    const reopened = new Journal<{ data: string }>(streamDir, 'limits-stream');
+    expect(reopened.getLimits().maxStreamRecords).toBe(2);
+    expect(reopened.getLimits().maxRecordBytes).toBe(350);
+    await expect(
+      reopened.append({ kind: 'ok', payload: { data: '3' } }),
+    ).rejects.toThrow('E_JOURNAL_LIMIT');
+
+    // Reopened stream with incompatible constructor options is rejected
+    const incompatible = new Journal<{ data: string }>(streamDir, 'limits-stream', {
+      maxStreamRecords: 5,
+    });
+    await expect(
+      incompatible.append({ kind: 'ok', payload: { data: '3' } }),
+    ).rejects.toThrow('E_JOURNAL_OPTIONS_INCOMPATIBLE');
+    expect(() => incompatible.init()).toThrow('E_JOURNAL_OPTIONS_INCOMPATIBLE');
+
+    // Reopened stream with matching constructor options succeeds
+    const matching = new Journal<{ data: string }>(streamDir, 'limits-stream', {
+      maxRecordBytes: 350,
+      maxStreamRecords: 2,
+    });
+    expect(matching.getLimits().maxStreamRecords).toBe(2);
   });
 
   it('validates safe stream IDs', () => {

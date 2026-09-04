@@ -83,7 +83,8 @@ export type JournalErrorCode =
   | 'E_JOURNAL_RECORD_TOO_LARGE'
   | 'E_JOURNAL_STREAM_ID_INVALID'
   | 'E_JOURNAL_NON_TAIL_CORRUPTION'
-  | 'E_JOURNAL_NOT_REPAIRABLE';
+  | 'E_JOURNAL_NOT_REPAIRABLE'
+  | 'E_JOURNAL_OPTIONS_INCOMPATIBLE';
 
 export interface JournalVerificationError {
   readonly code: JournalErrorCode;
@@ -172,9 +173,17 @@ function validDate(value: unknown): value is string {
   }
 }
 
+export interface JournalLimits {
+  readonly maxRecordBytes: number;
+  readonly maxSegmentBytes: number;
+  readonly maxSegmentRecords: number;
+  readonly maxStreamRecords: number;
+}
+
 export class Journal<T = unknown> {
   readonly streamDir: string;
   readonly streamId: string;
+  private readonly options: JournalOptions;
   private readonly maxRecordBytes: number;
   private readonly maxSegmentBytes: number;
   private readonly maxSegmentRecords: number;
@@ -185,12 +194,45 @@ export class Journal<T = unknown> {
   constructor(streamDir: string, streamId: string, options: JournalOptions = {}) {
     this.streamDir = path.resolve(streamDir);
     this.streamId = assertSafeStreamId(streamId);
+    this.options = options;
     this.maxRecordBytes = options.maxRecordBytes ?? DEFAULT_MAX_RECORD_BYTES;
     this.maxSegmentBytes = options.maxSegmentBytes ?? DEFAULT_MAX_SEGMENT_BYTES;
     this.maxSegmentRecords = options.maxSegmentRecords ?? DEFAULT_MAX_SEGMENT_RECORDS;
     this.maxStreamRecords = options.maxStreamRecords ?? DEFAULT_MAX_STREAM_RECORDS;
     this.redactPayload = options.redactPayload ?? false;
     this.now = options.now ?? (() => new Date());
+  }
+
+  private resolveLimits(): JournalLimits {
+    const meta = this.readMeta();
+    if (meta === null) {
+      return {
+        maxRecordBytes: this.maxRecordBytes,
+        maxSegmentBytes: this.maxSegmentBytes,
+        maxSegmentRecords: this.maxSegmentRecords,
+        maxStreamRecords: this.maxStreamRecords,
+      };
+    }
+
+    if (
+      (this.options.maxRecordBytes !== undefined && this.options.maxRecordBytes !== meta.max_record_bytes) ||
+      (this.options.maxSegmentBytes !== undefined && this.options.maxSegmentBytes !== meta.max_segment_bytes) ||
+      (this.options.maxSegmentRecords !== undefined && this.options.maxSegmentRecords !== meta.max_segment_records) ||
+      (this.options.maxStreamRecords !== undefined && this.options.maxStreamRecords !== meta.max_stream_records)
+    ) {
+      throw new Error('E_JOURNAL_OPTIONS_INCOMPATIBLE');
+    }
+
+    return {
+      maxRecordBytes: meta.max_record_bytes,
+      maxSegmentBytes: meta.max_segment_bytes,
+      maxSegmentRecords: meta.max_segment_records,
+      maxStreamRecords: meta.max_stream_records,
+    };
+  }
+
+  getLimits(): JournalLimits {
+    return this.resolveLimits();
   }
 
   private metaPath(): string {
@@ -269,7 +311,10 @@ export class Journal<T = unknown> {
 
   private initUnlocked(): JournalHead {
     const existingHead = this.readHead();
-    if (existingHead !== null) return existingHead;
+    if (existingHead !== null) {
+      this.resolveLimits();
+      return existingHead;
+    }
 
     const now = this.now();
     fs.mkdirSync(this.segmentsDir(), { recursive: true, mode: 0o700 });
@@ -322,13 +367,15 @@ export class Journal<T = unknown> {
         head = this.initUnlocked();
       }
 
+      const limits = this.resolveLimits();
+
       if (expectedHead !== undefined) {
         if (head.head_sequence !== expectedHead.sequence || head.head_digest !== expectedHead.digest) {
           throw new Error('E_JOURNAL_HEAD_MISMATCH');
         }
       }
 
-      if (head.total_records >= this.maxStreamRecords) {
+      if (head.total_records >= limits.maxStreamRecords) {
         throw new Error('E_JOURNAL_LIMIT');
       }
 
@@ -353,7 +400,7 @@ export class Journal<T = unknown> {
 
       const line = `${canonicalJson(record)}\n`;
       const lineBytes = Buffer.byteLength(line);
-      if (lineBytes > this.maxRecordBytes) {
+      if (lineBytes > limits.maxRecordBytes) {
         throw new Error('E_JOURNAL_RECORD_TOO_LARGE');
       }
 
@@ -369,8 +416,8 @@ export class Journal<T = unknown> {
 
       // Check if rotation is needed by byte limit or record limit
       if (
-        (currentSegmentBytes > 0 && currentSegmentBytes + lineBytes > this.maxSegmentBytes) ||
-        (currentSegmentRecords > 0 && currentSegmentRecords >= this.maxSegmentRecords)
+        (currentSegmentBytes > 0 && currentSegmentBytes + lineBytes > limits.maxSegmentBytes) ||
+        (currentSegmentRecords > 0 && currentSegmentRecords >= limits.maxSegmentRecords)
       ) {
         activeSegmentIndex += 1;
         activeSegment = segmentFileName(activeSegmentIndex);
