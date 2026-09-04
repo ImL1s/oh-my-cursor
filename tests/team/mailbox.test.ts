@@ -316,6 +316,11 @@ describe('team mailbox primitives', () => {
     expect(dup.message_id).toBe(again.message_id);
 
     fs.writeFileSync(teamMailboxPath(root, 'mail', 'two'), '{not-json', 'utf8');
+    fs.writeFileSync(
+      path.join(teamMailboxJournalDir(root, 'mail', 'two'), 'segments', '00000001.jsonl'),
+      '{not-json\n',
+      'utf8',
+    );
     await expect(listMailboxMessages(root, 'mail', 'two')).rejects.toThrow('E_TEAM_MAILBOX_CORRUPT');
 
     fs.writeFileSync(

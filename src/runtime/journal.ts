@@ -641,6 +641,67 @@ export class Journal<T = unknown> {
     return false;
   }
 
+  private canRecoverPartialInit(): boolean {
+    if (fs.existsSync(this.metaPath())) {
+      try {
+        const metaStat = fs.lstatSync(this.metaPath());
+        if (metaStat.isSymbolicLink() || !metaStat.isFile()) return false;
+        if (typeof process.getuid === 'function' && metaStat.uid !== process.getuid()) return false;
+        const meta = JSON.parse(fs.readFileSync(this.metaPath(), 'utf8')) as Partial<JournalMeta>;
+        if (meta.schema_version !== 1 || meta.stream_id !== this.streamId) return false;
+      } catch {
+        return false;
+      }
+    }
+
+    if (fs.existsSync(this.headPath())) return false;
+
+    const qDir = this.quarantineDir();
+    if (fs.existsSync(qDir)) {
+      try {
+        const stat = fs.lstatSync(qDir);
+        if (stat.isSymbolicLink() || !stat.isDirectory()) return false;
+        if (fs.readdirSync(qDir).length > 0) return false;
+      } catch {
+        return false;
+      }
+    }
+
+    const rDir = this.receiptsDir();
+    if (fs.existsSync(rDir)) {
+      try {
+        const stat = fs.lstatSync(rDir);
+        if (stat.isSymbolicLink() || !stat.isDirectory()) return false;
+        if (fs.readdirSync(rDir).length > 0) return false;
+      } catch {
+        return false;
+      }
+    }
+
+    const sDir = this.segmentsDir();
+    if (fs.existsSync(sDir)) {
+      try {
+        const stat = fs.lstatSync(sDir);
+        if (stat.isSymbolicLink() || !stat.isDirectory()) return false;
+        const segFiles = fs.readdirSync(sDir);
+        if (segFiles.length === 0) {
+          // empty directory is valid
+        } else if (segFiles.length === 1 && segFiles[0] === segmentFileName(1)) {
+          const seg1Path = path.join(sDir, segFiles[0]);
+          const seg1Stat = fs.lstatSync(seg1Path);
+          if (seg1Stat.isSymbolicLink() || !seg1Stat.isFile() || seg1Stat.size !== 0) return false;
+          if (typeof process.getuid === 'function' && seg1Stat.uid !== process.getuid()) return false;
+        } else {
+          return false;
+        }
+      } catch {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
   init(): JournalHead {
     return withDirectoryLockSync(this.streamDir, () => this.initUnlocked());
   }
@@ -653,7 +714,9 @@ export class Journal<T = unknown> {
     }
 
     if (this.hasArtifacts()) {
-      throw new Error('E_JOURNAL_CORRUPT');
+      if (!this.canRecoverPartialInit()) {
+        throw new Error('E_JOURNAL_CORRUPT');
+      }
     }
 
     const now = this.now();
@@ -1292,9 +1355,9 @@ export class Journal<T = unknown> {
             }
             if (truncated) {
               if (!fs.existsSync(intent.final_receipt_path)) {
-                const receipt: JournalRepairReceipt = {
-                  schema_version: 1,
-                  store_kind: 'journal_repair_receipt',
+                const receiptMaterial = {
+                  schema_version: 1 as const,
+                  store_kind: 'journal_repair_receipt' as const,
                   stream_id: intent.stream_id,
                   repaired_at: intent.repaired_at ?? this.now().toISOString(),
                   segment: intent.segment,
@@ -1304,7 +1367,11 @@ export class Journal<T = unknown> {
                   backup_file: intent.backup_file ?? '',
                   head_sequence: intent.head_sequence ?? 0,
                   head_digest: intent.head_digest ?? null,
-                  receipt_sha256: intent.receipt_sha256,
+                };
+                const receiptSha256 = sha256(canonicalJson(receiptMaterial));
+                const receipt: JournalRepairReceipt = {
+                  ...receiptMaterial,
+                  receipt_sha256: receiptSha256,
                 };
                 atomicWriteJson(intent.final_receipt_path, receipt);
                 syncPathToDisk(intent.final_receipt_path);
@@ -1324,6 +1391,60 @@ export class Journal<T = unknown> {
     }
   }
 
+  private validateRepairReceipt(parsed: unknown, expectedStreamId: string): JournalRepairReceipt | null {
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const p = parsed as Partial<JournalRepairReceipt>;
+    if (
+      p.schema_version !== 1 ||
+      p.store_kind !== 'journal_repair_receipt' ||
+      p.stream_id !== expectedStreamId ||
+      typeof p.repaired_at !== 'string' ||
+      typeof p.segment !== 'string' ||
+      !SAFE_STREAM_SEGMENT.test(p.segment) ||
+      typeof p.original_bytes !== 'number' ||
+      !Number.isSafeInteger(p.original_bytes) ||
+      p.original_bytes < 0 ||
+      typeof p.repaired_bytes !== 'number' ||
+      !Number.isSafeInteger(p.repaired_bytes) ||
+      p.repaired_bytes < 0 ||
+      typeof p.truncated_bytes !== 'number' ||
+      !Number.isSafeInteger(p.truncated_bytes) ||
+      p.truncated_bytes < 0 ||
+      typeof p.backup_file !== 'string' ||
+      typeof p.head_sequence !== 'number' ||
+      !Number.isSafeInteger(p.head_sequence) ||
+      p.head_sequence < 0 ||
+      (p.head_digest !== null && typeof p.head_digest !== 'string') ||
+      typeof p.receipt_sha256 !== 'string'
+    ) {
+      return null;
+    }
+
+    const receiptMaterial = {
+      schema_version: 1 as const,
+      store_kind: 'journal_repair_receipt' as const,
+      stream_id: p.stream_id,
+      repaired_at: p.repaired_at,
+      segment: p.segment,
+      original_bytes: p.original_bytes,
+      repaired_bytes: p.repaired_bytes,
+      truncated_bytes: p.truncated_bytes,
+      backup_file: p.backup_file,
+      head_sequence: p.head_sequence,
+      head_digest: p.head_digest,
+    };
+
+    const expectedSha256 = sha256(canonicalJson(receiptMaterial));
+    if (p.receipt_sha256 !== expectedSha256) {
+      return null;
+    }
+
+    return {
+      ...receiptMaterial,
+      receipt_sha256: expectedSha256,
+    };
+  }
+
   listReceipts(): readonly JournalRepairReceipt[] {
     const dir = this.receiptsDir();
     if (!fs.existsSync(dir)) return [];
@@ -1339,8 +1460,15 @@ export class Journal<T = unknown> {
       const receipts: JournalRepairReceipt[] = [];
       for (const file of files) {
         try {
-          const raw = fs.readFileSync(path.join(dir, file), 'utf8');
-          receipts.push(JSON.parse(raw) as JournalRepairReceipt);
+          const filePath = path.join(dir, file);
+          const stat = fs.lstatSync(filePath);
+          if (stat.isSymbolicLink() || !stat.isFile()) continue;
+          if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) continue;
+          const raw = fs.readFileSync(filePath, 'utf8');
+          const valid = this.validateRepairReceipt(JSON.parse(raw), this.streamId);
+          if (valid !== null) {
+            receipts.push(valid);
+          }
         } catch {}
       }
       return receipts;

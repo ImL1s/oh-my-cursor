@@ -1293,6 +1293,73 @@ describe('Journal primitive', () => {
     // Append should reject the gap and fail with E_JOURNAL_CORRUPT
     await expect(journal.append({ kind: 'msg', payload: { msg: 'fourth' } })).rejects.toThrow('E_JOURNAL_CORRUPT');
   });
+
+  it('recovers and safely completes partial initial initialization', async () => {
+    const streamDir = path.join(tempDir, 'partial-init-stream');
+    const journal = new Journal<{ msg: string }>(streamDir, 'partial-init');
+
+    // Simulate crash after meta.json and segments dir created, but before head.json
+    fs.mkdirSync(path.join(streamDir, 'segments'), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(path.join(streamDir, 'receipts'), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(path.join(streamDir, 'quarantine'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      path.join(streamDir, 'meta.json'),
+      JSON.stringify({
+        schema_version: 1,
+        stream_id: 'partial-init',
+        created_at: new Date().toISOString(),
+        max_record_bytes: 65536,
+        max_segment_bytes: 2097152,
+        max_segment_records: 5000,
+        max_stream_records: 100000,
+      }),
+    );
+    // 0-byte initial segment
+    fs.writeFileSync(path.join(streamDir, 'segments', '00000001.jsonl'), '');
+
+    // Next init() should safely recover and complete initialization instead of throwing E_JOURNAL_CORRUPT
+    const head = journal.init();
+    expect(head.stream_id).toBe('partial-init');
+    expect(head.head_sequence).toBe(0);
+    expect(head.active_segment).toBe('00000001.jsonl');
+
+    // Appending should work normally
+    const rec = await journal.append({ kind: 'msg', payload: { msg: 'recovered' } });
+    expect(rec.sequence).toBe(1);
+    expect(journal.verify().ok).toBe(true);
+  });
+
+  it('validates repair receipts and ignores corrupt or forged receipts', async () => {
+    const streamDir = path.join(tempDir, 'repair-receipt-validation');
+    const journal = new Journal<{ msg: string }>(streamDir, 'receipt-val', {
+      maxSegmentBytes: 1000,
+      maxRecordBytes: 500,
+    });
+    await journal.append({ kind: 'msg', payload: { msg: 'first' } });
+
+    // Simulate uncommitted trailing bytes and perform legitimate repair
+    const segPath = path.join(streamDir, 'segments', '00000001.jsonl');
+    fs.appendFileSync(segPath, '{"broken-tail\n');
+    const legitReceipt = await journal.repairIncompleteTail();
+    expect(legitReceipt.receipt_sha256).toBeDefined();
+
+    // Verify listReceipts includes the legitimate receipt
+    expect(journal.listReceipts()).toHaveLength(1);
+
+    // Plant corrupt receipt (invalid json)
+    fs.writeFileSync(path.join(streamDir, 'receipts', 'repair-01-corrupt.json'), '{invalid json');
+    // Plant forged receipt (wrong receipt_sha256)
+    const forgedReceipt = { ...legitReceipt, receipt_sha256: '0000000000000000000000000000000000000000000000000000000000000000' };
+    fs.writeFileSync(path.join(streamDir, 'receipts', 'repair-02-forged.json'), JSON.stringify(forgedReceipt));
+    // Plant wrong stream_id receipt
+    const wrongStreamReceipt = { ...legitReceipt, stream_id: 'other-stream' };
+    fs.writeFileSync(path.join(streamDir, 'receipts', 'repair-03-wrong-stream.json'), JSON.stringify(wrongStreamReceipt));
+
+    // listReceipts should only return the 1 authentic valid receipt
+    const filtered = journal.listReceipts();
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0]?.receipt_sha256).toBe(legitReceipt.receipt_sha256);
+  });
 });
 
 

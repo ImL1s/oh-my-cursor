@@ -4,6 +4,8 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { projectStateRoot } from '../../src/runtime/state-root.js';
 import { ExperimentalTmuxTeamSupervisor, TeamManifestStore, type TeamManifest, type TeamManifestRepository } from '../../src/team/index.js';
+import { listMailboxMessages, sendDirectMessage, markMessageDelivered } from '../../src/team/mailbox.js';
+import { initializeTeamState } from '../../src/team/state-root.js';
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -372,5 +374,46 @@ describe('experimental tmux team supervisor', () => {
       { id: 'two', objective: 'second', cwd: state.workspace, owned_paths: ['src/./a'] },
     ])).rejects.toThrow(/E_TEAM_PATH_(INVALID|CONFLICT)/);
     expect(invoked).toBe(false);
+  });
+
+  it('prefers authoritative mailbox journal over corrupt legacy JSON file', async () => {
+    const state = fixture();
+    const root = projectStateRoot(state.workspace);
+    const teamName = 'mailbox-corrupt-legacy-team';
+
+    // Set up team config with worker-1 and worker-2
+    initializeTeamState(root, {
+      teamName,
+      task: 'test mailbox resilience',
+      workers: [
+        { name: 'worker-1', owned_paths: ['src/w1'] },
+        { name: 'worker-2', owned_paths: ['src/w2'] },
+      ],
+    });
+
+    // Send a message using the journal
+    const msg = await sendDirectMessage(root, teamName, 'worker-1', 'worker-2', 'hello from worker 1');
+    expect(msg.body).toBe('hello from worker 1');
+
+    // Corrupt the legacy JSON mailbox file if present, or create a corrupt one
+    const legacyFile = path.join(state.workspace, '.omcu', 'teams', teamName, 'mailboxes', 'worker-2.json');
+    fs.mkdirSync(path.dirname(legacyFile), { recursive: true });
+    fs.writeFileSync(legacyFile, '{corrupted-legacy-json');
+
+    // listMailboxMessages should still succeed from authoritative journal without failing on legacy corruption
+    const messages = await listMailboxMessages(root, teamName, 'worker-2');
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.body).toBe('hello from worker 1');
+
+    // markMessageDelivered should still succeed
+    const delivered = await markMessageDelivered(root, teamName, 'worker-2', msg.message_id);
+    expect(delivered).toBe(true);
+
+    // Subsequent send should still succeed
+    const msg2 = await sendDirectMessage(root, teamName, 'worker-1', 'worker-2', 'second message');
+    expect(msg2.body).toBe('second message');
+
+    const updatedMessages = await listMailboxMessages(root, teamName, 'worker-2');
+    expect(updatedMessages).toHaveLength(2);
   });
 });
