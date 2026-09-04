@@ -125,7 +125,7 @@ describe('Journal primitive', () => {
   it('tail reads only latest records without loading all history', async () => {
     const streamDir = path.join(tempDir, 'tail');
     const journal = new Journal<{ n: number }>(streamDir, 'tail-stream', {
-      maxSegmentBytes: 250,
+      maxSegmentBytes: 350,
     });
 
     for (let i = 1; i <= 10; i++) {
@@ -557,5 +557,124 @@ describe('Journal primitive', () => {
     // Restoring valid head restores valid status
     fs.writeFileSync(headFile, JSON.stringify(validHead));
     expect(journal.verify().ok).toBe(true);
+  });
+
+  it('propagates file fsync errors in repairIncompleteTail and does not write receipt', async () => {
+    const streamDir = path.join(tempDir, 'repair-fsync-fail');
+    const journal = new Journal<{ msg: string }>(streamDir, 'repair-fsync');
+
+    await journal.append({ kind: 'msg', payload: { msg: 'first' } });
+    const seg = path.join(streamDir, 'segments', '00000001.jsonl');
+    fs.appendFileSync(seg, '{incomplete-tail-without-newline');
+
+    const spyFsync = vi.spyOn(fs, 'fsyncSync').mockImplementation(() => {
+      throw new Error('EIO: i/o failure during fsync');
+    });
+
+    try {
+      await expect(journal.repairIncompleteTail()).rejects.toThrow('EIO: i/o failure during fsync');
+      const receiptsDir = path.join(streamDir, 'receipts');
+      if (fs.existsSync(receiptsDir)) {
+        expect(fs.readdirSync(receiptsDir)).toHaveLength(0);
+      }
+    } finally {
+      spyFsync.mockRestore();
+    }
+  });
+
+  it('validates committed records in readRange and tail and fails with structured corruption error', async () => {
+    const streamDir = path.join(tempDir, 'read-range-validation');
+    const journal = new Journal<{ status: string }>(streamDir, 'read-val');
+
+    await journal.append({ kind: 'event', payload: { status: 'init' } });
+    await journal.append({ kind: 'event', payload: { status: 'running' } });
+
+    // Sanity check: valid readRange returns both
+    expect(journal.readRange()).toHaveLength(2);
+    expect(journal.tail(2)).toHaveLength(2);
+
+    const seg = path.join(streamDir, 'segments', '00000001.jsonl');
+    const lines = fs.readFileSync(seg, 'utf8').trim().split('\n');
+
+    // 1. Corrupt payload in committed record 2 (valid JSON, but altered payload so digest mismatches)
+    const rec2 = JSON.parse(lines[1]!);
+    rec2.payload.status = 'corrupted_status';
+    fs.writeFileSync(seg, `${lines[0]}\n${JSON.stringify(rec2)}\n`);
+
+    expect(() => journal.readRange()).toThrow('E_JOURNAL_DIGEST_MISMATCH');
+    expect(() => journal.tail(1)).toThrow('E_JOURNAL_DIGEST_MISMATCH');
+
+    // 2. Corrupt sequence in committed record 2
+    rec2.sequence = 99;
+    fs.writeFileSync(seg, `${lines[0]}\n${JSON.stringify(rec2)}\n`);
+    expect(() => journal.readRange()).toThrow();
+
+    // 3. Corrupt stream ID in committed record 2
+    rec2.stream_id = 'different-stream';
+    fs.writeFileSync(seg, `${lines[0]}\n${JSON.stringify(rec2)}\n`);
+    expect(() => journal.readRange()).toThrow('E_JOURNAL_STREAM_MISMATCH');
+
+    // 4. Corrupt JSON in committed record 1
+    fs.writeFileSync(seg, `{bad-json\n${lines[1]}\n`);
+    expect(() => journal.readRange()).toThrow('E_JOURNAL_CORRUPT');
+    expect(() => journal.tail(2)).toThrow('E_JOURNAL_CORRUPT');
+  });
+
+  it('enforces segment byte limits and rejects incompatible limits or oversized records', async () => {
+    const streamDir = path.join(tempDir, 'incompatible-limits');
+
+    // 1. Reject incompatible options where maxRecordBytes > maxSegmentBytes
+    expect(() => new Journal(streamDir, 'incompat', {
+      maxRecordBytes: 1000,
+      maxSegmentBytes: 500,
+    })).toThrow('E_JOURNAL_OPTIONS_INCOMPATIBLE');
+
+    // 2. Bound single record size to segment bound even if record limit is lower
+    const boundDir = path.join(tempDir, 'bound-record-test');
+    const boundJournal = new Journal<{ data: string }>(boundDir, 'bound-test', {
+      maxSegmentBytes: 200,
+    });
+    // Payload that exceeds 200 bytes
+    const largePayload = 'a'.repeat(250);
+    await expect(boundJournal.append({ kind: 'big', payload: { data: largePayload } }))
+      .rejects.toThrow('E_JOURNAL_RECORD_TOO_LARGE');
+
+    // 3. Record exceeding lowered segment bounds detected by verify
+    const smallDir = path.join(tempDir, 'small-seg-test');
+    const smallJournal = new Journal<{ x: string }>(smallDir, 'small-seg', {
+      maxSegmentBytes: 400,
+      maxRecordBytes: 250,
+    });
+    await smallJournal.append({ kind: 'x', payload: { x: 'hello' } });
+
+    // Manually lower max_segment_bytes in meta.json below existing record size
+    const metaPath = path.join(smallDir, 'meta.json');
+    const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+    fs.writeFileSync(metaPath, JSON.stringify({ ...meta, max_segment_bytes: 50, max_record_bytes: 50 }));
+
+    const v = smallJournal.verify();
+    expect(v.ok).toBe(false);
+    expect(v.status).toBe('corrupt');
+    expect(v.error?.code).toBe('E_JOURNAL_RECORD_TOO_LARGE');
+    expect(v.error?.message).toContain('exceeds maximum record bytes');
+
+    // 4. Multiple records together exceeding segment limit
+    const multiDir = path.join(tempDir, 'multi-seg-test');
+    const multiJournal = new Journal<{ x: string }>(multiDir, 'multi-seg', {
+      maxSegmentBytes: 800,
+      maxRecordBytes: 300,
+    });
+    await multiJournal.append({ kind: 'x', payload: { x: 'first' } });
+    await multiJournal.append({ kind: 'x', payload: { x: 'second' } });
+    const multiMetaPath = path.join(multiDir, 'meta.json');
+    const multiMeta = JSON.parse(fs.readFileSync(multiMetaPath, 'utf8'));
+    // Each record is ~240 bytes (< 300), but both together are ~480 bytes (> 350)
+    fs.writeFileSync(multiMetaPath, JSON.stringify({ ...multiMeta, max_segment_bytes: 350, max_record_bytes: 300 }));
+
+    const vMulti = multiJournal.verify();
+    expect(vMulti.ok).toBe(false);
+    expect(vMulti.status).toBe('corrupt');
+    expect(vMulti.error?.code).toBe('E_JOURNAL_CORRUPT');
+    expect(vMulti.error?.message).toContain('exceeds maximum segment bytes');
   });
 });

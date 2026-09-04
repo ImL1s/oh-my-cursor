@@ -147,27 +147,94 @@ export function assertSafeStreamId(streamId: string): string {
 }
 
 function syncPathToDisk(targetPath: string): void {
-  try {
-    if (!fs.existsSync(targetPath)) return;
-    const stat = fs.statSync(targetPath);
-    let fd: number;
-    if (stat.isDirectory()) {
-      fd = fs.openSync(targetPath, 'r');
-    } else {
-      try {
-        fd = fs.openSync(targetPath, 'r+');
-      } catch {
-        fd = fs.openSync(targetPath, 'r');
-      }
-    }
+  if (!fs.existsSync(targetPath)) return;
+  const stat = fs.statSync(targetPath);
+  if (stat.isDirectory()) {
     try {
-      fs.fsyncSync(fd);
-    } finally {
-      fs.closeSync(fd);
+      const fd = fs.openSync(targetPath, 'r');
+      try {
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch {
+      // Best-effort if platform restricts directory fsync
     }
-  } catch {
-    // Best-effort if platform restricts directory fsync
+    return;
   }
+
+  let fd: number;
+  try {
+    fd = fs.openSync(targetPath, 'r+');
+  } catch {
+    fd = fs.openSync(targetPath, 'r');
+  }
+  try {
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function validateCommittedRecord<T>(
+  record: unknown,
+  expectedStreamId: string,
+  expectedSequence?: number,
+  expectedPreviousDigest?: string | null,
+): JournalRecord<T> {
+  if (
+    typeof record !== 'object' ||
+    record === null ||
+    typeof (record as any).sequence !== 'number' ||
+    !Number.isSafeInteger((record as any).sequence) ||
+    (record as any).sequence < 1
+  ) {
+    throw new Error('E_JOURNAL_CORRUPT');
+  }
+
+  const r = record as JournalRecord<T>;
+
+  if (r.schema_version !== 1) {
+    throw new Error('E_JOURNAL_UNSUPPORTED_VERSION');
+  }
+
+  if (r.stream_id !== expectedStreamId) {
+    throw new Error('E_JOURNAL_STREAM_MISMATCH');
+  }
+
+  if (expectedSequence !== undefined && r.sequence !== expectedSequence) {
+    throw new Error('E_JOURNAL_SEQUENCE_MISMATCH');
+  }
+
+  if (r.sequence === 1) {
+    if (r.previous_digest !== null) {
+      throw new Error('E_JOURNAL_CORRUPT');
+    }
+  } else {
+    if (typeof r.previous_digest !== 'string' || !/^[a-f0-9]{64}$/.test(r.previous_digest)) {
+      throw new Error('E_JOURNAL_CORRUPT');
+    }
+  }
+
+  if (expectedPreviousDigest !== undefined && r.previous_digest !== expectedPreviousDigest) {
+    throw new Error('E_JOURNAL_DIGEST_MISMATCH');
+  }
+
+  if (typeof r.digest !== 'string' || !/^[a-f0-9]{64}$/.test(r.digest)) {
+    throw new Error('E_JOURNAL_CORRUPT');
+  }
+
+  const { digest: claimedDigest, ...material } = r;
+  const computedDigest = sha256(canonicalJson(material));
+  if (claimedDigest !== computedDigest) {
+    throw new Error('E_JOURNAL_DIGEST_MISMATCH');
+  }
+
+  if (!validDate(r.at)) {
+    throw new Error('E_JOURNAL_CORRUPT');
+  }
+
+  return r;
 }
 
 export function writeAllSync(fd: number, buffer: Buffer): void {
@@ -239,12 +306,19 @@ export class Journal<T = unknown> {
     this.streamDir = path.resolve(streamDir);
     this.streamId = assertSafeStreamId(streamId);
     this.options = options;
-    this.maxRecordBytes = options.maxRecordBytes ?? DEFAULT_MAX_RECORD_BYTES;
     this.maxSegmentBytes = options.maxSegmentBytes ?? DEFAULT_MAX_SEGMENT_BYTES;
     this.maxSegmentRecords = options.maxSegmentRecords ?? DEFAULT_MAX_SEGMENT_RECORDS;
     this.maxStreamRecords = options.maxStreamRecords ?? DEFAULT_MAX_STREAM_RECORDS;
     this.redactPayload = options.redactPayload ?? false;
     this.now = options.now ?? (() => new Date());
+
+    if (options.maxRecordBytes !== undefined && options.maxRecordBytes > this.maxSegmentBytes) {
+      throw new Error('E_JOURNAL_OPTIONS_INCOMPATIBLE');
+    }
+    this.maxRecordBytes = options.maxRecordBytes ?? Math.min(DEFAULT_MAX_RECORD_BYTES, this.maxSegmentBytes);
+    if (this.maxRecordBytes > this.maxSegmentBytes) {
+      throw new Error('E_JOURNAL_OPTIONS_INCOMPATIBLE');
+    }
   }
 
   private resolveLimits(): JournalLimits {
@@ -265,6 +339,10 @@ export class Journal<T = unknown> {
       (this.options.maxStreamRecords !== undefined && this.options.maxStreamRecords !== meta.max_stream_records)
     ) {
       throw new Error('E_JOURNAL_OPTIONS_INCOMPATIBLE');
+    }
+
+    if (meta.max_record_bytes > meta.max_segment_bytes) {
+      throw new Error('E_JOURNAL_CORRUPT');
     }
 
     return {
@@ -311,7 +389,8 @@ export class Journal<T = unknown> {
         !Number.isSafeInteger(parsed.max_record_bytes) ||
         !Number.isSafeInteger(parsed.max_segment_bytes) ||
         !Number.isSafeInteger(parsed.max_segment_records) ||
-        !Number.isSafeInteger(parsed.max_stream_records)
+        !Number.isSafeInteger(parsed.max_stream_records) ||
+        (parsed.max_record_bytes as number) > (parsed.max_segment_bytes as number)
       ) {
         throw new Error('E_JOURNAL_CORRUPT');
       }
@@ -444,7 +523,7 @@ export class Journal<T = unknown> {
 
       const line = `${canonicalJson(record)}\n`;
       const lineBytes = Buffer.byteLength(line);
-      if (lineBytes > limits.maxRecordBytes) {
+      if (lineBytes > limits.maxRecordBytes || lineBytes > limits.maxSegmentBytes) {
         throw new Error('E_JOURNAL_RECORD_TOO_LARGE');
       }
 
@@ -516,26 +595,59 @@ export class Journal<T = unknown> {
     if (segments.length === 0) return [];
 
     const collected: JournalRecord<T>[] = [];
-    // Read backwards through segments until limit is met
+    let expectedDigest: string | null = head.head_digest;
+    let expectedSeq: number = head.head_sequence;
+
     for (let i = segments.length - 1; i >= 0 && collected.length < limit; i--) {
       const segmentFile = path.join(this.segmentsDir(), segments[i]!);
-      if (!fs.existsSync(segmentFile)) continue;
+      if (!fs.existsSync(segmentFile)) {
+        throw new Error('E_JOURNAL_CORRUPT');
+      }
       const content = fs.readFileSync(segmentFile, 'utf8');
-      const lines = content.trim().split(/\r?\n/).filter(Boolean);
+      const lines = content.split(/\r?\n/);
+
       for (let j = lines.length - 1; j >= 0 && collected.length < limit; j--) {
+        const line = lines[j]!;
+        if (line.trim() === '') continue;
+
+        let parsed: unknown;
         try {
-          const record = JSON.parse(lines[j]!) as JournalRecord<T>;
-          // Only collect records up to head_sequence (fence uncommitted tail)
-          if (record.sequence <= head.head_sequence) {
-            collected.push(record);
-          }
+          parsed = JSON.parse(line);
         } catch {
-          // Skip unparseable lines in tail view
+          // Uncommitted tail in active segment before any committed records found
+          if (expectedSeq === head.head_sequence && collected.length === 0) {
+            continue;
+          }
+          throw new Error('E_JOURNAL_CORRUPT');
         }
+
+        if (
+          typeof parsed === 'object' &&
+          parsed !== null &&
+          typeof (parsed as any).sequence === 'number' &&
+          (parsed as any).sequence > head.head_sequence
+        ) {
+          // Uncommitted trailing record in active segment
+          continue;
+        }
+
+        const validRecord: JournalRecord<T> = validateCommittedRecord<T>(
+          parsed,
+          this.streamId,
+          expectedSeq,
+          undefined,
+        );
+
+        if (expectedDigest !== null && validRecord.digest !== expectedDigest) {
+          throw new Error('E_JOURNAL_DIGEST_MISMATCH');
+        }
+
+        collected.push(validRecord);
+        expectedDigest = validRecord.previous_digest;
+        expectedSeq = validRecord.sequence - 1;
       }
     }
 
-    // Since we collected backwards, reverse to preserve chronological order
     return collected.reverse();
   }
 
@@ -551,50 +663,72 @@ export class Journal<T = unknown> {
     if (fromSequence > toSequence || limit <= 0) return [];
 
     const segments = this.listSegments();
-    const records: JournalRecord<T>[] = [];
-
-    if (direction === 'desc') {
-      for (let i = segments.length - 1; i >= 0 && records.length < limit; i--) {
-        const segmentPath = path.join(this.segmentsDir(), segments[i]!);
-        if (!fs.existsSync(segmentPath)) continue;
-        const content = fs.readFileSync(segmentPath, 'utf8');
-        const lines = content.trim().split(/\r?\n/).filter(Boolean);
-
-        for (let j = lines.length - 1; j >= 0 && records.length < limit; j--) {
-          try {
-            const record = JSON.parse(lines[j]!) as JournalRecord<T>;
-            if (record.sequence >= fromSequence && record.sequence <= toSequence) {
-              records.push(record);
-            }
-          } catch {
-            // ignore bad lines during range read
-          }
-        }
-      }
-      return records;
-    }
+    let committedCount = 0;
+    let expectedSeq = 1;
+    let expectedPreviousDigest: string | null = null;
+    const matchedRecords: JournalRecord<T>[] = [];
 
     for (const segment of segments) {
-      if (records.length >= limit) break;
+      if (committedCount >= head.head_sequence) break;
       const segmentPath = path.join(this.segmentsDir(), segment);
-      if (!fs.existsSync(segmentPath)) continue;
+      if (!fs.existsSync(segmentPath)) {
+        throw new Error('E_JOURNAL_CORRUPT');
+      }
       const content = fs.readFileSync(segmentPath, 'utf8');
-      const lines = content.trim().split(/\r?\n/).filter(Boolean);
+      const lines = content.split(/\r?\n/);
 
-      for (const line of lines) {
-        if (records.length >= limit) break;
-        try {
-          const record = JSON.parse(line) as JournalRecord<T>;
-          if (record.sequence >= fromSequence && record.sequence <= toSequence) {
-            records.push(record);
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i]!;
+        if (committedCount >= head.head_sequence) {
+          break;
+        }
+        if (line.trim() === '') {
+          if (i === lines.length - 1) {
+            continue;
           }
+          throw new Error('E_JOURNAL_CORRUPT');
+        }
+
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(line);
         } catch {
-          // ignore bad lines during range read
+          throw new Error('E_JOURNAL_CORRUPT');
+        }
+
+        const validRecord: JournalRecord<T> = validateCommittedRecord<T>(
+          parsed,
+          this.streamId,
+          expectedSeq,
+          expectedPreviousDigest,
+        );
+
+        committedCount++;
+        expectedSeq = validRecord.sequence + 1;
+        expectedPreviousDigest = validRecord.digest;
+
+        if (validRecord.sequence >= fromSequence && validRecord.sequence <= toSequence) {
+          matchedRecords.push(validRecord);
         }
       }
     }
 
-    return records;
+    if (committedCount < head.head_sequence) {
+      throw new Error('E_JOURNAL_CORRUPT');
+    }
+
+    if (expectedPreviousDigest !== head.head_digest) {
+      throw new Error('E_JOURNAL_DIGEST_MISMATCH');
+    }
+
+    if (direction === 'desc') {
+      matchedRecords.reverse();
+    }
+
+    if (matchedRecords.length > limit) {
+      return matchedRecords.slice(0, limit);
+    }
+    return matchedRecords;
   }
 
   verify(): JournalVerificationResult {
@@ -636,6 +770,22 @@ export class Journal<T = unknown> {
         head_sequence: 0,
         head_digest: null,
         error: { code: 'E_JOURNAL_CORRUPT', message: `meta.json is corrupt: ${(error as Error).message}` },
+        repairable: false,
+      };
+    }
+
+    if (meta.max_record_bytes > meta.max_segment_bytes) {
+      return {
+        ok: false,
+        status: 'corrupt',
+        stream_id: this.streamId,
+        total_records: 0,
+        head_sequence: 0,
+        head_digest: null,
+        error: {
+          code: 'E_JOURNAL_CORRUPT',
+          message: `meta.json has max_record_bytes (${meta.max_record_bytes}) greater than max_segment_bytes (${meta.max_segment_bytes})`,
+        },
         repairable: false,
       };
     }
@@ -731,6 +881,8 @@ export class Journal<T = unknown> {
       const isLastSegment = segIdx === segments.length - 1;
       const buffer = fs.readFileSync(segPath);
       let offset = 0;
+      let segCommittedRecords = 0;
+      let segCommittedBytes = 0;
 
       while (offset < buffer.length) {
         const nextNewline = buffer.indexOf(0x0a, offset);
@@ -798,6 +950,25 @@ export class Journal<T = unknown> {
               code: 'E_JOURNAL_CORRUPT',
               message: 'Blank line detected in segment',
               segment: segName,
+              byte_offset: offset,
+            },
+            repairable: false,
+          };
+        }
+
+        if (lineLength > meta.max_record_bytes || lineLength > meta.max_segment_bytes) {
+          return {
+            ok: false,
+            status: 'corrupt',
+            stream_id: this.streamId,
+            total_records: totalValid,
+            head_sequence: head.head_sequence,
+            head_digest: head.head_digest,
+            error: {
+              code: 'E_JOURNAL_RECORD_TOO_LARGE',
+              message: `Record at offset ${offset} in ${segName} exceeds maximum record bytes (${meta.max_record_bytes}) or segment bytes (${meta.max_segment_bytes})`,
+              segment: segName,
+              sequence: expectedSeq,
               byte_offset: offset,
             },
             repairable: false,
@@ -993,6 +1164,44 @@ export class Journal<T = unknown> {
         if (record.sequence <= head.head_sequence) {
           scannedTotalBytes += lineLength;
           lastCommittedSegment = segName;
+          segCommittedRecords++;
+          segCommittedBytes += lineLength;
+          if (segCommittedBytes > meta.max_segment_bytes) {
+            return {
+              ok: false,
+              status: 'corrupt',
+              stream_id: this.streamId,
+              total_records: totalValid,
+              head_sequence: head.head_sequence,
+              head_digest: head.head_digest,
+              error: {
+                code: 'E_JOURNAL_CORRUPT',
+                message: `Segment ${segName} committed bytes (${segCommittedBytes}) exceeds maximum segment bytes (${meta.max_segment_bytes})`,
+                segment: segName,
+                sequence: record.sequence,
+                byte_offset: offset,
+              },
+              repairable: false,
+            };
+          }
+          if (segCommittedRecords > meta.max_segment_records) {
+            return {
+              ok: false,
+              status: 'corrupt',
+              stream_id: this.streamId,
+              total_records: totalValid,
+              head_sequence: head.head_sequence,
+              head_digest: head.head_digest,
+              error: {
+                code: 'E_JOURNAL_CORRUPT',
+                message: `Segment ${segName} committed records (${segCommittedRecords}) exceeds maximum segment records (${meta.max_segment_records})`,
+                segment: segName,
+                sequence: record.sequence,
+                byte_offset: offset,
+              },
+              repairable: false,
+            };
+          }
           if (segName === head.active_segment) {
             scannedActiveSegmentRecords++;
           }
