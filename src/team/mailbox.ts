@@ -159,25 +159,35 @@ export async function listMailboxMessages(
 ): Promise<readonly TeamMailboxMessage[]> {
   const name = assertSafeWorkerName(workerName);
   const file = teamMailboxPath(root, teamName, name);
-  if (!fs.existsSync(file)) return [];
+  const journal = mailboxJournal(root, teamName, name, () => new Date());
 
-  return withDirectoryLock(file, async () => {
-    if (!fs.existsSync(file)) return [];
-    const legacy = readMailboxUnlocked(root, teamName, name);
-    const journal = mailboxJournal(root, teamName, name, () => new Date());
-    await migrateLegacyMailboxIfNeeded(root, teamName, name, journal);
+  const hasLegacy = fs.existsSync(file);
+  const headBefore = journal.readHead();
+  if (!hasLegacy && (headBefore === null || headBefore.head_sequence === 0)) {
+    return [];
+  }
 
-    const head = journal.readHead();
-    let messages: TeamMailboxMessage[];
-    if (head !== null && head.head_sequence > 0) {
-      messages = readMessagesFromJournal(journal);
-    } else {
-      messages = [...legacy.messages];
-    }
+  if (hasLegacy) {
+    return withDirectoryLock(file, async () => {
+      const legacy = readMailboxUnlocked(root, teamName, name);
+      await migrateLegacyMailboxIfNeeded(root, teamName, name, journal);
 
-    if (options.includeDelivered === false) return messages.filter((message) => message.delivered_at === undefined);
-    return messages;
-  });
+      const head = journal.readHead();
+      let messages: TeamMailboxMessage[];
+      if (head !== null && head.head_sequence > 0) {
+        messages = readMessagesFromJournal(journal);
+      } else {
+        messages = [...legacy.messages];
+      }
+
+      if (options.includeDelivered === false) return messages.filter((message) => message.delivered_at === undefined);
+      return messages;
+    });
+  }
+
+  const messages = readMessagesFromJournal(journal);
+  if (options.includeDelivered === false) return messages.filter((message) => message.delivered_at === undefined);
+  return messages;
 }
 
 export async function sendDirectMessage(

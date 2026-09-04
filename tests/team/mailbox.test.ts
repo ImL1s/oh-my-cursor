@@ -10,6 +10,7 @@ import {
   markMessageDelivered,
   sendDirectMessage,
   teamConfigPath,
+  teamMailboxJournalDir,
   teamMailboxPath,
   teamManifestV2Path,
   teamStateDir,
@@ -414,7 +415,7 @@ describe('team mailbox primitives', () => {
     expect(beforeStale[0]?.delivered_at).toBeDefined();
 
     // Now simulate a stale concurrent migration or external append of the original send event
-    const journalDir = path.join(root.path, 'state', 'journal', 'team', 'stale-dup-mail', 'mailbox', 'two');
+    const journalDir = teamMailboxJournalDir(root, 'stale-dup-mail', 'two');
     const { Journal } = await import('../../src/runtime/journal.js');
     const journal = new Journal(journalDir, 'team/stale-dup-mail/mailbox/two');
     await journal.append({
@@ -432,6 +433,34 @@ describe('team mailbox primitives', () => {
     const unreadOnly = await listMailboxMessages(root, 'stale-dup-mail', 'two', { includeDelivered: false });
     expect(unreadOnly).toHaveLength(0);
   });
+
+  it('reads messages from journal even after legacy mailbox JSON file is deleted', async () => {
+    const { root } = workspace();
+    initializeTeamState(root, {
+      teamName: 'absent-legacy-mail',
+      task: 'read durable journal without legacy file',
+      workers: [{ name: 'one', owned_paths: ['a'] }, { name: 'two', owned_paths: ['b'] }],
+    });
+
+    // Send a message and list it to ensure it is migrated to journal
+    const msg = await sendDirectMessage(root, 'absent-legacy-mail', 'one', 'two', 'durable message');
+    const beforeRemove = await listMailboxMessages(root, 'absent-legacy-mail', 'two');
+    expect(beforeRemove).toHaveLength(1);
+    expect(beforeRemove[0]?.message_id).toBe(msg.message_id);
+
+    // Delete the legacy mailbox JSON file
+    const legacyFile = teamMailboxPath(root, 'absent-legacy-mail', 'two');
+    expect(fs.existsSync(legacyFile)).toBe(true);
+    fs.rmSync(legacyFile);
+    expect(fs.existsSync(legacyFile)).toBe(false);
+
+    // listMailboxMessages should still read and return the durable messages from the journal
+    const afterRemove = await listMailboxMessages(root, 'absent-legacy-mail', 'two');
+    expect(afterRemove).toHaveLength(1);
+    expect(afterRemove[0]?.message_id).toBe(msg.message_id);
+    expect(afterRemove[0]?.body).toBe('durable message');
+  });
 });
+
 
 
