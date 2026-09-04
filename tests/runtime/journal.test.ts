@@ -833,4 +833,39 @@ describe('Journal primitive', () => {
     expect(v.error?.code).toBe('E_JOURNAL_LIMIT');
     expect(v.error?.message).toContain('exceeds maximum stream records');
   });
+
+  it('classifies empty rotated segment beyond head.active_segment as incomplete_tail and repairs cleanly', async () => {
+    const streamDir = path.join(tempDir, 'empty-rotated-seg');
+    const journal = new Journal<{ msg: string }>(streamDir, 'empty-rot', {
+      maxSegmentRecords: 2,
+    });
+
+    await journal.append({ kind: 'msg', payload: { msg: 'first' } });
+
+    // Simulate crash after opening empty rotated segment 00000002.jsonl before writing to it
+    const seg2 = path.join(streamDir, 'segments', '00000002.jsonl');
+    fs.writeFileSync(seg2, '');
+
+    // append() refuses because empty rotated segment exists
+    await expect(journal.append({ kind: 'msg', payload: { msg: 'second' } }))
+      .rejects.toThrow('E_JOURNAL_INCOMPLETE_TAIL');
+
+    // verify() correctly reports incomplete_tail (not valid!)
+    const v = journal.verify();
+    expect(v.ok).toBe(false);
+    expect(v.status).toBe('incomplete_tail');
+    expect(v.repairable).toBe(true);
+    expect(v.error?.segment).toBe('00000002.jsonl');
+
+    // repairIncompleteTail unlinks the empty segment
+    const receipt = await journal.repairIncompleteTail();
+    expect(receipt.segment).toBe('00000002.jsonl');
+    expect(receipt.truncated_bytes).toBe(0);
+    expect(fs.existsSync(seg2)).toBe(false);
+
+    // Stream is now valid and append succeeds
+    expect(journal.verify().ok).toBe(true);
+    const r2 = await journal.append({ kind: 'msg', payload: { msg: 'second' } });
+    expect(r2.sequence).toBe(2);
+  });
 });

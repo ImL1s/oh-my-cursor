@@ -1435,6 +1435,33 @@ export class Journal<T = unknown> {
         };
       }
 
+      const headActiveIdx = parseSegmentIndex(head.active_segment) ?? 1;
+      const extraSegments = segments.filter((seg) => {
+        const idx = parseSegmentIndex(seg);
+        return idx !== null && idx > headActiveIdx;
+      });
+      if (extraSegments.length > 0) {
+        const extraSeg = extraSegments[0]!;
+        const extraPath = path.join(this.segmentsDir(), extraSeg);
+        const extraBytes = fs.existsSync(extraPath) ? fs.statSync(extraPath).size : 0;
+        return {
+          ok: false,
+          status: 'incomplete_tail',
+          stream_id: this.streamId,
+          total_records: totalValid,
+          head_sequence: head.head_sequence,
+          head_digest: head.head_digest,
+          error: {
+            code: 'E_JOURNAL_INCOMPLETE_TAIL',
+            message: `Uncommitted rotated segment detected beyond active segment: ${extraSeg}`,
+            segment: extraSeg,
+            byte_offset: 0,
+          },
+          repairable: true,
+          uncommitted_tail_bytes: extraBytes,
+        };
+      }
+
       return {
         ok: true,
         status: 'valid',
