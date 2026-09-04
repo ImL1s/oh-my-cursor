@@ -1419,6 +1419,22 @@ export class Journal<T = unknown> {
         };
       }
 
+      if (totalValid > meta.max_stream_records) {
+        return {
+          ok: false,
+          status: 'corrupt',
+          stream_id: this.streamId,
+          total_records: totalValid,
+          head_sequence: head.head_sequence,
+          head_digest: head.head_digest,
+          error: {
+            code: 'E_JOURNAL_LIMIT',
+            message: `Total committed records (${totalValid}) exceeds maximum stream records (${meta.max_stream_records})`,
+          },
+          repairable: false,
+        };
+      }
+
       return {
         ok: true,
         status: 'valid',

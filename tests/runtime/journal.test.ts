@@ -810,4 +810,27 @@ describe('Journal primitive', () => {
       spyOpen.mockRestore();
     }
   });
+
+  it('enforces max_stream_records bound during verify and reports corrupt when exceeded', async () => {
+    const streamDir = path.join(tempDir, 'max-stream-verify');
+    const journal = new Journal<{ msg: string }>(streamDir, 'max-stream-verify', {
+      maxStreamRecords: 3,
+    });
+
+    await journal.append({ kind: 'msg', payload: { msg: '1' } });
+    await journal.append({ kind: 'msg', payload: { msg: '2' } });
+
+    expect(journal.verify().ok).toBe(true);
+
+    // Tamper with meta.json to reduce max_stream_records to 1 (below the 2 committed records)
+    const metaPath = path.join(streamDir, 'meta.json');
+    const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+    fs.writeFileSync(metaPath, JSON.stringify({ ...meta, max_stream_records: 1 }));
+
+    const v = journal.verify();
+    expect(v.ok).toBe(false);
+    expect(v.status).toBe('corrupt');
+    expect(v.error?.code).toBe('E_JOURNAL_LIMIT');
+    expect(v.error?.message).toContain('exceeds maximum stream records');
+  });
 });
