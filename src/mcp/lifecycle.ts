@@ -425,7 +425,10 @@ export function resolveMcpLauncher(options: {
 function checkExecutableExists(server: McpServerConfig): boolean {
   if (server.command === process.execPath || server.command === 'node') {
     const script = server.args[0];
-    return typeof script === 'string' && fs.existsSync(script);
+    if (typeof script === 'string' && (script.startsWith('-') || fs.existsSync(script))) {
+      return true;
+    }
+    return false;
   }
   return fs.existsSync(server.command);
 }
@@ -473,29 +476,99 @@ export async function probeMcpHealth(
   return new Promise((resolve) => {
     let resolved = false;
     let timer: NodeJS.Timeout | null = null;
+    let forceKillTimer: NodeJS.Timeout | null = null;
     let child: ReturnType<typeof spawn> | null = null;
+    let rl: readline.Interface | null = null;
 
-    const cleanup = () => {
-      if (timer) clearTimeout(timer);
-      if (child) {
+    const terminateChild = async (): Promise<void> => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      if (rl) {
         try {
-          child.kill('SIGTERM');
+          rl.close();
         } catch {
           // ignore
         }
+        rl = null;
       }
+      if (!child) return;
+
+      const proc = child;
+      try {
+        proc.stdin?.end();
+        proc.stdin?.destroy();
+      } catch {}
+      try {
+        proc.stdout?.destroy();
+      } catch {}
+      try {
+        proc.stderr?.destroy();
+      } catch {}
+
+      if (proc.exitCode !== null || proc.signalCode !== null) {
+        try {
+          proc.unref();
+        } catch {}
+        return;
+      }
+
+      await new Promise<void>((done) => {
+        let doneCalled = false;
+        const markDone = () => {
+          if (doneCalled) return;
+          doneCalled = true;
+          if (forceKillTimer) {
+            clearTimeout(forceKillTimer);
+            forceKillTimer = null;
+          }
+          try {
+            proc.unref();
+          } catch {}
+          done();
+        };
+
+        proc.once('close', markDone);
+        proc.once('exit', markDone);
+
+        try {
+          proc.kill('SIGTERM');
+        } catch {
+          markDone();
+          return;
+        }
+
+        forceKillTimer = setTimeout(() => {
+          try {
+            if (proc.exitCode === null && proc.signalCode === null) {
+              proc.kill('SIGKILL');
+            }
+          } catch {}
+          markDone();
+        }, 500);
+        if (typeof forceKillTimer.unref === 'function') {
+          forceKillTimer.unref();
+        }
+      });
+      try {
+        proc.unref();
+      } catch {}
     };
 
-    const finish = (report: McpHealthReport) => {
+    const finish = async (report: McpHealthReport) => {
       if (resolved) return;
       resolved = true;
-      cleanup();
+      await terminateChild();
       resolve(report);
     };
 
     timer = setTimeout(() => {
-      finish({ ok: false, error: 'E_MCP_PROBE_TIMEOUT: Timed out waiting for MCP server response' });
+      void finish({ ok: false, error: 'E_MCP_PROBE_TIMEOUT: Timed out waiting for MCP server response' });
     }, timeoutMs);
+    if (typeof timer.unref === 'function') {
+      timer.unref();
+    }
 
     try {
       child = spawn(server.command, [...server.args], {
@@ -505,17 +578,17 @@ export async function probeMcpHealth(
       });
 
       child.on('error', (err) => {
-        finish({ ok: false, error: `E_MCP_PROBE_SPAWN_FAILED: ${err.message}` });
+        void finish({ ok: false, error: `E_MCP_PROBE_SPAWN_FAILED: ${err.message}` });
       });
 
       if (!child.stdout || !child.stdin) {
-        finish({ ok: false, error: 'E_MCP_PROBE_FAILED: Child process stdio not available' });
+        void finish({ ok: false, error: 'E_MCP_PROBE_FAILED: Child process stdio not available' });
         return;
       }
       const childStdin = child.stdin;
       const childStdout = child.stdout;
 
-      const rl = readline.createInterface({ input: childStdout, terminal: false });
+      rl = readline.createInterface({ input: childStdout, terminal: false });
       let stage: 'waiting_init' | 'waiting_tools' | 'done' = 'waiting_init';
       let protocolVersion: string | undefined;
       let serverName: string | undefined;
@@ -528,7 +601,7 @@ export async function probeMcpHealth(
           const msg = JSON.parse(trimmed);
           if (stage === 'waiting_init' && msg.id === 1) {
             if (msg.error) {
-              finish({ ok: false, error: `E_MCP_INIT_FAILED: ${msg.error.message}` });
+              void finish({ ok: false, error: `E_MCP_INIT_FAILED: ${msg.error.message}` });
               return;
             }
             protocolVersion = msg.result?.protocolVersion;
@@ -538,12 +611,12 @@ export async function probeMcpHealth(
             childStdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }) + '\n');
           } else if (stage === 'waiting_tools' && msg.id === 2) {
             if (msg.error) {
-              finish({ ok: false, error: `E_MCP_TOOLS_FAILED: ${msg.error.message}` });
+              void finish({ ok: false, error: `E_MCP_TOOLS_FAILED: ${msg.error.message}` });
               return;
             }
             const tools = Array.isArray(msg.result?.tools) ? msg.result.tools : [];
             stage = 'done';
-            finish({
+            void finish({
               ok: true,
               protocol_version: protocolVersion,
               server_name: serverName,
@@ -567,7 +640,7 @@ export async function probeMcpHealth(
         },
       }) + '\n');
     } catch (err) {
-      finish({ ok: false, error: `E_MCP_PROBE_FAILED: ${(err as Error).message}` });
+      void finish({ ok: false, error: `E_MCP_PROBE_FAILED: ${(err as Error).message}` });
     }
   });
 }

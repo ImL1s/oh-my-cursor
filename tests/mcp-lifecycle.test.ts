@@ -482,6 +482,28 @@ describe('MCP lifecycle management (Issue #17)', () => {
       expect(report.server_name).toBe('oh-my-cursor');
       expect(report.tools_count).toBeGreaterThan(0);
     });
+
+    it('escalates to SIGKILL and does not hang when probed process ignores SIGTERM', async () => {
+      const server: McpServerConfig = {
+        command: process.execPath,
+        args: [
+          '-e',
+          'process.on("SIGTERM", () => {});' +
+          'console.log(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05", serverInfo: { name: "test-stub", version: "1.0.0" } } }));' +
+          'console.log(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { tools: [] } }));' +
+          'setInterval(() => {}, 1000);',
+        ],
+      };
+
+      const start = Date.now();
+      const report = await probeMcpHealth(server, 5000);
+      const elapsed = Date.now() - start;
+
+      expect(report.ok).toBe(true);
+      expect(report.server_name).toBe('test-stub');
+      expect(report.tools_count).toBe(0);
+      expect(elapsed).toBeLessThan(4000);
+    });
   });
 
   describe('CLI command integration', () => {
