@@ -120,6 +120,11 @@ export interface WorkflowLockRunner {
 
 const MAX_LEASE_HISTORY = 128;
 
+interface WorkflowJournalEntry {
+  readonly event: WorkflowJournalEvent;
+  readonly revision: number;
+}
+
 export class WorkflowPersistenceStore {
   constructor(
     private readonly root: StateRoot,
@@ -160,15 +165,16 @@ export class WorkflowPersistenceStore {
   listDefinitions(): readonly WorkflowDefinition[] {
     const base = withinStateRoot(this.root, 'workflows', 'definitions');
     if (!fs.existsSync(base)) return [];
-    const definitions: WorkflowDefinition[] = [];
+    const results: WorkflowDefinition[] = [];
     for (const name of fs.readdirSync(base).sort()) {
-      const directory = path.join(base, name);
-      if (!fs.statSync(directory).isDirectory()) continue;
-      for (const file of fs.readdirSync(directory).filter((entry) => entry.endsWith('.json')).sort()) {
-        definitions.push(validateWorkflowDefinition(readJson<WorkflowDefinition>(path.join(directory, file))));
+      const dir = path.join(base, name);
+      if (!fs.statSync(dir).isDirectory()) continue;
+      for (const file of fs.readdirSync(dir).sort()) {
+        if (!file.endsWith('.json')) continue;
+        results.push(this.readDefinition(name, file.slice(0, -'.json'.length)));
       }
     }
-    return definitions.sort((left, right) => `${left.name}@${left.version}`.localeCompare(`${right.name}@${right.version}`));
+    return results;
   }
 
   async create(plan: WorkflowPlan): Promise<WorkflowRunRecord> {
@@ -176,18 +182,19 @@ export class WorkflowPersistenceStore {
     const file = this.recordFile(plan.run_id);
     return this.withLock(file, () => {
       if (fs.existsSync(file)) throw new Error('E_WORKFLOW_RUN_EXISTS');
+      const now = this.now().toISOString();
       const record: WorkflowRunRecord = {
         schema_version: 2,
         store_kind: 'workflow_run_record',
-        revision: 1,
         plan,
+        revision: 1,
         events: [],
         event_head_sha256: null,
         lease_generation: 0,
         execution_lease: null,
         lease_journal_sequence: 0,
         lease_history: [],
-        updated_at: this.now().toISOString(),
+        updated_at: now,
       };
       this.writeJson(file, record);
       return record;
@@ -198,17 +205,25 @@ export class WorkflowPersistenceStore {
     return withinStateRoot(this.root, 'workflows', 'runs', safe(runId, 'run_id'), 'events_journal');
   }
 
-  private eventJournal(runId: string): Journal<WorkflowJournalEvent> {
-    return new Journal<WorkflowJournalEvent>(this.journalDir(runId), `workflows/${safe(runId, 'run_id')}`, { now: this.now });
+  private eventJournal(runId: string): Journal<WorkflowJournalEntry> {
+    return new Journal<WorkflowJournalEntry>(this.journalDir(runId), `workflows/${safe(runId, 'run_id')}`, { now: this.now });
   }
 
-  private async migrateLegacyEvents(current: WorkflowRunRecord, journal: Journal<WorkflowJournalEvent>): Promise<void> {
+  private async migrateLegacyEvents(current: WorkflowRunRecord, journal: Journal<WorkflowJournalEntry>): Promise<void> {
     if (current.events.length > 0) {
       const head = journal.readHead();
-      if (head === null || head.head_sequence === 0) {
-        journal.init();
-        for (const event of current.events) {
-          await journal.append({ kind: event.kind, payload: event, at: this.now().toISOString() });
+      const startIndex = head !== null ? head.head_sequence : 0;
+      if (startIndex < current.events.length) {
+        if (head === null) {
+          journal.init();
+        }
+        for (let i = startIndex; i < current.events.length; i++) {
+          const event = current.events[i]!;
+          await journal.append({
+            kind: event.kind,
+            payload: { event, revision: i + 2 },
+            at: this.now().toISOString(),
+          });
         }
       }
     }
@@ -220,9 +235,20 @@ export class WorkflowPersistenceStore {
       const journal = this.eventJournal(runId);
       let record = normalizeRecord(readJson<unknown>(file), runId);
       const journalHead = journal.readHead();
-      if (journalHead !== null && journalHead.head_sequence > 0) {
-        const events = journal.readRange().map((r) => r.payload);
-        const effectiveRevision = Math.max(record.revision, events.length + 1);
+
+      const shouldLoadJournal =
+        journalHead !== null &&
+        journalHead.head_sequence > 0 &&
+        (record.events.length === 0 || journalHead.head_sequence >= record.events.length);
+
+      if (shouldLoadJournal) {
+        const entries = journal.readRange();
+        const events = entries.map((r) => ('event' in (r.payload as any) ? (r.payload as any).event : (r.payload as any)) as WorkflowJournalEvent);
+        const lastEntry = entries.at(-1);
+        const committedRevision = lastEntry && typeof (lastEntry.payload as any)?.revision === 'number'
+          ? (lastEntry.payload as any).revision as number
+          : events.length + 1;
+        const effectiveRevision = Math.max(record.revision, committedRevision);
         record = { ...record, revision: effectiveRevision, events, event_head_sha256: events.at(-1)?.event_sha256 ?? null };
       }
       validateRecord(record, runId);
@@ -245,12 +271,17 @@ export class WorkflowPersistenceStore {
       const { event_sha256: claimedDigest, ...material } = event;
       if (eventDigest(material) !== claimedDigest) throw new Error('E_WORKFLOW_EVENT_DIGEST');
 
-      await journal.append({ kind: event.kind, payload: event, at: this.now().toISOString() });
+      const nextRevision = current.revision + 1;
+      await journal.append({
+        kind: event.kind,
+        payload: { event, revision: nextRevision },
+        at: this.now().toISOString(),
+      });
 
       const updatedEvents = [...current.events, event];
       const next: WorkflowRunRecord = {
         ...current,
-        revision: current.revision + 1,
+        revision: nextRevision,
         events: updatedEvents,
         event_head_sha256: event.event_sha256,
         updated_at: this.now().toISOString(),
@@ -263,10 +294,11 @@ export class WorkflowPersistenceStore {
   readEvents(runId: string): readonly WorkflowJournalEvent[] {
     const journal = this.eventJournal(runId);
     const head = journal.readHead();
-    if (head !== null && head.head_sequence > 0) {
-      return journal.readRange().map((r) => r.payload);
+    const current = this.read(runId);
+    if (head !== null && head.head_sequence > 0 && (current.events.length === 0 || head.head_sequence >= current.events.length)) {
+      return journal.readRange().map((r) => ('event' in (r.payload as any) ? (r.payload as any).event : (r.payload as any)) as WorkflowJournalEvent);
     }
-    return this.read(runId).events;
+    return current.events;
   }
 
   async acquireExecutionLease(

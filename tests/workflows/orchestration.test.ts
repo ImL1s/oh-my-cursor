@@ -202,9 +202,92 @@ describe('workflow orchestration', () => {
     onDisk.revision = 1;
     fs.writeFileSync(recordFile, JSON.stringify(onDisk));
 
-    // Read should recover effectiveRevision from journal events length + 1
+    // Read should recover effectiveRevision from journal entry
     const recovered = persistence.read(plan.run_id);
     expect(recovered.revision).toBe(2);
     expect(recovered.events).toHaveLength(1);
+  });
+
+  it('recovers exact workflow revision after lease acquisition when record rewrite is lost', async () => {
+    const persistence = store();
+    const plan = planWorkflow(new WorkflowRegistry().register(definition()), 'recovery-lease-run', 'recover-lease');
+    let record = await persistence.create(plan);
+    expect(record.revision).toBe(1);
+
+    // Acquire execution lease (increments revision to 2)
+    const acquired = await persistence.acquireExecutionLease(plan.run_id, record.revision, '1-plan', 'owner-test', processIdentity(8001));
+    record = acquired.record;
+    expect(record.revision).toBe(2);
+
+    const event = appendWorkflowEvent(record.events, plan.run_id, 'attempt_start', {
+      task_id: '1-plan',
+      attempt: 1,
+      started_at: '2026-07-23T00:00:00.000Z',
+    });
+
+    // Appending event advances revision from 2 to 3
+    record = await persistence.append(plan.run_id, record.revision, event);
+    expect(record.revision).toBe(3);
+    expect(record.events).toHaveLength(1);
+
+    // Simulate crash where record.json is stuck at revision 2 (with 1 event in journal)
+    const recordFile = path.join(roots[roots.length - 1]!, '.omcu', 'workflows', 'runs', plan.run_id, 'record.json');
+    const onDisk = JSON.parse(fs.readFileSync(recordFile, 'utf8'));
+    onDisk.revision = 2;
+    fs.writeFileSync(recordFile, JSON.stringify(onDisk));
+
+    // Recovery must recover revision 3 (not revision 2)
+    const recovered = persistence.read(plan.run_id);
+    expect(recovered.revision).toBe(3);
+    expect(recovered.events).toHaveLength(1);
+  });
+
+  it('resumes partial legacy workflow migration without losing remaining events', async () => {
+    const persistence = store();
+    const plan = planWorkflow(new WorkflowRegistry().register(definition()), 'legacy-resume-run', 'legacy-resume');
+    const record = await persistence.create(plan);
+
+    // Create 2 legacy events in record.json
+    const ev1 = appendWorkflowEvent([], plan.run_id, 'run_started', { started_at: '2026-07-23T00:00:00.000Z' });
+    const ev2 = appendWorkflowEvent([ev1], plan.run_id, 'task_started', { task_id: '1-plan', started_at: '2026-07-23T00:00:01.000Z' });
+
+    const recordFile = path.join(roots[roots.length - 1]!, '.omcu', 'workflows', 'runs', plan.run_id, 'record.json');
+    const legacyRecord = {
+      ...record,
+      revision: 3,
+      events: [ev1, ev2],
+      event_head_sha256: ev2.event_sha256,
+    };
+    fs.writeFileSync(recordFile, JSON.stringify(legacyRecord));
+
+    // Simulate partial migration: only event 1 was written to journal
+    const journalDir = path.join(roots[roots.length - 1]!, '.omcu', 'workflows', 'runs', plan.run_id, 'events_journal');
+    const journal = (persistence as any).eventJournal(plan.run_id);
+    await journal.append({
+      kind: ev1.kind,
+      payload: { event: ev1, revision: 2 },
+      at: '2026-07-23T00:00:00.000Z',
+    });
+
+    // Read should still return all 2 events from record.json (since journal has only 1 < 2)
+    const midRead = persistence.read(plan.run_id);
+    expect(midRead.events).toHaveLength(2);
+    expect(midRead.events[1]?.event_sha256).toBe(ev2.event_sha256);
+
+    // Now append a new event: migration should resume from event 2 and append event 3
+    const ev3 = appendWorkflowEvent(midRead.events, plan.run_id, 'task_receipt', {
+      task_id: '1-plan',
+      attempt: 1,
+      status: 'passed',
+    });
+
+    const finalRecord = await persistence.append(plan.run_id, midRead.revision, ev3);
+    expect(finalRecord.events).toHaveLength(3);
+    expect(finalRecord.revision).toBe(4);
+
+    // Subsequent read should read all 3 events from journal
+    const finalRead = persistence.read(plan.run_id);
+    expect(finalRead.events).toHaveLength(3);
+    expect(finalRead.revision).toBe(4);
   });
 });
