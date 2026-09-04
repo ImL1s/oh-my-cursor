@@ -712,3 +712,5 @@ export async function serveMcpStdio(
   }
 }
 
+export * from './lifecycle.js';
+

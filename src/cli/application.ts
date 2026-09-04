@@ -52,6 +52,7 @@ Lifecycle / orchestration:
   omcu notify status|configure|enqueue|show|dispatch disabled transport by default
   omcu tracker record|history ...                    local lifecycle journal
   omcu wiki render|show ...                          lifecycle-derived local wiki
+  omcu mcp status|install|uninstall [--file <path>]  safe project MCP lifecycle
   omcu mcp-server                                    stdio MCP (non-authoritative)
   omcu mcp-install [--file <path>]                   project MCP config install
   omcu workflow install|list|show|plan|run|status|replay|lease-status|lease-reconcile

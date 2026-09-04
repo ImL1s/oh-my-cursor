@@ -1,8 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { atomicWriteJson } from '../runtime/atomic.js';
 import { quarantineInvalidCliOwnerRecord } from '../state/authority.js';
 import { installOrUpdate, runSetupDoctor, uninstall, type InstallResult } from '../setup/index.js';
+import {
+  inspectMcpStatus,
+  installMcpServer,
+  uninstallMcpServer,
+  type McpStatusResult,
+} from '../mcp/lifecycle.js';
 import { externalStateRoot, flagValue, optionValue, printJson, type CliContext } from './shared.js';
 
 export async function handleLifecycle(context: CliContext): Promise<number | null> {
@@ -37,16 +42,66 @@ export async function handleLifecycle(context: CliContext): Promise<number | nul
     printJson(context.io, result);
     return uninstallExitCode(result.status);
   }
+  if (command === 'mcp') {
+    const file = optionValue<string>(context, '--file');
+    const receipt = optionValue<string>(context, '--receipt');
+    const dryRun = flagValue(context, '--dry-run');
+    const replace = flagValue(context, '--replace');
+    const noProbe = flagValue(context, '--no-probe');
+
+    if (action === 'status') {
+      const result = await inspectMcpStatus({
+        targetFile: file,
+        receiptFile: receipt,
+        cwd: context.cwd,
+        homeDir: context.homeDir,
+        packageRoot: context.packageRoot,
+        noProbe,
+      });
+      printJson(context.io, result);
+      return mcpStatusExitCode(result);
+    }
+    if (action === 'install') {
+      const result = await installMcpServer({
+        targetFile: file,
+        receiptFile: receipt,
+        dryRun,
+        replace,
+        cwd: context.cwd,
+        homeDir: context.homeDir,
+        packageRoot: context.packageRoot,
+      });
+      printJson(context.io, result);
+      return 0;
+    }
+    if (action === 'uninstall') {
+      const result = await uninstallMcpServer({
+        targetFile: file,
+        receiptFile: receipt,
+        dryRun,
+        cwd: context.cwd,
+        homeDir: context.homeDir,
+        packageRoot: context.packageRoot,
+      });
+      printJson(context.io, result);
+      return 0;
+    }
+  }
   if (command === 'mcp-install') {
-    const target = path.resolve(optionValue<string>(context, '--file') ?? path.join(context.cwd, '.cursor', 'mcp.json'));
-    const parsed: unknown = fs.existsSync(target) ? JSON.parse(fs.readFileSync(target, 'utf8')) : {};
-    if (!isPlainObject(parsed)) throw new Error('E_MCP_CONFIG_INVALID');
-    const servers = parsed.mcpServers;
-    if (servers !== undefined && !isPlainObject(servers)) throw new Error('E_MCP_SERVERS_INVALID');
-    const executable = path.join(context.packageRoot, 'dist', 'bin', 'omcu.js');
-    const next = { ...parsed, mcpServers: { ...(servers ?? {}), 'oh-my-cursor': { command: process.execPath, args: [executable, 'mcp-server'], cwd: context.cwd } } };
-    atomicWriteJson(target, next);
-    printJson(context.io, { installed: true, file: target, server: 'oh-my-cursor' });
+    const file = optionValue<string>(context, '--file');
+    const receipt = optionValue<string>(context, '--receipt');
+    const dryRun = flagValue(context, '--dry-run');
+    const replace = flagValue(context, '--replace');
+    const result = await installMcpServer({
+      targetFile: file,
+      receiptFile: receipt,
+      dryRun,
+      replace,
+      cwd: context.cwd,
+      homeDir: context.homeDir,
+      packageRoot: context.packageRoot,
+    });
+    printJson(context.io, result);
     return 0;
   }
   if (command === 'native-status' || (command === 'capabilities' && action === 'native-status')) {
@@ -57,8 +112,17 @@ export async function handleLifecycle(context: CliContext): Promise<number | nul
   return null;
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
+function mcpStatusExitCode(result: McpStatusResult): number {
+  if (result.state === 'malformed' || result.state === 'unsafe-target' || result.state === 'foreign-conflict') {
+    return 1;
+  }
+  if (result.configured_server !== null && !result.executable_exists) {
+    return 1;
+  }
+  if (result.health !== null && !result.health.ok) {
+    return 1;
+  }
+  return 0;
 }
 
 export function uninstallExitCode(status: string): number {

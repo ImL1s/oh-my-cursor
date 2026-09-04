@@ -131,7 +131,43 @@ export const COMMAND_SCHEMAS: Readonly<Record<string, CommandSchema>> = Object.f
   },
   'native-status': { stateAccess: 'none' },
   'mcp-server': { stateAccess: 'write-ensure' },
-  'mcp-install': { stateAccess: 'none', options: [{ name: '--file', kind: 'string' }] },
+  mcp: {
+    stateAccess: 'none',
+    requireAction: true,
+    actions: {
+      status: {
+        options: [
+          { name: '--file', kind: 'string' },
+          { name: '--receipt', kind: 'string' },
+          { name: '--no-probe', kind: 'flag' },
+        ],
+      },
+      install: {
+        options: [
+          { name: '--file', kind: 'string' },
+          { name: '--receipt', kind: 'string' },
+          { name: '--dry-run', kind: 'flag' },
+          { name: '--replace', kind: 'flag' },
+        ],
+      },
+      uninstall: {
+        options: [
+          { name: '--file', kind: 'string' },
+          { name: '--receipt', kind: 'string' },
+          { name: '--dry-run', kind: 'flag' },
+        ],
+      },
+    },
+  },
+  'mcp-install': {
+    stateAccess: 'none',
+    options: [
+      { name: '--file', kind: 'string' },
+      { name: '--receipt', kind: 'string' },
+      { name: '--dry-run', kind: 'flag' },
+      { name: '--replace', kind: 'flag' },
+    ],
+  },
   session: {
     stateAccess: 'none',
     requireAction: true,
