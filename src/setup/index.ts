@@ -8,3 +8,11 @@ export type { InstallReceipt, OwnedInstallPath } from './receipt.js';
 export type { CommandResult, CommandRunner, SetupCheck, SetupCheckStatus } from './types.js';
 export { withInstallLock, withInstallLockSync } from './lock.js';
 export type { InstallLockOptions } from './lock.js';
+export {
+  extractReleaseArchive,
+  validateArchiveListing,
+  MAX_ARCHIVE_ENTRIES,
+  MAX_ARCHIVE_TOTAL_BYTES,
+  MAX_ARCHIVE_FILE_BYTES,
+} from './archive.js';
+export type { ArchiveSafetyReport, ExtractedArchive } from './archive.js';
