@@ -1004,6 +1004,44 @@ describe('Journal primitive', () => {
     expect(quarantineFiles).toContain(path.basename(receipt1.backup_file));
     expect(quarantineFiles).toContain(path.basename(receipt2.backup_file));
   });
+
+  it('rejects negative total_bytes and total_records in head.json with E_JOURNAL_CORRUPT', async () => {
+    const streamDir = path.join(tempDir, 'negative-head-counters');
+    const journal = new Journal<{ msg: string }>(streamDir, 'negative-counters');
+
+    await journal.append({ kind: 'msg', payload: { msg: 'first' } });
+
+    const headPath = path.join(streamDir, 'head.json');
+    const validHead = JSON.parse(fs.readFileSync(headPath, 'utf8'));
+
+    // Tamper head with negative total_bytes
+    fs.writeFileSync(headPath, JSON.stringify({ ...validHead, total_bytes: -1 }), 'utf8');
+    expect(() => journal.readHead()).toThrow('E_JOURNAL_CORRUPT');
+    await expect(journal.append({ kind: 'msg', payload: { msg: 'second' } }))
+      .rejects.toThrow('E_JOURNAL_CORRUPT');
+
+    // Tamper head with negative total_records
+    fs.writeFileSync(headPath, JSON.stringify({ ...validHead, total_records: -1 }), 'utf8');
+    expect(() => journal.readHead()).toThrow('E_JOURNAL_CORRUPT');
+    await expect(journal.append({ kind: 'msg', payload: { msg: 'second' } }))
+      .rejects.toThrow('E_JOURNAL_CORRUPT');
+  });
+
+  it('rejects non-positive limits in meta.json with E_JOURNAL_CORRUPT', async () => {
+    const streamDir = path.join(tempDir, 'invalid-meta-limits');
+    const journal = new Journal<{ msg: string }>(streamDir, 'invalid-limits');
+
+    await journal.append({ kind: 'msg', payload: { msg: 'first' } });
+
+    const metaPath = path.join(streamDir, 'meta.json');
+    const validMeta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+
+    fs.writeFileSync(metaPath, JSON.stringify({ ...validMeta, max_record_bytes: 0 }), 'utf8');
+    expect(() => journal.readMeta()).toThrow('E_JOURNAL_CORRUPT');
+
+    fs.writeFileSync(metaPath, JSON.stringify({ ...validMeta, max_segment_bytes: -100 }), 'utf8');
+    expect(() => journal.readMeta()).toThrow('E_JOURNAL_CORRUPT');
+  });
 });
 
 

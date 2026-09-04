@@ -387,9 +387,13 @@ export class Journal<T = unknown> {
         parsed.stream_id !== this.streamId ||
         !validDate(parsed.created_at) ||
         !Number.isSafeInteger(parsed.max_record_bytes) ||
+        (parsed.max_record_bytes as number) <= 0 ||
         !Number.isSafeInteger(parsed.max_segment_bytes) ||
+        (parsed.max_segment_bytes as number) <= 0 ||
         !Number.isSafeInteger(parsed.max_segment_records) ||
+        (parsed.max_segment_records as number) <= 0 ||
         !Number.isSafeInteger(parsed.max_stream_records) ||
+        (parsed.max_stream_records as number) <= 0 ||
         (parsed.max_record_bytes as number) > (parsed.max_segment_bytes as number)
       ) {
         throw new Error('E_JOURNAL_CORRUPT');
@@ -416,7 +420,9 @@ export class Journal<T = unknown> {
         parseSegmentIndex(parsed.active_segment) === null ||
         (parsed.active_segment_records !== undefined && (!Number.isSafeInteger(parsed.active_segment_records) || (parsed.active_segment_records as number) < 0)) ||
         !Number.isSafeInteger(parsed.total_records) ||
+        (parsed.total_records as number) < 0 ||
         !Number.isSafeInteger(parsed.total_bytes) ||
+        (parsed.total_bytes as number) < 0 ||
         !validDate(parsed.updated_at)
       ) {
         throw new Error('E_JOURNAL_CORRUPT');
@@ -518,7 +524,7 @@ export class Journal<T = unknown> {
       const limits = this.resolveLimits();
       this.assertNoIncompleteTail(head, limits);
 
-      if (head.total_records !== head.head_sequence) {
+      if (head.total_records !== head.head_sequence || head.total_bytes < 0 || head.total_records < 0) {
         throw new Error('E_JOURNAL_CORRUPT');
       }
 
