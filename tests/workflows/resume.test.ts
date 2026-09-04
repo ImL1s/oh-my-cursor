@@ -38,10 +38,10 @@ describe('Workflow resume and durable retries', () => {
     const result2 = await runner2.run(definition, plan, safeEvents);
     
     expect(result2.status.status).toBe('complete');
-    expect(result2.status.tasks['task-1']?.status).toBe('passed');
-    expect(result2.status.tasks['task-1']?.attempts).toHaveLength(2);
-    expect(result2.status.tasks['task-1']?.attempts[0]?.attempt).toBe(1);
-    expect(result2.status.tasks['task-1']?.attempts[1]?.attempt).toBe(2);
+    expect(result2.status.tasks['1-task-1']?.status).toBe('passed');
+    expect(result2.status.tasks['1-task-1']?.attempts).toHaveLength(2);
+    expect(result2.status.tasks['1-task-1']?.attempts[0]?.attempt).toBe(1);
+    expect(result2.status.tasks['1-task-1']?.attempts[1]?.attempt).toBe(2);
   });
 
   it('refuses automatic continuation when ambiguous in-flight detection', async () => {
@@ -56,12 +56,14 @@ describe('Workflow resume and durable retries', () => {
     const plan = planWorkflow(definition, 'run-ambiguous', 'test');
     let events: any[] = [];
     events.push(appendWorkflowEvent(events, plan.run_id, 'run_started', { plan_sha256: plan.plan_sha256 }));
-    events.push(appendWorkflowEvent(events, plan.run_id, 'task_started', { task_id: 'task-1', attempt: 1, argv_sha256: '0000000000000000000000000000000000000000000000000000000000000000' }));
+    events.push(appendWorkflowEvent(events, plan.run_id, 'task_started', { task_id: '1-task-1', attempt: 1, argv_sha256: '0000000000000000000000000000000000000000000000000000000000000000' }));
     
     const adapter = new CursorAgentAdapter('cursor-agent', async () => ({ code: 0, stdout: '{}', stderr: '' }));
     const runner = new WorkflowRunner(adapter, '/repo');
     
-    await expect(runner.run(definition, plan, events)).rejects.toThrow('E_WORKFLOW_AMBIGUOUS_RESUME');
+    const result = await runner.run(definition, plan, events);
+    expect(result.status.status).toBe('ambiguous');
+    expect(result.status.tasks['1-task-1']?.status).toBe('attempt_ambiguous');
   });
 
 
@@ -81,8 +83,8 @@ describe('Workflow resume and durable retries', () => {
     const result = await runner.run(definition, plan);
     
     expect(result.status.status).toBe('failed');
-    expect(result.status.tasks['task-1']?.status).toBe('attempt_failed_terminal');
-    expect(result.status.tasks['task-1']?.attempts).toHaveLength(2);
+    expect(result.status.tasks['1-task-1']?.status).toBe('attempt_failed_terminal');
+    expect(result.status.tasks['1-task-1']?.attempts).toHaveLength(2);
   });
 
   it('resume of passed tasks', async () => {
@@ -104,7 +106,7 @@ describe('Workflow resume and durable retries', () => {
     const result2 = await runner2.run(definition, plan, result1.events);
     
     expect(result2.status.status).toBe('complete');
-    expect(result2.status.tasks['task-1']?.status).toBe('passed');
-    expect(result2.status.tasks['task-1']?.attempts).toHaveLength(1);
+    expect(result2.status.tasks['1-task-1']?.status).toBe('passed');
+    expect(result2.status.tasks['1-task-1']?.attempts).toHaveLength(1);
   });
 });
