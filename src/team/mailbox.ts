@@ -166,8 +166,8 @@ export async function listMailboxMessages(
   const file = teamMailboxPath(root, teamName, name);
   const journal = mailboxJournal(root, teamName, name, () => new Date());
 
-  const headBefore = journal.readHead();
-  if (headBefore !== null && headBefore.head_sequence > 0) {
+  const head = journal.readHead();
+  if (head !== null && head.head_sequence > 0) {
     const messages = readMessagesFromJournal(journal);
     if (options.includeDelivered === false) return messages.filter((message) => message.delivered_at === undefined);
     return messages;
@@ -178,28 +178,10 @@ export async function listMailboxMessages(
     return [];
   }
 
-  return withDirectoryLock(file, async () => {
-    const headInLock = journal.readHead();
-    if (headInLock !== null && headInLock.head_sequence > 0) {
-      const messages = readMessagesFromJournal(journal);
-      if (options.includeDelivered === false) return messages.filter((message) => message.delivered_at === undefined);
-      return messages;
-    }
-
-    await migrateLegacyMailboxIfNeeded(root, teamName, name, journal);
-
-    const head = journal.readHead();
-    let messages: TeamMailboxMessage[];
-    if (head !== null && head.head_sequence > 0) {
-      messages = readMessagesFromJournal(journal);
-    } else {
-      const legacy = readMailboxUnlocked(root, teamName, name);
-      messages = [...legacy.messages];
-    }
-
-    if (options.includeDelivered === false) return messages.filter((message) => message.delivered_at === undefined);
-    return messages;
-  });
+  const legacy = readMailboxUnlocked(root, teamName, name);
+  const messages = [...legacy.messages];
+  if (options.includeDelivered === false) return messages.filter((message) => message.delivered_at === undefined);
+  return messages;
 }
 
 export async function sendDirectMessage(

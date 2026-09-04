@@ -465,6 +465,45 @@ describe('team mailbox primitives', () => {
     expect(afterRemove[0]?.message_id).toBe(msg.message_id);
     expect(afterRemove[0]?.body).toBe('durable message');
   });
+
+  it('keeps listMailboxMessages strictly read-only and does not create journal directories for legacy mailbox', async () => {
+    const { root } = workspace();
+    initializeTeamState(root, {
+      teamName: 'ro-legacy-mail',
+      task: 'read legacy without mutating state',
+      workers: [{ name: 'one', owned_paths: ['a'] }, { name: 'two', owned_paths: ['b'] }],
+    });
+
+    // Write a legacy mailbox JSON file directly
+    const legacyFile = teamMailboxPath(root, 'ro-legacy-mail', 'two');
+    fs.writeFileSync(
+      legacyFile,
+      JSON.stringify({
+        worker: 'two',
+        messages: [
+          {
+            message_id: 'legacy-msg-1',
+            from_worker: 'one',
+            to_worker: 'two',
+            body: 'legacy content',
+            created_at: new Date().toISOString(),
+          },
+        ],
+      }),
+    );
+
+    const journalDir = teamMailboxJournalDir(root, 'ro-legacy-mail', 'two');
+    expect(fs.existsSync(journalDir)).toBe(false);
+
+    // Call listMailboxMessages
+    const msgs = await listMailboxMessages(root, 'ro-legacy-mail', 'two');
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]?.message_id).toBe('legacy-msg-1');
+    expect(msgs[0]?.body).toBe('legacy content');
+
+    // Journal directory must NOT have been created (strictly read-only)
+    expect(fs.existsSync(journalDir)).toBe(false);
+  });
 });
 
 

@@ -434,6 +434,9 @@ export class Journal<T = unknown> {
   private resolveLimits(): JournalLimits {
     const meta = this.readMeta();
     if (meta === null) {
+      if (this.readHead() !== null) {
+        throw new Error('E_JOURNAL_CORRUPT');
+      }
       return {
         maxRecordBytes: this.maxRecordBytes,
         maxSegmentBytes: this.maxSegmentBytes,
@@ -793,6 +796,11 @@ export class Journal<T = unknown> {
       let head = this.readHead();
       if (head === null) {
         head = this.initUnlocked();
+      } else {
+        const meta = this.readMeta();
+        if (meta === null) {
+          throw new Error('E_JOURNAL_CORRUPT');
+        }
       }
 
       const limits = this.resolveLimits();
@@ -1368,6 +1376,39 @@ export class Journal<T = unknown> {
               }
             }
             if (truncated) {
+              // Finish orphan and empty target segment cleanup before finalizing receipt
+              const head = this.readHead();
+              const headActiveIndex = head ? (parseSegmentIndex(head.active_segment) ?? 1) : 1;
+              const targetSegIndex = parseSegmentIndex(intent.segment);
+
+              if (targetSegIndex !== null && targetSegIndex > headActiveIndex && intent.repaired_bytes === 0) {
+                if (fs.existsSync(segPath)) {
+                  fs.unlinkSync(segPath);
+                }
+              }
+
+              const allSegments = this.listSegments();
+              const timestamp = this.now().getTime();
+              for (const seg of allSegments) {
+                const idx = parseSegmentIndex(seg);
+                if (idx !== null && ((targetSegIndex !== null && idx > targetSegIndex) || idx > headActiveIndex)) {
+                  const extraPath = path.join(this.segmentsDir(), seg);
+                  if (fs.existsSync(extraPath)) {
+                    let extraNonce = crypto.randomBytes(6).toString('hex');
+                    let extraBackup = path.join(this.quarantineDir(), `${seg}.orphaned-${timestamp}-${extraNonce}`);
+                    while (fs.existsSync(extraBackup)) {
+                      extraNonce = crypto.randomBytes(6).toString('hex');
+                      extraBackup = path.join(this.quarantineDir(), `${seg}.orphaned-${timestamp}-${extraNonce}`);
+                    }
+                    fs.copyFileSync(extraPath, extraBackup, fs.constants.COPYFILE_EXCL);
+                    syncPathToDisk(extraBackup);
+                    fs.unlinkSync(extraPath);
+                  }
+                }
+              }
+              syncPathToDisk(this.quarantineDir());
+              syncPathToDisk(this.segmentsDir());
+
               if (!fs.existsSync(intent.final_receipt_path)) {
                 const receiptMaterial = {
                   schema_version: 1 as const,
@@ -1390,11 +1431,12 @@ export class Journal<T = unknown> {
                 atomicWriteJson(intent.final_receipt_path, receipt);
                 syncPathToDisk(intent.final_receipt_path);
               }
+
+              if (fs.existsSync(intentFile)) {
+                fs.unlinkSync(intentFile);
+              }
+              syncPathToDisk(rDir);
             }
-            if (fs.existsSync(intentFile)) {
-              fs.unlinkSync(intentFile);
-            }
-            syncPathToDisk(rDir);
           }
         } catch {
           // Ignore failure on specific intent file

@@ -1400,6 +1400,91 @@ describe('Journal primitive', () => {
     // append() should also reject the layout as corrupt
     await expect(journal.append({ kind: 'msg', payload: { msg: 'test' } })).rejects.toThrow('E_JOURNAL_CORRUPT');
   });
+
+  it('rejects appends when meta.json is deleted from an existing stream', async () => {
+    const streamDir = path.join(tempDir, 'missing-meta-stream');
+    const journal = new Journal<{ msg: string }>(streamDir, 'missing-meta');
+    await journal.append({ kind: 'msg', payload: { msg: 'initial' } });
+
+    // Stream is valid initially
+    expect(journal.verify().ok).toBe(true);
+
+    // Delete meta.json
+    const metaPath = path.join(streamDir, 'meta.json');
+    fs.unlinkSync(metaPath);
+    expect(fs.existsSync(metaPath)).toBe(false);
+
+    // append() must reject with E_JOURNAL_CORRUPT rather than silently using constructor defaults
+    await expect(journal.append({ kind: 'msg', payload: { msg: 'second' } })).rejects.toThrow('E_JOURNAL_CORRUPT');
+  });
+
+  it('retains repair intent when crashed before truncation, and finishes orphan cleanup when crashed after truncation', async () => {
+    const streamDir = path.join(tempDir, 'intent-recovery-stream');
+    const journal = new Journal<{ msg: string }>(streamDir, 'intent-stream', {
+      maxSegmentBytes: 1000,
+      maxRecordBytes: 500,
+    });
+    await journal.append({ kind: 'msg', payload: { msg: 'first' } });
+
+    // Case 1: Plant an intent where segment was NOT truncated (size > repaired_bytes)
+    // Simulates crash after intent write but before truncateSync
+    const receiptsDir = path.join(streamDir, 'receipts');
+    const seg1Path = path.join(streamDir, 'segments', '00000001.jsonl');
+    const originalSize = fs.statSync(seg1Path).size;
+    const preTruncateIntentPath = path.join(receiptsDir, 'repair-01.intent.json');
+    const preTruncateIntent = {
+      store_kind: 'journal_repair_intent',
+      stream_id: 'intent-stream',
+      repaired_at: new Date().toISOString(),
+      segment: '00000001.jsonl',
+      original_bytes: originalSize + 50,
+      repaired_bytes: 10, // segment is larger than 10
+      truncated_bytes: originalSize + 40,
+      backup_file: 'backup.bak',
+      head_sequence: 1,
+      head_digest: journal.readHead()?.head_digest ?? null,
+      receipt_sha256: 'abc',
+      final_receipt_path: path.join(receiptsDir, 'repair-01.json'),
+    };
+    fs.writeFileSync(preTruncateIntentPath, JSON.stringify(preTruncateIntent));
+
+    // Calling listReceipts triggers recovery scan. Because segment wasn't truncated, intent must NOT be deleted!
+    journal.listReceipts();
+    expect(fs.existsSync(preTruncateIntentPath)).toBe(true);
+    fs.unlinkSync(preTruncateIntentPath); // clean up pre-truncate test file
+
+    // Case 2: Plant an intent where segment WAS truncated (empty rotated segment 00000002.jsonl)
+    // but crash occurred before unlinking 00000002.jsonl or quarantining 00000003.jsonl
+    const seg2Path = path.join(streamDir, 'segments', '00000002.jsonl');
+    const seg3Path = path.join(streamDir, 'segments', '00000003.jsonl');
+    fs.writeFileSync(seg2Path, ''); // 0-byte truncated target segment
+    fs.writeFileSync(seg3Path, 'orphan'); // orphan segment created beyond target
+    const postTruncateIntentPath = path.join(receiptsDir, 'repair-02.intent.json');
+    const finalReceiptPath = path.join(receiptsDir, 'repair-02.json');
+    const postTruncateIntent = {
+      store_kind: 'journal_repair_intent',
+      stream_id: 'intent-stream',
+      repaired_at: new Date().toISOString(),
+      segment: '00000002.jsonl',
+      original_bytes: 50,
+      repaired_bytes: 0,
+      truncated_bytes: 50,
+      backup_file: 'backup2.bak',
+      head_sequence: 1,
+      head_digest: journal.readHead()?.head_digest ?? null,
+      receipt_sha256: 'xyz',
+      final_receipt_path: finalReceiptPath,
+    };
+    fs.writeFileSync(postTruncateIntentPath, JSON.stringify(postTruncateIntent));
+
+    // Recovery must unlink empty seg2, quarantine seg3, publish receipt, and remove intent!
+    const receipts = journal.listReceipts();
+    expect(receipts.length).toBeGreaterThanOrEqual(1);
+    expect(fs.existsSync(seg2Path)).toBe(false); // unlinked!
+    expect(fs.existsSync(seg3Path)).toBe(false); // unlinked & quarantined!
+    expect(fs.existsSync(postTruncateIntentPath)).toBe(false); // intent consumed!
+    expect(fs.existsSync(finalReceiptPath)).toBe(true); // final receipt published!
+  });
 });
 
 
