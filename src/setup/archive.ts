@@ -63,11 +63,11 @@ export function validateArchiveListing(archive: string): ArchiveSafetyReport {
     if (entry.split('/').includes('..') || entry.split('\\').includes('..')) {
       throw new Error(`E_RELEASE_ARCHIVE_UNSAFE: path traversal forbidden: ${entry}`);
     }
+    if (entry.split('/').includes('.')) {
+      throw new Error(`E_RELEASE_ARCHIVE_UNSAFE: non-canonical dot segment forbidden: ${entry}`);
+    }
     if (entry.includes('\\')) {
       throw new Error(`E_RELEASE_ARCHIVE_UNSAFE: non-canonical path with backslash: ${entry}`);
-    }
-    if (entry.startsWith('./') || entry === '.') {
-      throw new Error(`E_RELEASE_ARCHIVE_UNSAFE: non-canonical path with ./: ${entry}`);
     }
     if (entry.includes('//')) {
       throw new Error(`E_RELEASE_ARCHIVE_UNSAFE: non-canonical path with //: ${entry}`);

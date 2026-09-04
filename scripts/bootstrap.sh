@@ -176,12 +176,12 @@ node -e '
       process.stderr.write("path traversal forbidden: " + entry + "\n");
       process.exit(1);
     }
-    if (entry.includes("\\")) {
-      process.stderr.write("backslash forbidden: " + entry + "\n");
+    if (entry.split("/").includes(".")) {
+      process.stderr.write("non-canonical dot segment forbidden: " + entry + "\n");
       process.exit(1);
     }
-    if (entry.startsWith("./") || entry === ".") {
-      process.stderr.write("non-canonical path forbidden: " + entry + "\n");
+    if (entry.includes("\\")) {
+      process.stderr.write("backslash forbidden: " + entry + "\n");
       process.exit(1);
     }
     if (entry.includes("//")) {
@@ -306,6 +306,8 @@ fi
 
 RECEIPT_VALID="$(node -e '
   const fs = require("fs");
+  const path = require("path");
+  const crypto = require("crypto");
   const [, resultFile, expectedVersion] = process.argv;
   try {
     const raw = fs.readFileSync(resultFile, "utf8").trim();
@@ -318,10 +320,20 @@ RECEIPT_VALID="$(node -e '
     const result = JSON.parse(text);
     if (!result || typeof result !== "object") process.exit(1);
     if (typeof result.receiptPath !== "string" || !result.receiptPath) process.exit(2);
-    if (!fs.existsSync(result.receiptPath)) process.exit(3);
-    const receipt = JSON.parse(fs.readFileSync(result.receiptPath, "utf8"));
-    if (receipt.store_kind !== "omcu_install_receipt" || receipt.schema_version !== 1) process.exit(4);
-    if (receipt.version !== expectedVersion) process.exit(5);
+    const rp = path.resolve(result.receiptPath);
+    const stat = fs.statSync(rp, { throwIfNoEntry: false });
+    if (!stat || !stat.isFile()) { process.stderr.write("receipt is not a regular file"); process.exit(3); }
+    const receiptRaw = fs.readFileSync(rp, "utf8");
+    const receipt = JSON.parse(receiptRaw);
+    if (receipt.store_kind !== "omcu_install_receipt" || receipt.schema_version !== 1) { process.stderr.write("receipt schema mismatch"); process.exit(4); }
+    if (receipt.version !== expectedVersion) { process.stderr.write("receipt version mismatch: " + receipt.version); process.exit(5); }
+    if (receipt.action !== "install" && receipt.action !== "update") { process.stderr.write("receipt action invalid: " + receipt.action); process.exit(7); }
+    if (typeof receipt.transaction_id !== "string" || !receipt.transaction_id) { process.stderr.write("receipt missing transaction_id"); process.exit(8); }
+    if (receipt.receipt_sha256) {
+      const body = receiptRaw.replace(/"receipt_sha256"\\s*:\\s*"[^"]*"/, "\"receipt_sha256\":\"\"");
+      const digest = crypto.createHash("sha256").update(body).digest("hex");
+      if (digest !== receipt.receipt_sha256) { process.stderr.write("receipt_sha256 integrity check failed"); process.exit(9); }
+    }
     process.stdout.write("ok");
   } catch (e) {
     process.stderr.write(e.message || String(e));
@@ -344,7 +356,13 @@ OMCU_BIN="${HOME_DIR}/.local/bin/omcu"
 [[ -f "$OMCU_BIN" ]] || fail "installed omcu binary not found at ${OMCU_BIN}"
 [[ -x "$OMCU_BIN" ]] || fail "installed omcu binary at ${OMCU_BIN} is not executable"
 
-READBACK_VERSION="$("$OMCU_BIN" --version 2>/dev/null || true)"
+set +e
+READBACK_VERSION="$("$OMCU_BIN" --version 2>/dev/null)"
+READBACK_RC=$?
+set -e
+
+[[ "$READBACK_RC" -eq 0 ]] || fail "omcu --version exited with status ${READBACK_RC}"
+
 READBACK_VERSION="$(printf '%s' "$READBACK_VERSION" | tr -d '\r\n')"
 
 [[ "$READBACK_VERSION" == "$VERSION" ]] || fail "readback version mismatch: expected '${VERSION}', got '${READBACK_VERSION}'"
