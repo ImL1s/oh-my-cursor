@@ -619,4 +619,29 @@ describe('CLI integration for cancellation and state transition invariants', () 
     expect(allEvents[0]?.type).toBe('legacy_init');
     expect(allEvents[1]?.type).toBe('step2');
   });
+
+  it('does not fail appendEvent when legacy events.jsonl mirror encounters write failure', async () => {
+    const root = projectStateRoot(workspace());
+    const authority = createCliMutationAuthority(root);
+    const store = new RunStateStore(root, authority);
+    const run = await store.create('run-mirror-fail', 'goal');
+
+    const runDir = path.join(root.path, 'runs', run.run_id);
+    const legacyFile = path.join(runDir, 'events.jsonl');
+
+    // Append first event
+    await store.appendEvent(run.run_id, 'first', { ok: true });
+
+    // Make events.jsonl unwritable by replacing it with a directory so appendFileSync throws
+    fs.unlinkSync(legacyFile);
+    fs.mkdirSync(legacyFile);
+
+    // Appending should still succeed authoritatively via journal
+    const ev2 = await store.appendEvent(run.run_id, 'second', { ok: true });
+    expect(ev2.sequence).toBe(2);
+
+    const allEvents = store.readEvents(run.run_id);
+    expect(allEvents).toHaveLength(2);
+    expect(allEvents[1]?.type).toBe('second');
+  });
 });

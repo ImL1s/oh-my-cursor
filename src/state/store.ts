@@ -291,9 +291,13 @@ export class RunStateStore {
 
       await journal.append({ kind: type, payload: event, at: now.toISOString() });
 
-      fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-      fs.appendFileSync(file, line, { mode: 0o600 });
-      fs.chmodSync(file, 0o600);
+      try {
+        fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+        fs.appendFileSync(file, line, { mode: 0o600 });
+        fs.chmodSync(file, 0o600);
+      } catch {
+        // Non-authoritative legacy mirror write is best-effort after authoritative journal append
+      }
       return event;
     });
   }

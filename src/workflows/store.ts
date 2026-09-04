@@ -137,6 +137,7 @@ export class WorkflowPersistenceStore {
 
   private recordFile(runId: string): string { return withinStateRoot(this.root, 'workflows', 'runs', safe(runId, 'run_id'), 'record.json'); }
   private definitionFile(name: string, version: string): string { return withinStateRoot(this.root, 'workflows', 'definitions', safe(name, 'workflow_name'), `${safe(version, 'workflow_version')}.json`); }
+  private writeWorkflowRecord(file: string, record: WorkflowRunRecord): void { this.writeJson(file, { ...record, events: [] }); }
 
   async installDefinition(definition: WorkflowDefinition): Promise<WorkflowDefinition> {
     const validated = validateWorkflowDefinition(definition);
@@ -196,7 +197,7 @@ export class WorkflowPersistenceStore {
         lease_history: [],
         updated_at: now,
       };
-      this.writeJson(file, record);
+      this.writeWorkflowRecord(file, record);
       return record;
     });
   }
@@ -286,7 +287,7 @@ export class WorkflowPersistenceStore {
         event_head_sha256: event.event_sha256,
         updated_at: this.now().toISOString(),
       };
-      this.writeJson(file, { ...next, events: [] });
+      this.writeWorkflowRecord(file, next);
       return next;
     });
   }
@@ -313,8 +314,10 @@ export class WorkflowPersistenceStore {
     validateProcessIdentity(ownerIdentity);
     if (!Number.isSafeInteger(ttlMs) || ttlMs < 1000 || ttlMs > 3_600_000) throw new Error('E_WORKFLOW_LEASE_INPUT');
     const file = this.recordFile(runId);
-    return this.withLock(file, () => {
+    const journal = this.eventJournal(runId);
+    return this.withLock(file, async () => {
       const current = this.read(runId);
+      await this.migrateLegacyEvents(current, journal);
       if (current.revision !== expectedRevision) throw new Error('E_WORKFLOW_REVISION_CONFLICT');
       if (!current.plan.tasks.some((task) => task.task_id === taskId)) throw new Error('E_WORKFLOW_LEASE_TASK_NOT_IN_PLAN');
       const now = this.now();
@@ -367,7 +370,7 @@ export class WorkflowPersistenceStore {
         ]),
         updated_at: now.toISOString(),
       };
-      this.writeJson(file, next);
+      this.writeWorkflowRecord(file, next);
       return { record: next, credential };
     });
   }
@@ -375,8 +378,10 @@ export class WorkflowPersistenceStore {
   async releaseExecutionLease(runId: string, expectedRevision: number, credential: WorkflowLeaseCredential): Promise<WorkflowRunRecord> {
     const token = persistedTokenFromCredential(credential, runId);
     const file = this.recordFile(runId);
-    return this.withLock(file, () => {
+    const journal = this.eventJournal(runId);
+    return this.withLock(file, async () => {
       const current = this.read(runId);
+      await this.migrateLegacyEvents(current, journal);
       const lease = current.execution_lease;
       if (lease === null) {
         const last = current.lease_history.at(-1);
@@ -396,7 +401,7 @@ export class WorkflowPersistenceStore {
         lease_history: appendLeaseHistory(current.lease_history, [leaseJournal(current.lease_journal_sequence + 1, 'release', lease, this.now(), null)]),
         updated_at: this.now().toISOString(),
       };
-      this.writeJson(file, next);
+      this.writeWorkflowRecord(file, next);
       return next;
     });
   }
@@ -432,8 +437,10 @@ export class WorkflowPersistenceStore {
     const token = acknowledgement ? null : persistedTokenFromCredential(proof, runId);
     if (acknowledgement) validateLeaseReconciliation(proof, runId);
     const file = this.recordFile(runId);
-    return this.withLock(file, () => {
+    const journal = this.eventJournal(runId);
+    return this.withLock(file, async () => {
       const current = this.read(runId);
+      await this.migrateLegacyEvents(current, journal);
       if (current.revision !== expectedRevision) throw new Error('E_WORKFLOW_REVISION_CONFLICT');
       const lease = current.execution_lease;
       if (lease === null) throw new Error('E_WORKFLOW_LEASE_NOT_OWNER');
@@ -452,7 +459,7 @@ export class WorkflowPersistenceStore {
         lease_history: appendLeaseHistory(current.lease_history, [leaseJournal(current.lease_journal_sequence + 1, 'reconcile', lease, now, liveness.status)]),
         updated_at: now.toISOString(),
       };
-      this.writeJson(file, next);
+      this.writeWorkflowRecord(file, next);
       return next;
     });
   }

@@ -290,4 +290,41 @@ describe('workflow orchestration', () => {
     expect(finalRead.events).toHaveLength(3);
     expect(finalRead.revision).toBe(4);
   });
+
+  it('strips hydrated events from on-disk record.json across lease and append mutations', async () => {
+    const persistence = store();
+    const plan = planWorkflow(new WorkflowRegistry().register(definition()), 'strip-events-run', 'strip-events');
+    let record = await persistence.create(plan);
+
+    const recordFile = path.join(roots[roots.length - 1]!, '.omcu', 'workflows', 'runs', plan.run_id, 'record.json');
+    let onDisk = JSON.parse(fs.readFileSync(recordFile, 'utf8'));
+    expect(onDisk.events).toEqual([]);
+
+    // Append an event
+    const ev1 = appendWorkflowEvent([], plan.run_id, 'run_started', { started_at: '2026-07-23T00:00:00.000Z' });
+    record = await persistence.append(plan.run_id, record.revision, ev1);
+    expect(record.events).toHaveLength(1);
+
+    onDisk = JSON.parse(fs.readFileSync(recordFile, 'utf8'));
+    expect(onDisk.events).toEqual([]);
+
+    // Acquire lease
+    const acquired = await persistence.acquireExecutionLease(plan.run_id, record.revision, '1-plan', 'owner-strip', processIdentity(9001));
+    record = acquired.record;
+    expect(record.events).toHaveLength(1);
+
+    onDisk = JSON.parse(fs.readFileSync(recordFile, 'utf8'));
+    expect(onDisk.events).toEqual([]);
+
+    // Release lease
+    record = await persistence.releaseExecutionLease(plan.run_id, record.revision, acquired.credential);
+    expect(record.events).toHaveLength(1);
+
+    onDisk = JSON.parse(fs.readFileSync(recordFile, 'utf8'));
+    expect(onDisk.events).toEqual([]);
+
+    // Hydrated read still returns events from journal
+    const hydrated = persistence.read(plan.run_id);
+    expect(hydrated.events).toHaveLength(1);
+  });
 });
