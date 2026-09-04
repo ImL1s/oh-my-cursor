@@ -132,6 +132,7 @@ export interface JournalRepairReceipt {
 }
 
 export const DEFAULT_MAX_RECORD_BYTES = 64 * 1024; // 64 KiB
+export const DEFAULT_MAX_METADATA_BYTES = 64 * 1024; // 64 KiB
 export const DEFAULT_MAX_SEGMENT_BYTES = 2 * 1024 * 1024; // 2 MiB
 export const DEFAULT_MAX_SEGMENT_RECORDS = 5_000;
 export const DEFAULT_MAX_STREAM_RECORDS = 100_000;
@@ -545,6 +546,10 @@ export class Journal<T = unknown> {
       throw new Error('E_JOURNAL_CORRUPT');
     }
 
+    if (fileStat.size > DEFAULT_MAX_METADATA_BYTES) {
+      throw new Error('E_JOURNAL_CORRUPT');
+    }
+
     let fd: number;
     try {
       fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
@@ -558,6 +563,9 @@ export class Journal<T = unknown> {
         throw new Error('E_JOURNAL_CORRUPT');
       }
       if (typeof process.getuid === 'function' && fstat.uid !== process.getuid()) {
+        throw new Error('E_JOURNAL_CORRUPT');
+      }
+      if (fstat.size > DEFAULT_MAX_METADATA_BYTES) {
         throw new Error('E_JOURNAL_CORRUPT');
       }
       const parentStatAfter = fs.lstatSync(this.streamDir);
@@ -669,6 +677,7 @@ export class Journal<T = unknown> {
         const metaStat = fs.lstatSync(this.metaPath());
         if (metaStat.isSymbolicLink() || !metaStat.isFile()) return false;
         if (typeof process.getuid === 'function' && metaStat.uid !== process.getuid()) return false;
+        if (metaStat.size > DEFAULT_MAX_METADATA_BYTES) return false;
         const meta = JSON.parse(fs.readFileSync(this.metaPath(), 'utf8')) as Partial<JournalMeta>;
         if (meta.schema_version !== 1 || meta.stream_id !== this.streamId) return false;
       } catch {

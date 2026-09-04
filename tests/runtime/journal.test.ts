@@ -1516,6 +1516,40 @@ describe('Journal primitive', () => {
     expect(newHead?.active_segment_records).toBe(1);
     expect(journal.verify().ok).toBe(true);
   });
+
+  it('rejects oversized metadata files exceeding limit with E_JOURNAL_CORRUPT', async () => {
+    const streamDir = path.join(tempDir, 'oversized-meta-stream');
+    const journal = new Journal<{ msg: string }>(streamDir, 'oversized-meta');
+    await journal.append({ kind: 'msg', payload: { msg: 'first' } });
+
+    // Case 1: Oversized meta.json (e.g. padded > DEFAULT_MAX_METADATA_BYTES)
+    const metaPath = path.join(streamDir, 'meta.json');
+    const originalMeta = fs.readFileSync(metaPath, 'utf8');
+    const paddedMeta = originalMeta.slice(0, -1) + ', "padding": "' + 'a'.repeat(70 * 1024) + '"}';
+    fs.writeFileSync(metaPath, paddedMeta);
+
+    // append and verify must reject with E_JOURNAL_CORRUPT without memory exhaustion
+    await expect(journal.append({ kind: 'msg', payload: { msg: 'second' } })).rejects.toThrow('E_JOURNAL_CORRUPT');
+    const vMeta = journal.verify();
+    expect(vMeta.ok).toBe(false);
+    expect(vMeta.status).toBe('corrupt');
+    expect(vMeta.error?.code).toBe('E_JOURNAL_CORRUPT');
+
+    // Restore meta.json
+    fs.writeFileSync(metaPath, originalMeta);
+
+    // Case 2: Oversized head.json
+    const headPath = path.join(streamDir, 'head.json');
+    const originalHead = fs.readFileSync(headPath, 'utf8');
+    const paddedHead = originalHead.slice(0, -1) + ', "padding": "' + 'b'.repeat(70 * 1024) + '"}';
+    fs.writeFileSync(headPath, paddedHead);
+
+    await expect(journal.append({ kind: 'msg', payload: { msg: 'second' } })).rejects.toThrow('E_JOURNAL_CORRUPT');
+    const vHead = journal.verify();
+    expect(vHead.ok).toBe(false);
+    expect(vHead.status).toBe('corrupt');
+    expect(vHead.error?.code).toBe('E_JOURNAL_CORRUPT');
+  });
 });
 
 
