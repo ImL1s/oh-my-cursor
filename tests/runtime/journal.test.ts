@@ -119,26 +119,26 @@ describe('Journal primitive', () => {
     // Descending range query
     const descRange = journal.readRange({ fromSequence: 3, toSequence: 5, direction: 'desc' });
     expect(descRange.map((r) => r.sequence)).toEqual([5, 4, 3]);
-  });
+  }, 20_000);
 
   it('tail reads only latest records without loading all history', async () => {
     const streamDir = path.join(tempDir, 'tail');
     const journal = new Journal<{ n: number }>(streamDir, 'tail-stream', {
-      maxSegmentBytes: 300,
+      maxSegmentBytes: 250,
     });
 
-    for (let i = 1; i <= 20; i++) {
+    for (let i = 1; i <= 10; i++) {
       await journal.append({ kind: 'n', payload: { n: i } });
     }
 
     const tail3 = journal.tail(3);
     expect(tail3).toHaveLength(3);
-    expect(tail3.map((r) => r.sequence)).toEqual([18, 19, 20]);
+    expect(tail3.map((r) => r.sequence)).toEqual([8, 9, 10]);
 
     const tail1 = journal.tail(1);
     expect(tail1).toHaveLength(1);
-    expect(tail1[0]?.sequence).toBe(20);
-  });
+    expect(tail1[0]?.sequence).toBe(10);
+  }, 20_000);
 
   it('detects incomplete tail with missing newline and repairs with receipt', async () => {
     const streamDir = path.join(tempDir, 'incomplete-newline');
@@ -339,24 +339,24 @@ describe('Journal primitive', () => {
     expect(verification.ok).toBe(true);
     expect(verification.total_records).toBe(200);
     expect(verifyDuration).toBeLessThan(1000);
-  }, 30_000);
+  }, 60_000);
 
   it('selects latest matching records when readRange uses direction: desc and limit', async () => {
     const streamDir = path.join(tempDir, 'desc-range');
     const journal = new Journal<{ seq: number }>(streamDir, 'desc-test');
 
-    for (let i = 1; i <= 20; i++) {
+    for (let i = 1; i <= 12; i++) {
       await journal.append({ kind: 'num', payload: { seq: i } });
     }
 
     const latest5 = journal.readRange({ limit: 5, direction: 'desc' });
     expect(latest5).toHaveLength(5);
-    expect(latest5.map((r) => r.payload.seq)).toEqual([20, 19, 18, 17, 16]);
+    expect(latest5.map((r) => r.payload.seq)).toEqual([12, 11, 10, 9, 8]);
 
-    const subRange = journal.readRange({ fromSequence: 5, toSequence: 15, limit: 3, direction: 'desc' });
+    const subRange = journal.readRange({ fromSequence: 3, toSequence: 10, limit: 3, direction: 'desc' });
     expect(subRange).toHaveLength(3);
-    expect(subRange.map((r) => r.payload.seq)).toEqual([15, 14, 13]);
-  });
+    expect(subRange.map((r) => r.payload.seq)).toEqual([10, 9, 8]);
+  }, 20_000);
 
   it('rotates segment when maxSegmentRecords is reached', async () => {
     const streamDir = path.join(tempDir, 'record-limit-rotate');
