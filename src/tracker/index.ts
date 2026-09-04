@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { withDirectoryLock } from '../runtime/atomic.js';
+import { atomicWriteText, withDirectoryLock } from '../runtime/atomic.js';
 import { Journal } from '../runtime/journal.js';
 import { redact } from '../runtime/redaction.js';
 import { withinStateRoot, type StateRoot } from '../runtime/state-root.js';
@@ -38,7 +38,7 @@ export class LifecycleTracker {
     const marker = path.join(dir, '.migrated');
     if (!fs.existsSync(marker)) {
       try {
-        fs.writeFileSync(marker, '', { mode: 0o600 });
+        atomicWriteText(marker, '', { mode: 0o600 });
       } catch {}
     }
   }
@@ -139,7 +139,6 @@ export class LifecycleTracker {
         }
       } catch (error) {
         if (head !== null && head.head_sequence > 0) {
-          this.markMigrated(id);
           return journal.readRange().map((r) => r.payload);
         }
         throw error;
@@ -151,7 +150,6 @@ export class LifecycleTracker {
       (legacyEvents.length === 0 || head.head_sequence >= legacyEvents.length);
 
     if (shouldLoadJournal) {
-      this.markMigrated(id);
       return journal.readRange().map((r) => r.payload);
     }
     return legacyEvents;

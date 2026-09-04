@@ -367,6 +367,31 @@ describe('Cursor service layer', () => {
     expect(updatedHist[2]?.phase).toBe('completed');
   });
 
+  it('keeps tracker history strictly read-only and does not write .migrated marker', async () => {
+    const root = projectStateRoot(workspace());
+    const tracker = new LifecycleTracker(root, now);
+    await tracker.record('run-ro-test', 'created');
+    await tracker.record('run-ro-test', 'started');
+
+    // Simulate situation where journal is completed but .migrated marker is missing
+    const markerPath = path.join(root.path, 'tracker', 'journals', 'run-ro-test', '.migrated');
+    if (fs.existsSync(markerPath)) {
+      fs.unlinkSync(markerPath);
+    }
+    expect(fs.existsSync(markerPath)).toBe(false);
+
+    // Calling history() must read the journal events without creating .migrated or mutating any state
+    const hist = tracker.history('run-ro-test');
+    expect(hist).toHaveLength(2);
+    expect(hist[0]?.phase).toBe('created');
+    expect(hist[1]?.phase).toBe('started');
+    expect(fs.existsSync(markerPath)).toBe(false);
+
+    // Only a write operation (e.g. record) finalizes the migration marker
+    await tracker.record('run-ro-test', 'completed');
+    expect(fs.existsSync(markerPath)).toBe(true);
+  });
+
   it('offers only fixed MCP read/proposal tools and structurally refuses authority and shell fields', async () => {
     const root = projectStateRoot(workspace()); const memory = new ProjectMemoryStore(root, now);
     await memory.put('known fact', {}, 'fact');
