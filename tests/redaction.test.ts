@@ -17,8 +17,9 @@ describe('bounded redaction', () => {
     expect(redact('abcdef', { maxStringLength: 3 })).toBe('abc<truncated>');
   });
 
-  it('escapes terminal control characters safely', () => {
+  it('escapes terminal control characters safely including line breaks', () => {
     expect(escapeControlCharacters('hello\x1b[31mworld\x07\x00')).toBe('hello\\x1b[31mworld\\x07\\x00');
+    expect(escapeControlCharacters("line1\nline2\r\ttab")).toBe('line1\\nline2\\r\\ttab');
     expect(escapeControlCharacters('clean normal text')).toBe('clean normal text');
   });
 

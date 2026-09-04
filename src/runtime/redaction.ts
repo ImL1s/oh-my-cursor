@@ -51,8 +51,13 @@ export function redactText(value: string, maxLength = 4096): string {
 }
 
 export function escapeControlCharacters(text: string): string {
-  return text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, (char) => {
-    return `\\x${char.charCodeAt(0).toString(16).padStart(2, '0')}`;
+  return text.replace(/[\u0000-\u001f\u007f-\u009f]/g, (char) => {
+    switch (char) {
+      case '\t': return '\\t';
+      case '\r': return '\\r';
+      case '\n': return '\\n';
+      default: return `\\x${char.charCodeAt(0).toString(16).padStart(2, '0')}`;
+    }
   });
 }
 
