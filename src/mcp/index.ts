@@ -679,7 +679,7 @@ export async function serveMcpStdio(
         const errResponse: JsonRpcResponse = {
           jsonrpc: '2.0',
           id: null,
-          error: { code: JSONRPC_ERRORS.INVALID_REQUEST, message: 'E_MCP_INVALID_REQUEST' },
+          error: { code: JSONRPC_ERRORS.PARSE_ERROR, message: 'E_MCP_PARSE_ERROR' },
         };
         if (!(await writeWithBackpressure(output, `${JSON.stringify(errResponse)}\n`))) {
           break;

@@ -472,8 +472,8 @@ describe('serveMcpStdio framing and transport', () => {
     expect(parseErr.error.message).toBe('E_MCP_PARSE_ERROR');
 
     const nulErr = JSON.parse(lines[1]!);
-    expect(nulErr.error.code).toBe(JSONRPC_ERRORS.INVALID_REQUEST);
-    expect(nulErr.error.message).toBe('E_MCP_INVALID_REQUEST');
+    expect(nulErr.error.code).toBe(JSONRPC_ERRORS.PARSE_ERROR);
+    expect(nulErr.error.message).toBe('E_MCP_PARSE_ERROR');
 
     const pingRes = JSON.parse(lines[2]!);
     expect(pingRes.id).toBe(2);
