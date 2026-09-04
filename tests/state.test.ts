@@ -644,4 +644,23 @@ describe('CLI integration for cancellation and state transition invariants', () 
     expect(allEvents).toHaveLength(2);
     expect(allEvents[1]?.type).toBe('second');
   });
+
+  it('supports run IDs with dots and 128-char length across journal operations', async () => {
+    const root = projectStateRoot(workspace());
+    const authority = createCliMutationAuthority(root);
+    const store = new RunStateStore(root, authority);
+
+    // ID with dots
+    const runDots = await store.create('my..dotted..run', 'goal');
+    const ev1 = await store.appendEvent(runDots.run_id, 'dotted_step', { ok: true });
+    expect(ev1.sequence).toBe(1);
+    expect(store.readEvents(runDots.run_id)).toHaveLength(1);
+
+    // 128-char ID (entity max)
+    const longId = 'r'.repeat(128);
+    const runLong = await store.create(longId, 'goal');
+    const ev2 = await store.appendEvent(runLong.run_id, 'long_step', { ok: true });
+    expect(ev2.sequence).toBe(1);
+    expect(store.readEvents(runLong.run_id)).toHaveLength(1);
+  });
 });

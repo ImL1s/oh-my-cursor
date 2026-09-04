@@ -61,9 +61,16 @@ function readMailboxUnlocked(root: StateRoot, teamName: string, workerName: stri
   }
 }
 
+export const MAILBOX_MAX_RECORD_BYTES = 256 * 1024; // 256 KiB covers up to 64 KiB char body plus wrapping envelope
+export const MAILBOX_MAX_SEGMENT_BYTES = 4 * 1024 * 1024; // 4 MiB
+
 function mailboxJournal(root: StateRoot, teamName: string, workerName: string, now: () => Date): Journal<TeamMailboxEvent> {
   const dir = teamMailboxJournalDir(root, teamName, workerName);
-  return new Journal<TeamMailboxEvent>(dir, `team/${teamName}/mailbox/${workerName}`, { now });
+  return new Journal<TeamMailboxEvent>(dir, `team/${teamName}/mailbox/${workerName}`, {
+    now,
+    maxRecordBytes: MAILBOX_MAX_RECORD_BYTES,
+    maxSegmentBytes: MAILBOX_MAX_SEGMENT_BYTES,
+  });
 }
 
 function migrateLegacyMailboxIfNeeded(root: StateRoot, teamName: string, workerName: string, journal: Journal<TeamMailboxEvent>): void {

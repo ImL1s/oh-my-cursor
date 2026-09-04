@@ -1,11 +1,12 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   Journal,
   sha256,
   canonicalJson,
+  assertSafeStreamId,
   type JournalRecord,
 } from '../../src/runtime/journal.js';
 
@@ -159,7 +160,10 @@ describe('Journal primitive', () => {
     expect(verifyBefore.error?.code).toBe('E_JOURNAL_INCOMPLETE_TAIL');
 
     // Repair
+    const fsyncSpy = vi.spyOn(fs, 'fsyncSync');
     const receipt = await journal.repairIncompleteTail();
+    expect(fsyncSpy).toHaveBeenCalled();
+    fsyncSpy.mockRestore();
     expect(receipt.store_kind).toBe('journal_repair_receipt');
     expect(receipt.repaired_bytes).toBe(originalContent.length);
     expect(receipt.truncated_bytes).toBe(Buffer.byteLength('{"schema_version":1,"incomplete'));
@@ -284,7 +288,15 @@ describe('Journal primitive', () => {
   it('validates safe stream IDs', () => {
     expect(() => new Journal(tempDir, '../unsafe')).toThrow('E_JOURNAL_STREAM_ID_INVALID');
     expect(() => new Journal(tempDir, '/absolute')).toThrow('E_JOURNAL_STREAM_ID_INVALID');
+    expect(() => new Journal(tempDir, 'runs/../unsafe')).toThrow('E_JOURNAL_STREAM_ID_INVALID');
+    expect(() => new Journal(tempDir, 'runs//unsafe')).toThrow('E_JOURNAL_STREAM_ID_INVALID');
+    expect(() => new Journal(tempDir, 'runs/unsafe/')).toThrow('E_JOURNAL_STREAM_ID_INVALID');
     expect(() => new Journal(tempDir, 'valid-stream_1.0')).not.toThrow();
+    // Namespaced entity IDs
+    expect(() => new Journal(tempDir, `runs/${'a'.repeat(128)}`)).not.toThrow();
+    expect(() => new Journal(tempDir, 'runs/entity..with..dots')).not.toThrow();
+    expect(() => new Journal(tempDir, 'team/alpha/mailbox/worker-1')).not.toThrow();
+    expect(() => new Journal(tempDir, `team/${'a'.repeat(64)}/mailbox/${'b'.repeat(64)}`)).not.toThrow();
   });
 
   it('serializes concurrent appends with identical expectedHead so exactly one wins', async () => {

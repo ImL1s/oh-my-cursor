@@ -326,4 +326,21 @@ describe('team mailbox primitives', () => {
 
     await expect(sendDirectMessage(root, 'mail', 'ghost', 'two', 'nope')).rejects.toThrow('E_TEAM_WORKER_NOT_FOUND');
   });
+
+  it('supports sending messages with body near the 64 KiB limit without E_JOURNAL_RECORD_TOO_LARGE', async () => {
+    const { root } = workspace();
+    initializeTeamState(root, {
+      teamName: 'big-mail',
+      task: 'messages',
+      workers: [{ name: 'one', owned_paths: ['a'] }, { name: 'two', owned_paths: ['b'] }],
+    });
+
+    const largeBody = 'x'.repeat(64 * 1024);
+    const message = await sendDirectMessage(root, 'big-mail', 'one', 'two', largeBody);
+    expect(message.body).toBe(largeBody);
+
+    const messages = await listMailboxMessages(root, 'big-mail', 'two');
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.body).toBe(largeBody);
+  });
 });

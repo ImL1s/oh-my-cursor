@@ -128,13 +128,46 @@ export const DEFAULT_MAX_SEGMENT_BYTES = 2 * 1024 * 1024; // 2 MiB
 export const DEFAULT_MAX_SEGMENT_RECORDS = 5_000;
 export const DEFAULT_MAX_STREAM_RECORDS = 100_000;
 
-const SAFE_STREAM_ID = /^[A-Za-z0-9][A-Za-z0-9._\-/]{0,127}$/;
+const SAFE_STREAM_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 export function assertSafeStreamId(streamId: string): string {
-  if (typeof streamId !== 'string' || !SAFE_STREAM_ID.test(streamId) || streamId.includes('..') || path.isAbsolute(streamId)) {
+  if (typeof streamId !== 'string' || streamId.length === 0 || streamId.length > 512 || path.isAbsolute(streamId)) {
     throw new Error('E_JOURNAL_STREAM_ID_INVALID');
   }
+  const segments = streamId.split('/');
+  if (segments.length === 0 || segments.length > 8) {
+    throw new Error('E_JOURNAL_STREAM_ID_INVALID');
+  }
+  for (const seg of segments) {
+    if (!SAFE_STREAM_SEGMENT.test(seg)) {
+      throw new Error('E_JOURNAL_STREAM_ID_INVALID');
+    }
+  }
   return streamId;
+}
+
+function syncPathToDisk(targetPath: string): void {
+  try {
+    if (!fs.existsSync(targetPath)) return;
+    const stat = fs.statSync(targetPath);
+    let fd: number;
+    if (stat.isDirectory()) {
+      fd = fs.openSync(targetPath, 'r');
+    } else {
+      try {
+        fd = fs.openSync(targetPath, 'r+');
+      } catch {
+        fd = fs.openSync(targetPath, 'r');
+      }
+    }
+    try {
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    // Best-effort if platform restricts directory fsync
+  }
 }
 
 export function sha256(value: string | Buffer): string {
@@ -1131,9 +1164,11 @@ export class Journal<T = unknown> {
       const timestamp = this.now().getTime();
       const backupFile = path.join(this.quarantineDir(), `${segment}.tail-corrupt-${timestamp}`);
       fs.copyFileSync(segmentPath, backupFile);
+      syncPathToDisk(backupFile);
 
       // Truncate the segment to the last valid committed byte offset
       fs.truncateSync(segmentPath, repairedBytes);
+      syncPathToDisk(segmentPath);
 
       const head = this.readHead()!;
       const headActiveIndex = parseSegmentIndex(head.active_segment) ?? 1;
@@ -1155,10 +1190,16 @@ export class Journal<T = unknown> {
           if (fs.existsSync(extraPath)) {
             const extraBackup = path.join(this.quarantineDir(), `${seg}.orphaned-${timestamp}`);
             fs.copyFileSync(extraPath, extraBackup);
+            syncPathToDisk(extraBackup);
             fs.unlinkSync(extraPath);
           }
         }
       }
+
+      // Fsync affected directories before publishing receipt to ensure directory entries reach stable storage
+      syncPathToDisk(this.quarantineDir());
+      syncPathToDisk(this.segmentsDir());
+      syncPathToDisk(this.streamDir);
       const receiptMaterial = {
         schema_version: 1 as const,
         store_kind: 'journal_repair_receipt' as const,
