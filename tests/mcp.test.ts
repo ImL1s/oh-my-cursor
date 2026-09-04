@@ -167,8 +167,25 @@ describe('MCP protocol and handler', () => {
     expect(uninitList?.error?.code).toBe(JSONRPC_ERRORS.INVALID_REQUEST);
     expect(uninitList?.error?.message).toBe('E_MCP_NOT_INITIALIZED');
 
+    // Premature notifications/initialized must not unlock lifecycle
+    const prematureNote = await handle({ jsonrpc: '2.0', method: 'notifications/initialized' });
+    expect(prematureNote).toBeUndefined();
+    const stillUninit = await handle({ jsonrpc: '2.0', id: 10, method: 'tools/list' });
+    expect(stillUninit?.error?.code).toBe(JSONRPC_ERRORS.INVALID_REQUEST);
+    expect(stillUninit?.error?.message).toBe('E_MCP_NOT_INITIALIZED');
+
+    // notifications/initialized with an id must be rejected
+    const idNote = await handle({ jsonrpc: '2.0', id: 11, method: 'notifications/initialized' });
+    expect(idNote?.error?.code).toBe(JSONRPC_ERRORS.INVALID_REQUEST);
+    expect(idNote?.error?.message).toBe('E_MCP_NOTIFICATION_HAS_ID');
+
+    // Initialize succeeds
     const initRes = await handle({ jsonrpc: '2.0', id: 2, method: 'initialize' });
     expect(initRes?.error).toBeUndefined();
+
+    // Now notifications/initialized marks it initialized
+    const validNote = await handle({ jsonrpc: '2.0', method: 'notifications/initialized' });
+    expect(validNote).toBeUndefined();
 
     const afterInit = await handle({ jsonrpc: '2.0', id: 3, method: 'tools/list' });
     expect(afterInit?.error).toBeUndefined();

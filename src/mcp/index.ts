@@ -239,12 +239,19 @@ export function createMcpRequestHandler(
     const method = req.method;
 
     // 2. Notification handling: notifications must not produce a response
-    if (method === 'notifications/initialized') {
-      initialized = true;
+    if (isNotification) {
+      if (method === 'notifications/initialized' && (!options.strictLifecycle || initialized)) {
+        initialized = true;
+      }
       return undefined;
     }
-    if (isNotification) {
-      return undefined;
+
+    if (method === 'notifications/initialized' || method.startsWith('notifications/')) {
+      return {
+        jsonrpc: '2.0',
+        id,
+        error: { code: JSONRPC_ERRORS.INVALID_REQUEST, message: 'E_MCP_NOTIFICATION_HAS_ID' },
+      };
     }
 
     // 3. Lifecycle check (if strictLifecycle is enabled)
