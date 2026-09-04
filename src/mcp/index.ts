@@ -541,6 +541,47 @@ export async function* readBoundedLines(
   }
 }
 
+function isWritableOpen(output: Writable): boolean {
+  if ('destroyed' in output && output.destroyed) return false;
+  if ('writableEnded' in output && output.writableEnded) return false;
+  if ('writable' in output && !output.writable) return false;
+  return true;
+}
+
+export async function writeWithBackpressure(output: Writable, data: string): Promise<boolean> {
+  if (!isWritableOpen(output)) {
+    return false;
+  }
+  const canWrite = output.write(data);
+  if (canWrite) {
+    return true;
+  }
+  return new Promise<boolean>((resolve, reject) => {
+    const onDrain = () => {
+      cleanup();
+      resolve(true);
+    };
+    const onClose = () => {
+      cleanup();
+      resolve(false);
+    };
+    const onError = (err: unknown) => {
+      cleanup();
+      reject(err);
+    };
+    const cleanup = () => {
+      output.removeListener('drain', onDrain);
+      output.removeListener('close', onClose);
+      output.removeListener('finish', onClose);
+      output.removeListener('error', onError);
+    };
+    output.once('drain', onDrain);
+    output.once('close', onClose);
+    output.once('finish', onClose);
+    output.once('error', onError);
+  });
+}
+
 export async function serveMcpStdio(
   root: StateRoot,
   input: Readable = process.stdin,
@@ -556,9 +597,8 @@ export async function serveMcpStdio(
         id: null,
         error: { code: JSONRPC_ERRORS.INVALID_REQUEST, message: 'E_MCP_LINE_TOO_LARGE' },
       };
-      const lineToWrite = `${JSON.stringify(errResponse)}\n`;
-      if (!output.write(lineToWrite)) {
-        await new Promise((resolve) => output.once('drain', resolve));
+      if (!(await writeWithBackpressure(output, `${JSON.stringify(errResponse)}\n`))) {
+        break;
       }
       continue;
     }
@@ -572,9 +612,8 @@ export async function serveMcpStdio(
         id: null,
         error: { code: JSONRPC_ERRORS.INVALID_REQUEST, message: 'E_MCP_INVALID_REQUEST' },
       };
-      const lineToWrite = `${JSON.stringify(errResponse)}\n`;
-      if (!output.write(lineToWrite)) {
-        await new Promise((resolve) => output.once('drain', resolve));
+      if (!(await writeWithBackpressure(output, `${JSON.stringify(errResponse)}\n`))) {
+        break;
       }
       continue;
     }
@@ -587,17 +626,15 @@ export async function serveMcpStdio(
         id: null,
         error: { code: JSONRPC_ERRORS.PARSE_ERROR, message: 'E_MCP_PARSE_ERROR' },
       };
-      const lineToWrite = `${JSON.stringify(errResponse)}\n`;
-      if (!output.write(lineToWrite)) {
-        await new Promise((resolve) => output.once('drain', resolve));
+      if (!(await writeWithBackpressure(output, `${JSON.stringify(errResponse)}\n`))) {
+        break;
       }
       continue;
     }
     const response = await handle(parsed);
     if (response !== undefined && response !== null) {
-      const lineToWrite = `${JSON.stringify(response)}\n`;
-      if (!output.write(lineToWrite)) {
-        await new Promise((resolve) => output.once('drain', resolve));
+      if (!(await writeWithBackpressure(output, `${JSON.stringify(response)}\n`))) {
+        break;
       }
     }
   }

@@ -540,4 +540,47 @@ describe('serveMcpStdio framing and transport', () => {
     expect(drained).toBe(true);
     expect(writeCount).toBe(2);
   });
+
+  it('terminates gracefully when output stream closes during backpressure', async () => {
+    const root = projectStateRoot(workspace());
+    const input = new PassThrough();
+
+    const closingOutput = new Writable({
+      highWaterMark: 1,
+      write(_chunk, _encoding, _callback) {
+        setTimeout(() => {
+          closingOutput.destroy();
+        }, 10);
+      },
+    });
+
+    const serverPromise = serveMcpStdio(root, input, closingOutput);
+
+    input.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }) + '\n');
+    input.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'ping' }) + '\n');
+
+    await expect(serverPromise).resolves.toBeUndefined();
+  });
+
+  it('rejects when output stream emits error during backpressure', async () => {
+    const root = projectStateRoot(workspace());
+    const input = new PassThrough();
+
+    const erroringOutput = new Writable({
+      highWaterMark: 1,
+      write(_chunk, _encoding, _callback) {
+        setTimeout(() => {
+          erroringOutput.destroy(new Error('E_PIPE_BROKEN'));
+        }, 10);
+      },
+    });
+
+    const serverPromise = serveMcpStdio(root, input, erroringOutput);
+
+    input.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }) + '\n');
+    input.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'ping' }) + '\n');
+
+    await expect(serverPromise).rejects.toThrow('E_PIPE_BROKEN');
+  });
 });
+
