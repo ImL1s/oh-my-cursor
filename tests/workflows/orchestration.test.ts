@@ -178,4 +178,33 @@ describe('workflow orchestration', () => {
     expect(receipt.stdout_sha256).toBe(sha256(rawStdout));
     expect(receipt.stderr_sha256).toBe(sha256(rawStderr));
   });
+
+  it('recovers workflow effective revision when journal append wins before record rewrite', async () => {
+    const persistence = store();
+    const plan = planWorkflow(new WorkflowRegistry().register(definition()), 'recovery-run', 'recover');
+    let record = await persistence.create(plan);
+    expect(record.revision).toBe(1);
+
+    const event = appendWorkflowEvent(record.events, plan.run_id, 'attempt_start', {
+      task_id: '1-plan',
+      attempt: 1,
+      started_at: '2026-07-23T00:00:00.000Z',
+    });
+
+    // Append event normally
+    record = await persistence.append(plan.run_id, record.revision, event);
+    expect(record.revision).toBe(2);
+    expect(record.events).toHaveLength(1);
+
+    // Simulate crash after journal append where record.json retained old revision 1
+    const recordFile = path.join(roots[roots.length - 1]!, '.omcu', 'workflows', 'runs', plan.run_id, 'record.json');
+    const onDisk = JSON.parse(fs.readFileSync(recordFile, 'utf8'));
+    onDisk.revision = 1;
+    fs.writeFileSync(recordFile, JSON.stringify(onDisk));
+
+    // Read should recover effectiveRevision from journal events length + 1
+    const recovered = persistence.read(plan.run_id);
+    expect(recovered.revision).toBe(2);
+    expect(recovered.events).toHaveLength(1);
+  });
 });

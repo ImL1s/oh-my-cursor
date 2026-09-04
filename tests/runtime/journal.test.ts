@@ -340,4 +340,111 @@ describe('Journal primitive', () => {
     expect(verification.total_records).toBe(200);
     expect(verifyDuration).toBeLessThan(1000);
   }, 30_000);
+
+  it('selects latest matching records when readRange uses direction: desc and limit', async () => {
+    const streamDir = path.join(tempDir, 'desc-range');
+    const journal = new Journal<{ seq: number }>(streamDir, 'desc-test');
+
+    for (let i = 1; i <= 20; i++) {
+      await journal.append({ kind: 'num', payload: { seq: i } });
+    }
+
+    const latest5 = journal.readRange({ limit: 5, direction: 'desc' });
+    expect(latest5).toHaveLength(5);
+    expect(latest5.map((r) => r.payload.seq)).toEqual([20, 19, 18, 17, 16]);
+
+    const subRange = journal.readRange({ fromSequence: 5, toSequence: 15, limit: 3, direction: 'desc' });
+    expect(subRange).toHaveLength(3);
+    expect(subRange.map((r) => r.payload.seq)).toEqual([15, 14, 13]);
+  });
+
+  it('rotates segment when maxSegmentRecords is reached', async () => {
+    const streamDir = path.join(tempDir, 'record-limit-rotate');
+    const journal = new Journal<{ msg: string }>(streamDir, 'rec-limit', {
+      maxSegmentRecords: 2,
+    });
+
+    await journal.append({ kind: 'msg', payload: { msg: 'first' } });
+    await journal.append({ kind: 'msg', payload: { msg: 'second' } });
+    // 3rd record should trigger rotation to 00000002.jsonl
+    await journal.append({ kind: 'msg', payload: { msg: 'third' } });
+
+    const seg1 = path.join(streamDir, 'segments', '00000001.jsonl');
+    const seg2 = path.join(streamDir, 'segments', '00000002.jsonl');
+
+    expect(fs.existsSync(seg1)).toBe(true);
+    expect(fs.existsSync(seg2)).toBe(true);
+
+    const lines1 = fs.readFileSync(seg1, 'utf8').trim().split('\n');
+    const lines2 = fs.readFileSync(seg2, 'utf8').trim().split('\n');
+    expect(lines1).toHaveLength(2);
+    expect(lines2).toHaveLength(1);
+
+    const head = journal.readHead()!;
+    expect(head.active_segment).toBe('00000002.jsonl');
+    expect(head.active_segment_records).toBe(1);
+    expect(head.head_sequence).toBe(3);
+  });
+
+  it('repairs uncommitted tail in rotated segment and unlinks empty rotated segment', async () => {
+    const streamDir = path.join(tempDir, 'rotate-uncommitted');
+    const journal = new Journal<{ count: number }>(streamDir, 'rot-uncommitted', {
+      maxSegmentRecords: 2,
+    });
+
+    await journal.append({ kind: 'c', payload: { count: 1 } });
+    await journal.append({ kind: 'c', payload: { count: 2 } });
+
+    // Segment 1 now has 2 records, head is sequence 2, active_segment is 00000001.jsonl
+    // Simulate an uncommitted append into rotated segment 2:
+    const seg2 = path.join(streamDir, 'segments', '00000002.jsonl');
+    const head = journal.readHead()!;
+    const recordMaterial = {
+      schema_version: 1 as const,
+      stream_id: 'rot-uncommitted',
+      sequence: 3,
+      kind: 'c',
+      payload: { count: 3 },
+      at: '2026-07-23T00:00:00.000Z',
+      previous_digest: head.head_digest,
+    };
+    const digest = sha256(canonicalJson(recordMaterial));
+    fs.writeFileSync(seg2, `${canonicalJson({ ...recordMaterial, digest })}\n`);
+
+    const vBefore = journal.verify();
+    expect(vBefore.ok).toBe(false);
+    expect(vBefore.status).toBe('incomplete_tail');
+    expect(vBefore.error?.segment).toBe('00000002.jsonl');
+    expect(vBefore.error?.byte_offset).toBe(0);
+
+    const receipt = await journal.repairIncompleteTail();
+    expect(receipt.segment).toBe('00000002.jsonl');
+    expect(receipt.repaired_bytes).toBe(0);
+    // The empty rotated segment should have been unlinked
+    expect(fs.existsSync(seg2)).toBe(false);
+
+    const vAfter = journal.verify();
+    expect(vAfter.ok).toBe(true);
+    expect(vAfter.total_records).toBe(2);
+  });
+
+  it('refuses to classify committed corrupt records as incomplete_tail', async () => {
+    const streamDir = path.join(tempDir, 'committed-corrupt');
+    const journal = new Journal<{ x: number }>(streamDir, 'comm-corrupt');
+
+    await journal.append({ kind: 'x', payload: { x: 1 } });
+    await journal.append({ kind: 'x', payload: { x: 2 } });
+
+    const seg = path.join(streamDir, 'segments', '00000001.jsonl');
+    const lines = fs.readFileSync(seg, 'utf8').trim().split('\n');
+
+    // Make second committed line invalid JSON while head.head_sequence is 2
+    fs.writeFileSync(seg, `${lines[0]}\n{invalid-json\n`);
+
+    const v = journal.verify();
+    expect(v.ok).toBe(false);
+    expect(v.status).toBe('corrupt');
+    expect(v.repairable).toBe(false);
+    await expect(journal.repairIncompleteTail()).rejects.toThrow('E_JOURNAL_NON_TAIL_CORRUPTION');
+  });
 });

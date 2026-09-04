@@ -27,6 +27,7 @@ export interface JournalHead {
   readonly head_sequence: number;
   readonly head_digest: string | null;
   readonly active_segment: string;
+  readonly active_segment_records?: number;
   readonly total_records: number;
   readonly total_bytes: number;
   readonly updated_at: string;
@@ -248,6 +249,7 @@ export class Journal<T = unknown> {
         (parsed.head_sequence === 0 ? parsed.head_digest !== null : typeof parsed.head_digest !== 'string' || !/^[a-f0-9]{64}$/.test(parsed.head_digest)) ||
         typeof parsed.active_segment !== 'string' ||
         parseSegmentIndex(parsed.active_segment) === null ||
+        (parsed.active_segment_records !== undefined && (!Number.isSafeInteger(parsed.active_segment_records) || (parsed.active_segment_records as number) < 0)) ||
         !Number.isSafeInteger(parsed.total_records) ||
         !Number.isSafeInteger(parsed.total_bytes) ||
         !validDate(parsed.updated_at)
@@ -297,6 +299,7 @@ export class Journal<T = unknown> {
       head_sequence: 0,
       head_digest: null,
       active_segment: initialSegment,
+      active_segment_records: 0,
       total_records: 0,
       total_bytes: 0,
       updated_at: now.toISOString(),
@@ -359,18 +362,31 @@ export class Journal<T = unknown> {
       let activeSegmentPath = path.join(this.segmentsDir(), activeSegment);
 
       let currentSegmentBytes = fs.existsSync(activeSegmentPath) ? fs.statSync(activeSegmentPath).size : 0;
+      let currentSegmentRecords = typeof head.active_segment_records === 'number'
+        ? head.active_segment_records
+        : (fs.existsSync(activeSegmentPath) ? fs.readFileSync(activeSegmentPath, 'utf8').trim().split(/\r?\n/).filter(Boolean).length : 0);
       let activeSegmentIndex = parseSegmentIndex(activeSegment) ?? 1;
 
-      // Check if rotation is needed
-      if (currentSegmentBytes > 0 && (currentSegmentBytes + lineBytes > this.maxSegmentBytes)) {
+      // Check if rotation is needed by byte limit or record limit
+      if (
+        (currentSegmentBytes > 0 && currentSegmentBytes + lineBytes > this.maxSegmentBytes) ||
+        (currentSegmentRecords > 0 && currentSegmentRecords >= this.maxSegmentRecords)
+      ) {
         activeSegmentIndex += 1;
         activeSegment = segmentFileName(activeSegmentIndex);
         activeSegmentPath = path.join(this.segmentsDir(), activeSegment);
         currentSegmentBytes = 0;
+        currentSegmentRecords = 0;
       }
 
-      // Append to active segment file
-      fs.appendFileSync(activeSegmentPath, line, { mode: 0o600 });
+      // Append and fsync active segment file before updating head
+      const fd = fs.openSync(activeSegmentPath, 'a', 0o600);
+      try {
+        fs.writeSync(fd, line);
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
       fs.chmodSync(activeSegmentPath, 0o600);
 
       const nextHead: JournalHead = {
@@ -379,6 +395,7 @@ export class Journal<T = unknown> {
         head_sequence: sequence,
         head_digest: digest,
         active_segment: activeSegment,
+        active_segment_records: currentSegmentRecords + 1,
         total_records: head.total_records + 1,
         total_bytes: head.total_bytes + lineBytes,
         updated_at: this.now().toISOString(),
@@ -444,6 +461,27 @@ export class Journal<T = unknown> {
     const segments = this.listSegments();
     const records: JournalRecord<T>[] = [];
 
+    if (direction === 'desc') {
+      for (let i = segments.length - 1; i >= 0 && records.length < limit; i--) {
+        const segmentPath = path.join(this.segmentsDir(), segments[i]!);
+        if (!fs.existsSync(segmentPath)) continue;
+        const content = fs.readFileSync(segmentPath, 'utf8');
+        const lines = content.trim().split(/\r?\n/).filter(Boolean);
+
+        for (let j = lines.length - 1; j >= 0 && records.length < limit; j--) {
+          try {
+            const record = JSON.parse(lines[j]!) as JournalRecord<T>;
+            if (record.sequence >= fromSequence && record.sequence <= toSequence) {
+              records.push(record);
+            }
+          } catch {
+            // ignore bad lines during range read
+          }
+        }
+      }
+      return records;
+    }
+
     for (const segment of segments) {
       if (records.length >= limit) break;
       const segmentPath = path.join(this.segmentsDir(), segment);
@@ -464,9 +502,6 @@ export class Journal<T = unknown> {
       }
     }
 
-    if (direction === 'desc') {
-      return records.reverse();
-    }
     return records;
   }
 
@@ -571,6 +606,8 @@ export class Journal<T = unknown> {
     let expectedPreviousDigest: string | null = null;
     let totalValid = 0;
     let lastValidCommittedByteOffset = 0;
+    let firstUncommittedSegment: string | null = null;
+    let firstUncommittedByteOffset: number | null = null;
     let incompleteTailSegment: string | null = null;
     let incompleteTailByteOffset: number | null = null;
 
@@ -588,7 +625,7 @@ export class Journal<T = unknown> {
 
         if (nextNewline === -1) {
           // File ended without newline
-          if (isLastSegment) {
+          if (isLastSegment && totalValid >= head.head_sequence) {
             incompleteTailSegment = segName;
             incompleteTailByteOffset = offset;
             return {
@@ -617,7 +654,9 @@ export class Journal<T = unknown> {
               head_digest: head.head_digest,
               error: {
                 code: 'E_JOURNAL_CORRUPT',
-                message: 'Non-active segment is missing trailing newline',
+                message: isLastSegment
+                  ? 'Committed record in active segment is missing trailing newline'
+                  : 'Non-active segment is missing trailing newline',
                 segment: segName,
                 byte_offset: offset,
               },
@@ -655,8 +694,8 @@ export class Journal<T = unknown> {
         try {
           record = JSON.parse(lineStr) as JournalRecord<T>;
         } catch (jsonErr) {
-          if (isLastSegment && nextNewline + 1 === buffer.length) {
-            // Last line of active segment is invalid JSON
+          if (isLastSegment && nextNewline + 1 === buffer.length && totalValid >= head.head_sequence) {
+            // Uncommitted last line of active segment is invalid JSON
             return {
               ok: false,
               status: 'incomplete_tail',
@@ -685,6 +724,7 @@ export class Journal<T = unknown> {
               code: 'E_JOURNAL_CORRUPT',
               message: 'Corrupt JSON in segment',
               segment: segName,
+              sequence: expectedSeq,
               byte_offset: offset,
             },
             repairable: false,
@@ -830,6 +870,7 @@ export class Journal<T = unknown> {
           };
         }
 
+        const recordStartOffset = offset;
         expectedPreviousDigest = record.digest;
         expectedSeq++;
         totalValid++;
@@ -837,6 +878,10 @@ export class Journal<T = unknown> {
 
         if (record.sequence === head.head_sequence) {
           lastValidCommittedByteOffset = offset;
+        }
+        if (record.sequence === head.head_sequence + 1 && firstUncommittedSegment === null) {
+          firstUncommittedSegment = segName;
+          firstUncommittedByteOffset = recordStartOffset;
         }
       }
     }
@@ -870,9 +915,11 @@ export class Journal<T = unknown> {
     }
 
     if (totalValid > head.head_sequence) {
-      // Uncommitted records exist in active segment
-      const activeSegPath = path.join(this.segmentsDir(), head.active_segment);
-      const activeSize = fs.existsSync(activeSegPath) ? fs.statSync(activeSegPath).size : 0;
+      // Uncommitted records exist in active segment or rotated segment
+      const tailSegment = firstUncommittedSegment ?? head.active_segment;
+      const tailByteOffset = firstUncommittedByteOffset ?? lastValidCommittedByteOffset;
+      const tailSegPath = path.join(this.segmentsDir(), tailSegment);
+      const tailSize = fs.existsSync(tailSegPath) ? fs.statSync(tailSegPath).size : 0;
       return {
         ok: false,
         status: 'incomplete_tail',
@@ -882,12 +929,12 @@ export class Journal<T = unknown> {
         head_digest: head.head_digest,
         error: {
           code: 'E_JOURNAL_INCOMPLETE_TAIL',
-          message: `Uncommitted tail records detected: segment has ${totalValid} records, head committed ${head.head_sequence}`,
-          segment: head.active_segment,
-          byte_offset: lastValidCommittedByteOffset,
+          message: `Uncommitted tail records detected: stream has ${totalValid} records, head committed ${head.head_sequence}`,
+          segment: tailSegment,
+          byte_offset: tailByteOffset,
         },
         repairable: true,
-        uncommitted_tail_bytes: activeSize - lastValidCommittedByteOffset,
+        uncommitted_tail_bytes: tailSize - tailByteOffset,
       };
     }
 
@@ -947,6 +994,29 @@ export class Journal<T = unknown> {
       fs.truncateSync(segmentPath, repairedBytes);
 
       const head = this.readHead()!;
+      const headActiveIndex = parseSegmentIndex(head.active_segment) ?? 1;
+      const targetSegIndex = parseSegmentIndex(segment);
+
+      // If segment is empty and was created beyond head.active_segment, unlink it so no orphaned segment remains
+      if (targetSegIndex !== null && targetSegIndex > headActiveIndex && repairedBytes === 0) {
+        if (fs.existsSync(segmentPath)) {
+          fs.unlinkSync(segmentPath);
+        }
+      }
+
+      // If there are segments created after this target segment or after head.active_segment, quarantine and unlink them
+      const allSegments = this.listSegments();
+      for (const seg of allSegments) {
+        const idx = parseSegmentIndex(seg);
+        if (idx !== null && ((targetSegIndex !== null && idx > targetSegIndex) || idx > headActiveIndex)) {
+          const extraPath = path.join(this.segmentsDir(), seg);
+          if (fs.existsSync(extraPath)) {
+            const extraBackup = path.join(this.quarantineDir(), `${seg}.orphaned-${timestamp}`);
+            fs.copyFileSync(extraPath, extraBackup);
+            fs.unlinkSync(extraPath);
+          }
+        }
+      }
       const receiptMaterial = {
         schema_version: 1 as const,
         store_kind: 'journal_repair_receipt' as const,

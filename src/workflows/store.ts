@@ -202,13 +202,13 @@ export class WorkflowPersistenceStore {
     return new Journal<WorkflowJournalEvent>(this.journalDir(runId), `workflows/${safe(runId, 'run_id')}`, { now: this.now });
   }
 
-  private migrateLegacyEvents(current: WorkflowRunRecord, journal: Journal<WorkflowJournalEvent>): void {
+  private async migrateLegacyEvents(current: WorkflowRunRecord, journal: Journal<WorkflowJournalEvent>): Promise<void> {
     if (current.events.length > 0) {
       const head = journal.readHead();
       if (head === null || head.head_sequence === 0) {
         journal.init();
         for (const event of current.events) {
-          journal.append({ kind: event.kind, payload: event, at: this.now().toISOString() });
+          await journal.append({ kind: event.kind, payload: event, at: this.now().toISOString() });
         }
       }
     }
@@ -222,7 +222,8 @@ export class WorkflowPersistenceStore {
       const journalHead = journal.readHead();
       if (journalHead !== null && journalHead.head_sequence > 0) {
         const events = journal.readRange().map((r) => r.payload);
-        record = { ...record, events, event_head_sha256: events.at(-1)?.event_sha256 ?? null };
+        const effectiveRevision = Math.max(record.revision, events.length + 1);
+        record = { ...record, revision: effectiveRevision, events, event_head_sha256: events.at(-1)?.event_sha256 ?? null };
       }
       validateRecord(record, runId);
       return record;
@@ -238,7 +239,7 @@ export class WorkflowPersistenceStore {
     return this.withLock(file, async () => {
       const current = this.read(runId);
       if (current.revision !== expectedRevision) throw new Error('E_WORKFLOW_REVISION_CONFLICT');
-      this.migrateLegacyEvents(current, journal);
+      await this.migrateLegacyEvents(current, journal);
 
       if (event.run_id !== runId || event.sequence !== current.events.length + 1 || event.previous_event_sha256 !== current.event_head_sha256) throw new Error('E_WORKFLOW_EVENT_FENCE');
       const { event_sha256: claimedDigest, ...material } = event;
