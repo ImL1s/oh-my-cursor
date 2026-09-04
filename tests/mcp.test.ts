@@ -275,6 +275,23 @@ describe('MCP protocol and handler', () => {
     });
     expect(hugeProposal?.error?.code).toBe(JSONRPC_ERRORS.INVALID_PARAMS);
     expect(hugeProposal?.error?.message).toBe('E_MCP_PROPOSAL_TOO_LARGE');
+
+    // Multibyte string exceeding UTF-8 bytes even if string length < 64K
+    const multibyteProposal = await handle({
+      jsonrpc: '2.0',
+      id: 9,
+      method: 'tools/call',
+      params: {
+        name: 'omcu.proposal.write',
+        arguments: {
+          id: 'emoji-prop',
+          // 20000 4-byte emojis = 80000 UTF-8 bytes (> 64KB), but string length is ~40000 (< 64KB)
+          proposal: { emoji: '🎉'.repeat(20000) },
+        },
+      },
+    });
+    expect(multibyteProposal?.error?.code).toBe(JSONRPC_ERRORS.INVALID_PARAMS);
+    expect(multibyteProposal?.error?.message).toBe('E_MCP_PROPOSAL_TOO_LARGE');
   });
 
   it('bounds nesting depth, array entries, and object keys', async () => {

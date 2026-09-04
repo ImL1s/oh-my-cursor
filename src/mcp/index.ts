@@ -410,7 +410,7 @@ export function createMcpRequestHandler(
           throw new Error('E_MCP_ARGUMENTS_INVALID');
         }
         const stringified = JSON.stringify(inputArgs.proposal);
-        if (stringified.length > MAX_PROPOSAL_BYTES) {
+        if (Buffer.byteLength(stringified, 'utf8') > MAX_PROPOSAL_BYTES) {
           throw new Error('E_MCP_PROPOSAL_TOO_LARGE');
         }
         const file = withinStateRoot(root, 'mcp', 'proposals', `${proposalId}.json`);
