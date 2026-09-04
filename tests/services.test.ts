@@ -291,6 +291,56 @@ describe('Cursor service layer', () => {
     expect(history[1]?.phase).toBe('started');
   });
 
+  it('resumes partial tracker migration without losing remaining events', async () => {
+    const root = projectStateRoot(workspace());
+    const tracker = new LifecycleTracker(root, now);
+    const legacyFile = path.join(root.path, 'tracker', 'run-partial.jsonl');
+    fs.mkdirSync(path.dirname(legacyFile), { recursive: true });
+
+    const ev1 = { schema_version: 1, subject_id: 'run-partial', sequence: 1, phase: 'created', detail: {}, at: '2026-07-23T02:00:00.000Z' };
+    const ev2 = { schema_version: 1, subject_id: 'run-partial', sequence: 2, phase: 'started', detail: {}, at: '2026-07-23T02:00:01.000Z' };
+    const ev3 = { schema_version: 1, subject_id: 'run-partial', sequence: 3, phase: 'checkpointed', detail: {}, at: '2026-07-23T02:00:02.000Z' };
+
+    fs.writeFileSync(legacyFile, `${JSON.stringify(ev1)}\n${JSON.stringify(ev2)}\n${JSON.stringify(ev3)}\n`);
+
+    // Simulate partial migration: only event 1 was committed to the journal
+    const journal = (tracker as any).journal('run-partial');
+    journal.init();
+    await journal.append({ kind: ev1.phase, payload: ev1, at: ev1.at });
+
+    // History should return all 3 events from legacy file because journal head sequence 1 < 3
+    const midHistory = tracker.history('run-partial');
+    expect(midHistory).toHaveLength(3);
+    expect(midHistory[2]?.phase).toBe('checkpointed');
+
+    // Next record should resume migration of remaining events (2 and 3) then append event 4
+    const newEvent = await tracker.record('run-partial', 'completed', { ok: true });
+    expect(newEvent.sequence).toBe(4);
+    expect(newEvent.phase).toBe('completed');
+
+    // History should now return all 4 events from the journal
+    const finalHistory = tracker.history('run-partial');
+    expect(finalHistory).toHaveLength(4);
+    expect(finalHistory[0]?.phase).toBe('created');
+    expect(finalHistory[1]?.phase).toBe('started');
+    expect(finalHistory[2]?.phase).toBe('checkpointed');
+    expect(finalHistory[3]?.phase).toBe('completed');
+  });
+
+  it('rejects corrupt tracker migration input with E_TRACKER_CORRUPT', async () => {
+    const root = projectStateRoot(workspace());
+    const tracker = new LifecycleTracker(root, now);
+    const legacyFile = path.join(root.path, 'tracker', 'run-corrupt.jsonl');
+    fs.mkdirSync(path.dirname(legacyFile), { recursive: true });
+
+    const ev1 = { schema_version: 1, subject_id: 'run-corrupt', sequence: 1, phase: 'created', detail: {}, at: '2026-07-23T02:00:00.000Z' };
+    // Line 2 has invalid json
+    fs.writeFileSync(legacyFile, `${JSON.stringify(ev1)}\n{invalid-json\n`);
+
+    expect(() => tracker.history('run-corrupt')).toThrow('E_TRACKER_CORRUPT');
+    await expect(tracker.record('run-corrupt', 'started')).rejects.toThrow('E_TRACKER_CORRUPT');
+  });
+
   it('offers only fixed MCP read/proposal tools and structurally refuses authority and shell fields', async () => {
     const root = projectStateRoot(workspace()); const memory = new ProjectMemoryStore(root, now);
     await memory.put('known fact', {}, 'fact');

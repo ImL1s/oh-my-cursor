@@ -27,33 +27,87 @@ export class LifecycleTracker {
     });
   }
 
-  private migrateLegacy(id: string, journal: Journal<LifecycleEvent>): void {
+  private readLegacyEvents(file: string): LifecycleEvent[] {
+    if (!fs.existsSync(file)) return [];
+    try {
+      if (!fs.statSync(file).isFile()) return [];
+    } catch {
+      return [];
+    }
+    const content = fs.readFileSync(file, 'utf8').trim();
+    if (!content) return [];
+    const lines = content.split(/\r?\n/).filter(Boolean);
+    return lines.map((line) => {
+      let parsed: LifecycleEvent;
+      try {
+        parsed = JSON.parse(line) as LifecycleEvent;
+      } catch (error) {
+        throw new Error('E_TRACKER_CORRUPT', { cause: error });
+      }
+      if (
+        !parsed ||
+        typeof parsed !== 'object' ||
+        typeof parsed.phase !== 'string' ||
+        !(parsed.phase in transitions) ||
+        typeof parsed.sequence !== 'number'
+      ) {
+        throw new Error('E_TRACKER_CORRUPT');
+      }
+      return parsed;
+    });
+  }
+
+  private async migrateLegacy(id: string, journal: Journal<LifecycleEvent>): Promise<void> {
     const file = this.file(id);
     if (!fs.existsSync(file)) return;
+    try {
+      if (!fs.statSync(file).isFile()) return;
+    } catch {
+      return;
+    }
+    const events = this.readLegacyEvents(file);
+    if (events.length === 0) return;
+
     const head = journal.readHead();
-    if (head !== null && head.head_sequence > 0) return;
-    journal.init();
-    const lines = fs.readFileSync(file, 'utf8').trim().split(/\r?\n/).filter(Boolean);
-    for (const line of lines) {
-      try {
-        const parsed = JSON.parse(line) as LifecycleEvent;
-        journal.append({ kind: parsed.phase, payload: parsed, at: parsed.at });
-      } catch {
-        // ignore
+    const startIndex = head !== null ? head.head_sequence : 0;
+    if (startIndex < events.length) {
+      if (head === null) {
+        journal.init();
+      }
+      for (let i = startIndex; i < events.length; i++) {
+        const event = events[i]!;
+        try {
+          await journal.append({ kind: event.phase, payload: event, at: event.at });
+        } catch (error) {
+          throw new Error('E_TRACKER_CORRUPT', { cause: error });
+        }
       }
     }
   }
 
   history(id: string): LifecycleEvent[] {
     const journal = this.journal(id);
-    this.migrateLegacy(id, journal);
     const head = journal.readHead();
-    if (head !== null && head.head_sequence > 0) {
+    const file = this.file(id);
+    let legacyEvents: LifecycleEvent[] = [];
+    if (fs.existsSync(file)) {
+      try {
+        if (fs.statSync(file).isFile()) {
+          legacyEvents = this.readLegacyEvents(file);
+        }
+      } catch (error) {
+        throw error;
+      }
+    }
+    const shouldLoadJournal =
+      head !== null &&
+      head.head_sequence > 0 &&
+      (legacyEvents.length === 0 || head.head_sequence >= legacyEvents.length);
+
+    if (shouldLoadJournal) {
       return journal.readRange().map((r) => r.payload);
     }
-    const file = this.file(id);
-    if (!fs.existsSync(file)) return [];
-    return fs.readFileSync(file, 'utf8').trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as LifecycleEvent);
+    return legacyEvents;
   }
 
   async record(id: string, phase: LifecyclePhase, detail: unknown = {}): Promise<LifecycleEvent> {
@@ -61,7 +115,7 @@ export class LifecycleTracker {
     const file = this.file(id);
     const journal = this.journal(id);
     return withDirectoryLock(file, async () => {
-      this.migrateLegacy(id, journal);
+      await this.migrateLegacy(id, journal);
       const last = journal.tail(1)[0];
       const previous = last ? last.payload.phase : undefined;
       if ((previous === undefined && phase !== 'created') || (previous !== undefined && !transitions[previous].includes(phase))) {
