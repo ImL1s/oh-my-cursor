@@ -1271,8 +1271,22 @@ export class Journal<T = unknown> {
         expectedSeq = validRecord.sequence + 1;
         expectedPreviousDigest = validRecord.digest;
 
-        if (validRecord.sequence >= fromSequence && validRecord.sequence <= toSequence) {
-          matchedRecords.push(validRecord);
+        if (direction === 'desc') {
+          const effectiveFrom = Math.max(fromSequence, toSequence - limit + 1);
+          if (validRecord.sequence >= effectiveFrom && validRecord.sequence <= toSequence) {
+            if (matchedRecords.length < limit) {
+              matchedRecords.push(validRecord);
+            } else {
+              matchedRecords.shift();
+              matchedRecords.push(validRecord);
+            }
+          }
+        } else {
+          if (validRecord.sequence >= fromSequence && validRecord.sequence <= toSequence) {
+            if (matchedRecords.length < limit) {
+              matchedRecords.push(validRecord);
+            }
+          }
         }
       }
     }

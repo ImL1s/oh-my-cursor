@@ -427,6 +427,21 @@ describe('Journal primitive', () => {
     const subRange = journal.readRange({ fromSequence: 3, toSequence: 10, limit: 3, direction: 'desc' });
     expect(subRange).toHaveLength(3);
     expect(subRange.map((r) => r.payload.seq)).toEqual([10, 9, 8]);
+
+    // Bounded limit: 1 in both directions
+    const ascFirst1 = journal.readRange({ limit: 1, direction: 'asc' });
+    expect(ascFirst1).toHaveLength(1);
+    expect(ascFirst1[0]?.payload.seq).toBe(1);
+
+    const descLast1 = journal.readRange({ limit: 1, direction: 'desc' });
+    expect(descLast1).toHaveLength(1);
+    expect(descLast1[0]?.payload.seq).toBe(12);
+
+    const midAsc2 = journal.readRange({ fromSequence: 2, toSequence: 11, limit: 2, direction: 'asc' });
+    expect(midAsc2.map((r) => r.payload.seq)).toEqual([2, 3]);
+
+    const midDesc2 = journal.readRange({ fromSequence: 2, toSequence: 11, limit: 2, direction: 'desc' });
+    expect(midDesc2.map((r) => r.payload.seq)).toEqual([11, 10]);
   }, 20_000);
 
   it('rotates segment when maxSegmentRecords is reached', async () => {
