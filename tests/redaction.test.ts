@@ -33,9 +33,9 @@ describe('bounded redaction', () => {
     expect(redacted[5]).toMatch(/<prompt: 100B sha256:[a-f0-9]+ "a+...">/);
   });
 
-  it('formats command line with redacted parameters and control character escaping', () => {
-    const formatted = formatRedactedCommandLine('cursor-agent', ['--token', 'secret', 'fix bug']);
-    expect(formatted).toBe('cursor-agent --token <redacted> \'fix bug\'');
+  it('formats command line with robust shell-quoting and control character escaping', () => {
+    const formatted = formatRedactedCommandLine('cursor agent', ['--token', 'secret', "don't fix", 'a;rm -rf /']);
+    expect(formatted).toBe("'cursor agent' --token '<redacted>' 'don'\\''t fix' 'a;rm -rf /'");
   });
 });
 

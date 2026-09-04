@@ -143,7 +143,16 @@ export const defaultCursorRunner: CursorRunner = (executable, invocation, option
     const SIGNALS: readonly NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
     for (const sig of SIGNALS) {
       const listener = () => {
+        cleanupSignals();
         terminate(new Error(`E_PARENT_SIGNAL: parent received ${sig}`));
+        void (async () => {
+          if (groupTermination !== null) {
+            try { await groupTermination; } catch { /* ignore */ }
+          }
+          try {
+            process.kill(process.pid, sig);
+          } catch { /* ignore */ }
+        })();
       };
       signalMap.set(sig, listener);
       process.on(sig, listener);

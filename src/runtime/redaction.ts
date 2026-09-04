@@ -84,8 +84,15 @@ export function redactArgv(argv: readonly string[]): string[] {
   return result;
 }
 
-export function formatRedactedCommandLine(executable: string, argv: readonly string[]): string {
-  const redactedArgs = redactArgv(argv);
-  return `${escapeControlCharacters(executable)} ${redactedArgs.map((arg) => (arg.includes(' ') && !arg.startsWith('<') ? `'${arg}'` : arg)).join(' ')}`;
+export function shellQuote(value: string): string {
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
+
+export function formatRedactedCommandLine(executable: string, argv: readonly string[]): string {
+  const quotedExecutable = shellQuote(escapeControlCharacters(executable));
+  const redactedArgs = redactArgv(argv);
+  return `${quotedExecutable} ${redactedArgs.map(shellQuote).join(' ')}`;
+}
+
 
