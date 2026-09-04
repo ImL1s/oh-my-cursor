@@ -22,6 +22,20 @@ async function expectProcessGone(pid: number, timeoutMs = 2_000): Promise<void> 
   }
 }
 
+async function readPidFile(pidFile: string, timeoutMs = 2_000): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(pidFile)) {
+      const raw = fs.readFileSync(pidFile, 'utf8').trim();
+      const pid = Number.parseInt(raw, 10);
+      if (Number.isSafeInteger(pid)) return pid;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  const raw = fs.existsSync(pidFile) ? fs.readFileSync(pidFile, 'utf8').trim() : '<missing>';
+  throw new Error(`pid file ${pidFile} not ready, got: ${raw}`);
+}
+
 const descendantScript = `
   const fs = require('node:fs');
   const { spawn } = require('node:child_process');
@@ -99,11 +113,36 @@ describe('Cursor host adapter', () => {
       }, { ...options, env: { ...process.env, DESCENDANT_PID_FILE: pidFile } })).rejects.toThrow(
         failure === 'timeout' ? 'E_CURSOR_TIMEOUT' : 'E_OUTPUT_TOO_LARGE',
       );
-      const descendantPid = Number.parseInt(fs.readFileSync(pidFile, 'utf8'), 10);
+      const descendantPid = await readPidFile(pidFile);
       expect(Number.isSafeInteger(descendantPid)).toBe(true);
       await expectProcessGone(descendantPid);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it('rejects ambiguous leading-dash prompts and NUL characters', () => {
+    expect(() => buildPrintArgv('--help')).toThrow('E_PROMPT_UNSAFE');
+    expect(() => buildPrintArgv('-m plan')).toThrow('E_PROMPT_UNSAFE');
+    expect(() => buildPrintArgv('  -flag')).toThrow('E_PROMPT_UNSAFE');
+    expect(() => buildPrintArgv('hello\0world')).toThrow('E_PROMPT_INVALID');
+  });
+
+  it('installs and cleans up signal listeners deterministically', async () => {
+    if (process.platform === 'win32') return;
+    const initialSigintCount = process.listenerCount('SIGINT');
+    const initialSigtermCount = process.listenerCount('SIGTERM');
+    const initialSighupCount = process.listenerCount('SIGHUP');
+
+    await expect(defaultCursorRunner(process.execPath, {
+      argv: ['-e', 'process.exit(0)'],
+      cwd: process.cwd(),
+      interactive: false,
+    })).resolves.toMatchObject({ code: 0 });
+
+    expect(process.listenerCount('SIGINT')).toBe(initialSigintCount);
+    expect(process.listenerCount('SIGTERM')).toBe(initialSigtermCount);
+    expect(process.listenerCount('SIGHUP')).toBe(initialSighupCount);
+  });
 });
+

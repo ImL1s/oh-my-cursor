@@ -23,7 +23,7 @@ export {
   processAlive,
 } from './runtime/process-identity.js';
 export type { ProcessIdentity, ProcessLiveness } from './runtime/process-identity.js';
-export { redact, redactText } from './runtime/redaction.js';
+export { escapeControlCharacters, formatRedactedCommandLine, redact, redactArgv, redactText } from './runtime/redaction.js';
 export type { RedactionLimits } from './runtime/redaction.js';
 export type { LeaseV1, MutationProof, RunEventV1, RunStateV1, RunStatus, VerificationRecord } from './state/types.js';
 export * as setup from './setup/index.js';
