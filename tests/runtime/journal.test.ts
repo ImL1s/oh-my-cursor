@@ -1485,6 +1485,37 @@ describe('Journal primitive', () => {
     expect(fs.existsSync(postTruncateIntentPath)).toBe(false); // intent consumed!
     expect(fs.existsSync(finalReceiptPath)).toBe(true); // final receipt published!
   });
+
+  it('rejects append when active_segment_records is corrupted, and recomputes rotation when omitted', async () => {
+    const streamDir = path.join(tempDir, 'active-records-check-stream');
+    const journal = new Journal<{ msg: string }>(streamDir, 'active-records-stream', {
+      maxSegmentRecords: 2,
+    });
+    await journal.append({ kind: 'msg', payload: { msg: 'first' } });
+    await journal.append({ kind: 'msg', payload: { msg: 'second' } });
+
+    const headPath = path.join(streamDir, 'head.json');
+    const originalHead = JSON.parse(fs.readFileSync(headPath, 'utf8'));
+    expect(originalHead.active_segment_records).toBe(2);
+
+    // Case 1: Corrupt active_segment_records to 0 (counter tampered/stale)
+    // append must reject with E_JOURNAL_CORRUPT rather than committing a 3rd record to a 2-record segment
+    fs.writeFileSync(headPath, JSON.stringify({ ...originalHead, active_segment_records: 0 }));
+    await expect(journal.append({ kind: 'msg', payload: { msg: 'third' } })).rejects.toThrow('E_JOURNAL_CORRUPT');
+
+    // Case 2: Omitted active_segment_records (e.g. from an older schema)
+    // append must recompute actual records (2), rotate because maxSegmentRecords=2, and succeed
+    const { active_segment_records: _, ...headWithoutCounter } = originalHead;
+    fs.writeFileSync(headPath, JSON.stringify(headWithoutCounter));
+
+    const rec3 = await journal.append({ kind: 'msg', payload: { msg: 'third' } });
+    expect(rec3.sequence).toBe(3);
+
+    const newHead = journal.readHead();
+    expect(newHead?.active_segment).toBe('00000002.jsonl');
+    expect(newHead?.active_segment_records).toBe(1);
+    expect(journal.verify().ok).toBe(true);
+  });
 });
 
 

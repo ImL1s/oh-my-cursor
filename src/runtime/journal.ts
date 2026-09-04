@@ -385,6 +385,25 @@ function* scanSegmentLines(
   }
 }
 
+function countSegmentRecords(
+  segPath: string,
+  maxRecordBytes: number,
+  maxSegmentBytes: number,
+): number {
+  let count = 0;
+  for (const line of scanSegmentLines(segPath, Math.max(maxRecordBytes, maxSegmentBytes))) {
+    if (!line.hasNewline || line.tooLarge) {
+      throw new Error('E_JOURNAL_CORRUPT');
+    }
+    const lineStr = line.lineBytes.toString('utf8');
+    if (lineStr.trim() === '') {
+      throw new Error('E_JOURNAL_CORRUPT');
+    }
+    count++;
+  }
+  return count;
+}
+
 export interface JournalLimits {
   readonly maxRecordBytes: number;
   readonly maxSegmentBytes: number;
@@ -871,9 +890,26 @@ export class Journal<T = unknown> {
           throw new Error('E_JOURNAL_CORRUPT');
         }
         currentSegmentBytes = segStat.size;
-        currentSegmentRecords = typeof head.active_segment_records === 'number'
-          ? head.active_segment_records
-          : fs.readFileSync(activeSegmentPath, 'utf8').trim().split(/\r?\n/).filter(Boolean).length;
+        const actualSegmentRecords = segStat.size === 0
+          ? 0
+          : countSegmentRecords(activeSegmentPath, limits.maxRecordBytes, limits.maxSegmentBytes);
+
+        if (head.active_segment_records !== undefined) {
+          if (
+            typeof head.active_segment_records !== 'number' ||
+            head.active_segment_records !== actualSegmentRecords
+          ) {
+            throw new Error('E_JOURNAL_CORRUPT');
+          }
+        }
+        if (actualSegmentRecords > limits.maxSegmentRecords) {
+          throw new Error('E_JOURNAL_CORRUPT');
+        }
+        currentSegmentRecords = actualSegmentRecords;
+      } else {
+        if (head.active_segment_records !== undefined && head.active_segment_records !== 0) {
+          throw new Error('E_JOURNAL_CORRUPT');
+        }
       }
       let activeSegmentIndex = parseSegmentIndex(activeSegment) ?? 1;
 
