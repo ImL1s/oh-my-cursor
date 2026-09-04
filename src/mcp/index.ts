@@ -552,33 +552,68 @@ export async function writeWithBackpressure(output: Writable, data: string): Pro
   if (!isWritableOpen(output)) {
     return false;
   }
-  const canWrite = output.write(data);
-  if (canWrite) {
-    return true;
-  }
+
   return new Promise<boolean>((resolve, reject) => {
-    const onDrain = () => {
-      cleanup();
-      resolve(true);
-    };
-    const onClose = () => {
-      cleanup();
-      resolve(false);
-    };
-    const onError = (err: unknown) => {
-      cleanup();
-      reject(err);
-    };
+    let settled = false;
+    let writeFinished = false;
+    let drainFinished = false;
+    let needsDrain = false;
+
     const cleanup = () => {
       output.removeListener('drain', onDrain);
       output.removeListener('close', onClose);
       output.removeListener('finish', onClose);
       output.removeListener('error', onError);
     };
-    output.once('drain', onDrain);
+
+    const done = (success: boolean) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(success);
+    };
+
+    const fail = (err: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(err);
+    };
+
+    const onDrain = () => {
+      drainFinished = true;
+      if (writeFinished) {
+        done(true);
+      }
+    };
+
+    const onClose = () => {
+      done(false);
+    };
+
+    const onError = (err: unknown) => {
+      fail(err);
+    };
+
+    output.once('error', onError);
     output.once('close', onClose);
     output.once('finish', onClose);
-    output.once('error', onError);
+
+    const canWrite = output.write(data, 'utf8', (err) => {
+      if (err) {
+        fail(err);
+        return;
+      }
+      writeFinished = true;
+      if (!needsDrain || drainFinished) {
+        done(true);
+      }
+    });
+
+    if (!canWrite) {
+      needsDrain = true;
+      output.once('drain', onDrain);
+    }
   });
 }
 
@@ -589,54 +624,66 @@ export async function serveMcpStdio(
   options: McpHandlerOptions = {},
 ): Promise<void> {
   const handle = createMcpRequestHandler(root, options);
+  let streamError: unknown = null;
+  const onOutputError = (err: unknown) => {
+    streamError = err;
+  };
+  output.on('error', onOutputError);
 
-  for await (const item of readBoundedLines(input, MAX_MCP_LINE_BYTES)) {
-    if (item.error === 'E_MCP_LINE_TOO_LARGE') {
-      const errResponse: JsonRpcResponse = {
-        jsonrpc: '2.0',
-        id: null,
-        error: { code: JSONRPC_ERRORS.INVALID_REQUEST, message: 'E_MCP_LINE_TOO_LARGE' },
-      };
-      if (!(await writeWithBackpressure(output, `${JSON.stringify(errResponse)}\n`))) {
-        break;
+  try {
+    for await (const item of readBoundedLines(input, MAX_MCP_LINE_BYTES)) {
+      if (streamError) {
+        throw streamError;
       }
-      continue;
-    }
-    const line = item.line ?? '';
-    if (line.trim() === '') {
-      continue;
-    }
-    if (line.includes('\0')) {
-      const errResponse: JsonRpcResponse = {
-        jsonrpc: '2.0',
-        id: null,
-        error: { code: JSONRPC_ERRORS.INVALID_REQUEST, message: 'E_MCP_INVALID_REQUEST' },
-      };
-      if (!(await writeWithBackpressure(output, `${JSON.stringify(errResponse)}\n`))) {
-        break;
+      if (item.error === 'E_MCP_LINE_TOO_LARGE') {
+        const errResponse: JsonRpcResponse = {
+          jsonrpc: '2.0',
+          id: null,
+          error: { code: JSONRPC_ERRORS.INVALID_REQUEST, message: 'E_MCP_LINE_TOO_LARGE' },
+        };
+        if (!(await writeWithBackpressure(output, `${JSON.stringify(errResponse)}\n`))) {
+          break;
+        }
+        continue;
       }
-      continue;
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      const errResponse: JsonRpcResponse = {
-        jsonrpc: '2.0',
-        id: null,
-        error: { code: JSONRPC_ERRORS.PARSE_ERROR, message: 'E_MCP_PARSE_ERROR' },
-      };
-      if (!(await writeWithBackpressure(output, `${JSON.stringify(errResponse)}\n`))) {
-        break;
+      const line = item.line ?? '';
+      if (line.trim() === '') {
+        continue;
       }
-      continue;
-    }
-    const response = await handle(parsed);
-    if (response !== undefined && response !== null) {
-      if (!(await writeWithBackpressure(output, `${JSON.stringify(response)}\n`))) {
-        break;
+      if (line.includes('\0')) {
+        const errResponse: JsonRpcResponse = {
+          jsonrpc: '2.0',
+          id: null,
+          error: { code: JSONRPC_ERRORS.INVALID_REQUEST, message: 'E_MCP_INVALID_REQUEST' },
+        };
+        if (!(await writeWithBackpressure(output, `${JSON.stringify(errResponse)}\n`))) {
+          break;
+        }
+        continue;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        const errResponse: JsonRpcResponse = {
+          jsonrpc: '2.0',
+          id: null,
+          error: { code: JSONRPC_ERRORS.PARSE_ERROR, message: 'E_MCP_PARSE_ERROR' },
+        };
+        if (!(await writeWithBackpressure(output, `${JSON.stringify(errResponse)}\n`))) {
+          break;
+        }
+        continue;
+      }
+      const response = await handle(parsed);
+      if (response !== undefined && response !== null) {
+        if (!(await writeWithBackpressure(output, `${JSON.stringify(response)}\n`))) {
+          break;
+        }
       }
     }
+  } finally {
+    output.removeListener('error', onOutputError);
   }
 }
 

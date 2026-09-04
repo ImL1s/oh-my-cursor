@@ -582,5 +582,26 @@ describe('serveMcpStdio framing and transport', () => {
 
     await expect(serverPromise).rejects.toThrow('E_PIPE_BROKEN');
   });
+
+  it('rejects when output stream emits async error below the high-water mark', async () => {
+    const root = projectStateRoot(workspace());
+    const input = new PassThrough();
+
+    const erroringOutput = new Writable({
+      highWaterMark: 1024 * 1024,
+      write(_chunk, _encoding, callback) {
+        setTimeout(() => {
+          callback(new Error('EPIPE'));
+        }, 10);
+      },
+    });
+
+    const serverPromise = serveMcpStdio(root, input, erroringOutput);
+
+    input.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }) + '\n');
+
+    await expect(serverPromise).rejects.toThrow('EPIPE');
+  });
 });
+
 
