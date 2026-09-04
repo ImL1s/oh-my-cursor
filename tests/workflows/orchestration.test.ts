@@ -57,7 +57,7 @@ describe('workflow orchestration', () => {
     const result = await new WorkflowRunner(adapter, '/repo', () => new Date('2026-07-23T00:00:00.000Z')).run(registered, plan);
     expect(result.status.status).toBe('complete');
     expect(result.status.verified).toBe(false);
-    expect(Object.values(result.status.receipts)).toHaveLength(2);
+    expect(Object.values(Object.fromEntries(Object.entries(result.status.tasks).map(([k, v]) => [k, v.attempts[v.attempts.length - 1]])))).toHaveLength(2);
     expect(calls[0]).toContain('plan');
     expect(calls[1]).toContain('ask');
     expect(result.events.map((event) => event.sequence)).toEqual([1, 2, 3, 4, 5, 6]);
@@ -70,7 +70,7 @@ describe('workflow orchestration', () => {
     const result = await new WorkflowRunner(adapter, '/repo').run(unsupported, planWorkflow(unsupported, 'run-2', 'native team'));
     expect(result.status.status).toBe('unsupported');
     expect(invoked).toBe(false);
-    expect(Object.values(result.status.receipts)[0]?.unsupported_reason).toContain('no native team');
+    expect(Object.values(Object.fromEntries(Object.entries(result.status.tasks).map(([k, v]) => [k, v.attempts[v.attempts.length - 1]])))[0]?.unsupported_reason).toContain('no native team');
   });
 
   it('atomically rejects duplicate and concurrent run creation', async () => {
@@ -173,7 +173,7 @@ describe('workflow orchestration', () => {
     }));
     const registered = new WorkflowRegistry().register({ ...definition(), stages: [definition().stages[0]!] });
     const result = await new WorkflowRunner(adapter, '/repo').run(registered, planWorkflow(registered, 'redact-run', 'redact'));
-    const receipt = Object.values(result.status.receipts)[0]!;
+    const receipt = Object.values(Object.fromEntries(Object.entries(result.status.tasks).map(([k, v]) => [k, v.attempts[v.attempts.length - 1]])))[0]!;
     expect(receipt.output).toEqual({ token: '<redacted>', value: 'visible' });
     expect(receipt.stdout_sha256).toBe(sha256(rawStdout));
     expect(receipt.stderr_sha256).toBe(sha256(rawStderr));
