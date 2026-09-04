@@ -353,5 +353,28 @@ describe('workflow orchestration', () => {
     expect(hydrated.events).toHaveLength(1);
     expect((hydrated.events[0]?.payload as any).stdout).toBe(largeStdout);
   });
+
+  it('rejects missing workflow journal head when journal artifacts exist with E_WORKFLOW_RUN_CORRUPT', async () => {
+    const persistence = store();
+    const plan = planWorkflow(new WorkflowRegistry().register(definition()), 'corrupt-head-run', 'corrupt-head');
+    const record = await persistence.create(plan);
+
+    const ev1 = appendWorkflowEvent([], plan.run_id, 'run_started', { started_at: '2026-07-23T00:00:00.000Z' });
+    await persistence.append(plan.run_id, record.revision, ev1);
+
+    // Verify normal read succeeds
+    const initialRead = persistence.read(plan.run_id);
+    expect(initialRead.events).toHaveLength(1);
+
+    // Delete head.json from events_journal
+    const journalDir = path.join(roots[roots.length - 1]!, '.omcu', 'workflows', 'runs', plan.run_id, 'events_journal');
+    const headFile = path.join(journalDir, 'head.json');
+    expect(fs.existsSync(headFile)).toBe(true);
+    fs.unlinkSync(headFile);
+    expect(fs.existsSync(headFile)).toBe(false);
+
+    // Reading must fail with E_WORKFLOW_RUN_CORRUPT rather than treating it as an empty valid run
+    expect(() => persistence.read(plan.run_id)).toThrow('E_WORKFLOW_RUN_CORRUPT');
+  });
 });
 

@@ -314,5 +314,55 @@ describe('Cursor setup doctor', () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it('bounds metadata read in doctor and reports journal_corrupt without memory exhaustion when meta.json is oversized', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-doctor-oversized-'));
+    try {
+      fs.mkdirSync(path.join(root, '.cursor-plugin'), { recursive: true });
+      fs.writeFileSync(path.join(root, '.cursor-plugin', 'plugin.json'), JSON.stringify({
+        name: 'oh-my-cursor', version: '1.0.0',
+      }));
+      const journalDir = path.join(root, '.omcu', 'runs', 'r-oversized', 'journal');
+      fs.mkdirSync(path.join(journalDir, 'segments'), { recursive: true });
+      const baseMeta = JSON.stringify({
+        schema_version: 1,
+        stream_id: 'runs/r-oversized',
+        created_at: new Date().toISOString(),
+        max_record_bytes: 65536,
+        max_segment_bytes: 2097152,
+        max_segment_records: 5000,
+        max_stream_records: 100000,
+      });
+      const oversizedMeta = baseMeta.slice(0, -1) + ', "padding": "' + 'x'.repeat(70 * 1024) + '"}';
+      fs.writeFileSync(path.join(journalDir, 'meta.json'), oversizedMeta);
+      fs.writeFileSync(path.join(journalDir, 'head.json'), JSON.stringify({
+        schema_version: 1,
+        stream_id: 'runs/r-oversized',
+        head_sequence: 0,
+        head_digest: null,
+        active_segment: '00000001.jsonl',
+        total_records: 0,
+        total_bytes: 0,
+        updated_at: new Date().toISOString(),
+      }));
+      fs.writeFileSync(path.join(journalDir, 'segments', '00000001.jsonl'), '');
+
+      const runner: CommandRunner = {
+        async run(_command, args) {
+          if (args[0] === '--version') return { code: 0, stdout: '2026.07.20\n', stderr: '' };
+          if (args[0] === 'status') return { code: 0, stdout: 'authenticated\n', stderr: '' };
+          return { code: 0, stdout: '--version --help status --plugin-dir', stderr: '' };
+        },
+      };
+
+      const report = await runSetupDoctor({ packageRoot: root, projectRoot: root, runner });
+      expect(report.ok).toBe(false);
+      const corruptCheck = report.checks.find((c) => c.id === 'journal_corrupt');
+      expect(corruptCheck?.status).toBe('fail');
+      expect(corruptCheck?.message).toContain('is corrupt');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 

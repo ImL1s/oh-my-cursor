@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Journal } from '../runtime/journal.js';
+import { Journal, DEFAULT_MAX_METADATA_BYTES } from '../runtime/journal.js';
 import { defaultCommandRunner } from './runner.js';
 import type { CommandRunner, SetupCheck } from './types.js';
 
@@ -114,7 +114,10 @@ async function inspectProjectJournals(projectRoot: string, repair = false): Prom
   function search(dir: string, depth = 0): void {
     if (depth > 6 || !fs.existsSync(dir)) return;
     try {
-      if (fs.existsSync(path.join(dir, 'meta.json')) && fs.existsSync(path.join(dir, 'head.json'))) {
+      if (
+        (fs.existsSync(path.join(dir, 'meta.json')) && fs.existsSync(path.join(dir, 'head.json'))) ||
+        (fs.existsSync(path.join(dir, 'segments')) && (fs.existsSync(path.join(dir, 'meta.json')) || fs.existsSync(path.join(dir, 'head.json'))))
+      ) {
         journalDirs.push(dir);
         return;
       }
@@ -141,7 +144,7 @@ async function inspectProjectJournals(projectRoot: string, repair = false): Prom
       try {
         const metaPath = path.join(dir, 'meta.json');
         const metaStat = fs.lstatSync(metaPath);
-        if (!metaStat.isSymbolicLink() && metaStat.isFile()) {
+        if (!metaStat.isSymbolicLink() && metaStat.isFile() && metaStat.size <= DEFAULT_MAX_METADATA_BYTES) {
           const raw = fs.readFileSync(metaPath, 'utf8');
           const parsed = JSON.parse(raw) as { stream_id?: string };
           if (typeof parsed.stream_id === 'string') streamId = parsed.stream_id;

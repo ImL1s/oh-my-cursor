@@ -209,6 +209,32 @@ export class WorkflowPersistenceStore {
     return withinStateRoot(this.root, 'workflows', 'runs', safe(runId, 'run_id'), 'events_journal');
   }
 
+  private hasJournalArtifacts(runId: string): boolean {
+    const dir = this.journalDir(runId);
+    if (!fs.existsSync(dir)) return false;
+    try {
+      const stat = fs.lstatSync(dir);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) return true;
+      if (fs.existsSync(path.join(dir, 'meta.json'))) return true;
+      if (fs.existsSync(path.join(dir, 'head.json'))) return true;
+      const segDir = path.join(dir, 'segments');
+      if (fs.existsSync(segDir)) {
+        const segStat = fs.lstatSync(segDir);
+        if (segStat.isSymbolicLink() || !segStat.isDirectory()) return true;
+        if (fs.readdirSync(segDir).length > 0) return true;
+      }
+      const recDir = path.join(dir, 'receipts');
+      if (fs.existsSync(recDir)) {
+        const recStat = fs.lstatSync(recDir);
+        if (recStat.isSymbolicLink() || !recStat.isDirectory()) return true;
+        if (fs.readdirSync(recDir).length > 0) return true;
+      }
+    } catch {
+      return true;
+    }
+    return false;
+  }
+
   private eventJournal(runId: string): Journal<WorkflowJournalEntry> {
     return new Journal<WorkflowJournalEntry>(this.journalDir(runId), `workflows/${safe(runId, 'run_id')}`, {
       now: this.now,
@@ -240,6 +266,10 @@ export class WorkflowPersistenceStore {
       const journal = this.eventJournal(runId);
       let record = normalizeRecord(readJson<unknown>(file), runId);
       const journalHead = journal.readHead();
+
+      if (journalHead === null && this.hasJournalArtifacts(runId)) {
+        throw new Error('E_WORKFLOW_RUN_CORRUPT');
+      }
 
       const shouldLoadJournal =
         journalHead !== null &&
