@@ -137,8 +137,16 @@ async function inspectProjectJournals(projectRoot: string, repair = false): Prom
 
   for (const dir of journalDirs) {
     try {
-      const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')) as { stream_id?: string };
-      const streamId = meta.stream_id ?? path.basename(dir);
+      let streamId = path.basename(dir);
+      try {
+        const metaPath = path.join(dir, 'meta.json');
+        const metaStat = fs.lstatSync(metaPath);
+        if (!metaStat.isSymbolicLink() && metaStat.isFile()) {
+          const raw = fs.readFileSync(metaPath, 'utf8');
+          const parsed = JSON.parse(raw) as { stream_id?: string };
+          if (typeof parsed.stream_id === 'string') streamId = parsed.stream_id;
+        }
+      } catch {}
       const journal = new Journal(dir, streamId);
       const verify = journal.verify();
 
@@ -147,12 +155,23 @@ async function inspectProjectJournals(projectRoot: string, repair = false): Prom
       } else if (verify.status === 'incomplete_tail') {
         if (repair) {
           const receipt = await journal.repairIncompleteTail();
-          checks.push({
-            id: 'journal_repaired',
-            status: 'pass',
-            message: `Repaired incomplete tail for journal stream ${streamId}`,
-            detail: { stream_id: streamId, receipt },
-          });
+          const reverify = journal.verify();
+          if (reverify.ok) {
+            validCount++;
+            checks.push({
+              id: 'journal_repaired',
+              status: 'pass',
+              message: `Repaired incomplete tail for journal stream ${streamId}`,
+              detail: { stream_id: streamId, receipt },
+            });
+          } else {
+            checks.push({
+              id: 'journal_corrupt',
+              status: 'fail',
+              message: `Journal for stream ${streamId} remains corrupt after repairing incomplete tail (${reverify.error?.code ?? 'unknown'})`,
+              detail: { stream_id: streamId, receipt, error: reverify.error },
+            });
+          }
         } else {
           checks.push({
             id: 'journal_tail',

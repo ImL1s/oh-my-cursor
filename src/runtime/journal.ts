@@ -389,11 +389,79 @@ export class Journal<T = unknown> {
     return path.join(this.streamDir, 'quarantine');
   }
 
-  readMeta(): JournalMeta | null {
-    const file = this.metaPath();
-    if (!fs.existsSync(file)) return null;
+  private readMetadataFile<T>(filePath: string): T | null {
+    let parentStat: fs.Stats;
     try {
-      const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<JournalMeta>;
+      parentStat = fs.lstatSync(this.streamDir);
+      if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) {
+        throw new Error('E_JOURNAL_CORRUPT');
+      }
+      if (typeof process.getuid === 'function' && parentStat.uid !== process.getuid()) {
+        throw new Error('E_JOURNAL_CORRUPT');
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return null;
+      }
+      if ((error as Error).message === 'E_JOURNAL_CORRUPT') throw error;
+      throw new Error('E_JOURNAL_CORRUPT', { cause: error });
+    }
+
+    let fileStat: fs.Stats;
+    try {
+      fileStat = fs.lstatSync(filePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return null;
+      }
+      throw new Error('E_JOURNAL_CORRUPT', { cause: error });
+    }
+
+    if (fileStat.isSymbolicLink() || !fileStat.isFile()) {
+      throw new Error('E_JOURNAL_CORRUPT');
+    }
+
+    if (typeof process.getuid === 'function' && fileStat.uid !== process.getuid()) {
+      throw new Error('E_JOURNAL_CORRUPT');
+    }
+
+    let fd: number;
+    try {
+      fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+    } catch (error) {
+      throw new Error('E_JOURNAL_CORRUPT', { cause: error });
+    }
+
+    try {
+      const fstat = fs.fstatSync(fd);
+      if (!fstat.isFile() || fstat.dev !== fileStat.dev || fstat.ino !== fileStat.ino) {
+        throw new Error('E_JOURNAL_CORRUPT');
+      }
+      if (typeof process.getuid === 'function' && fstat.uid !== process.getuid()) {
+        throw new Error('E_JOURNAL_CORRUPT');
+      }
+      const parentStatAfter = fs.lstatSync(this.streamDir);
+      if (parentStatAfter.dev !== parentStat.dev || parentStatAfter.ino !== parentStat.ino) {
+        throw new Error('E_JOURNAL_CORRUPT');
+      }
+      const raw = fs.readFileSync(fd, 'utf8');
+      return JSON.parse(raw) as T;
+    } catch (error) {
+      if ((error as Error).message === 'E_JOURNAL_CORRUPT') throw error;
+      throw new Error('E_JOURNAL_CORRUPT', { cause: error });
+    } finally {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  readMeta(): JournalMeta | null {
+    try {
+      const parsed = this.readMetadataFile<Partial<JournalMeta>>(this.metaPath());
+      if (parsed === null) return null;
       if (
         parsed.schema_version !== 1 ||
         parsed.stream_id !== this.streamId ||
@@ -418,10 +486,9 @@ export class Journal<T = unknown> {
   }
 
   readHead(): JournalHead | null {
-    const file = this.headPath();
-    if (!fs.existsSync(file)) return null;
     try {
-      const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<JournalHead>;
+      const parsed = this.readMetadataFile<Partial<JournalHead>>(this.headPath());
+      if (parsed === null) return null;
       if (
         parsed.schema_version !== 1 ||
         parsed.stream_id !== this.streamId ||
@@ -447,9 +514,14 @@ export class Journal<T = unknown> {
   }
 
   private hasArtifacts(): boolean {
-    if (fs.existsSync(this.metaPath()) || fs.existsSync(this.headPath())) {
-      return true;
-    }
+    try {
+      const statMeta = fs.lstatSync(this.metaPath());
+      if (statMeta.isSymbolicLink() || statMeta.isFile()) return true;
+    } catch {}
+    try {
+      const statHead = fs.lstatSync(this.headPath());
+      if (statHead.isSymbolicLink() || statHead.isFile()) return true;
+    } catch {}
     const segmentsDir = this.segmentsDir();
     if (fs.existsSync(segmentsDir)) {
       const stat = fs.lstatSync(segmentsDir);

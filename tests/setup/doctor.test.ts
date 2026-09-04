@@ -168,6 +168,62 @@ describe('Cursor setup doctor', () => {
     }
   });
 
+  it('reports journal_corrupt when non-tail corruption persists after repairing incomplete tail', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-doctor-reverify-'));
+    try {
+      fs.mkdirSync(path.join(root, '.cursor-plugin'), { recursive: true });
+      fs.writeFileSync(path.join(root, '.cursor-plugin', 'plugin.json'), JSON.stringify({
+        name: 'oh-my-cursor', version: '1.0.0',
+      }));
+      const journalDir = path.join(root, '.omcu', 'runs', 'r-reverify', 'journal');
+      fs.mkdirSync(path.join(journalDir, 'segments'), { recursive: true });
+      fs.mkdirSync(path.join(journalDir, 'receipts'), { recursive: true });
+
+      fs.writeFileSync(path.join(journalDir, 'meta.json'), JSON.stringify({
+        schema_version: 1,
+        stream_id: 'runs/r-reverify',
+        created_at: new Date().toISOString(),
+        max_record_bytes: 65536,
+        max_segment_bytes: 2097152,
+        max_segment_records: 5000,
+        max_stream_records: 100000,
+      }));
+
+      // Head has valid format but incorrect total_bytes (99999 instead of 0)
+      fs.writeFileSync(path.join(journalDir, 'head.json'), JSON.stringify({
+        schema_version: 1,
+        stream_id: 'runs/r-reverify',
+        head_sequence: 0,
+        head_digest: null,
+        active_segment: '00000001.jsonl',
+        total_records: 0,
+        total_bytes: 99999, // Mismatched total_bytes
+        updated_at: new Date().toISOString(),
+      }));
+
+      // Active segment has trailing uncommitted partial write
+      fs.writeFileSync(path.join(journalDir, 'segments', '00000001.jsonl'), '{"uncommitted": true');
+
+      const runner: CommandRunner = {
+        async run(_command, args) {
+          if (args[0] === '--version') return { code: 0, stdout: '2026.07.20\n', stderr: '' };
+          if (args[0] === 'status') return { code: 0, stdout: 'authenticated\n', stderr: '' };
+          return { code: 0, stdout: '--version --help status --plugin-dir', stderr: '' };
+        },
+      };
+
+      // Repairing truncates the uncommitted tail, but reverify must catch the corrupt total_bytes
+      const report = await runSetupDoctor({ packageRoot: root, projectRoot: root, runner, repairJournals: true });
+      expect(report.ok).toBe(false);
+      expect(report.checks.find((c) => c.id === 'journal_repaired')).toBeUndefined();
+      const corruptCheck = report.checks.find((c) => c.id === 'journal_corrupt');
+      expect(corruptCheck?.status).toBe('fail');
+      expect(corruptCheck?.message).toContain('remains corrupt after repairing incomplete tail');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('fails closed when doctor detects non-tail corrupted journal', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-doctor-corrupt-'));
     try {

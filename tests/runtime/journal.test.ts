@@ -1087,6 +1087,82 @@ describe('Journal primitive', () => {
     expect(v2.status).toBe('corrupt');
     expect(v2.error?.code).toBe('E_JOURNAL_CORRUPT');
   });
+
+  it('rejects symlinked head.json and meta.json with E_JOURNAL_CORRUPT and prevents repair truncation', async () => {
+    const streamDir = path.join(tempDir, 'metadata-symlink-rejection');
+    const journal = new Journal<{ msg: string }>(streamDir, 'metadata-symlink-stream');
+
+    await journal.append({ kind: 'msg', payload: { msg: 'first' } });
+    await journal.append({ kind: 'msg', payload: { msg: 'second' } });
+
+    const originalHeadContent = fs.readFileSync(path.join(streamDir, 'head.json'), 'utf8');
+    const originalMetaContent = fs.readFileSync(path.join(streamDir, 'meta.json'), 'utf8');
+    const activeSegPath = path.join(streamDir, 'segments', '00000001.jsonl');
+    const originalSegSize = fs.statSync(activeSegPath).size;
+
+    const outsideDir = path.join(tempDir, 'outside-metadata');
+    fs.mkdirSync(outsideDir, { recursive: true });
+
+    // 1. Symlinked head.json pointing to an external stale head
+    const staleHead = {
+      schema_version: 1,
+      stream_id: 'metadata-symlink-stream',
+      head_sequence: 1,
+      head_digest: '0'.repeat(64),
+      active_segment: '00000001.jsonl',
+      total_records: 1,
+      total_bytes: 50,
+      updated_at: new Date().toISOString(),
+    };
+    const outsideHeadFile = path.join(outsideDir, 'head.json');
+    fs.writeFileSync(outsideHeadFile, JSON.stringify(staleHead), 'utf8');
+
+    const headPath = path.join(streamDir, 'head.json');
+    fs.unlinkSync(headPath);
+    fs.symlinkSync(outsideHeadFile, headPath);
+
+    // readHead must reject symlink
+    expect(() => journal.readHead()).toThrow('E_JOURNAL_CORRUPT');
+
+    // verify must treat it as corrupt, not incomplete_tail
+    const vHead = journal.verify();
+    expect(vHead.ok).toBe(false);
+    expect(vHead.status).toBe('corrupt');
+    expect(vHead.repairable).toBe(false);
+    expect(vHead.error?.code).toBe('E_JOURNAL_CORRUPT');
+
+    // repairIncompleteTail must refuse to truncate valid records
+    await expect(journal.repairIncompleteTail()).rejects.toThrow('E_JOURNAL_NON_TAIL_CORRUPTION');
+    expect(fs.statSync(activeSegPath).size).toBe(originalSegSize);
+
+    // append must refuse
+    await expect(journal.append({ kind: 'msg', payload: { msg: 'third' } })).rejects.toThrow('E_JOURNAL_CORRUPT');
+
+    // 2. Restore head.json, test symlinked meta.json
+    fs.unlinkSync(headPath);
+    fs.writeFileSync(headPath, originalHeadContent, 'utf8');
+
+    const outsideMetaFile = path.join(outsideDir, 'meta.json');
+    fs.writeFileSync(outsideMetaFile, originalMetaContent, 'utf8');
+
+    const metaPath = path.join(streamDir, 'meta.json');
+    fs.unlinkSync(metaPath);
+    fs.symlinkSync(outsideMetaFile, metaPath);
+
+    // readMeta must reject symlink
+    expect(() => journal.readMeta()).toThrow('E_JOURNAL_CORRUPT');
+
+    const vMeta = journal.verify();
+    expect(vMeta.ok).toBe(false);
+    expect(vMeta.status).toBe('corrupt');
+    expect(vMeta.repairable).toBe(false);
+    expect(vMeta.error?.code).toBe('E_JOURNAL_CORRUPT');
+
+    await expect(journal.repairIncompleteTail()).rejects.toThrow('E_JOURNAL_NON_TAIL_CORRUPTION');
+    expect(fs.statSync(activeSegPath).size).toBe(originalSegSize);
+
+    await expect(journal.append({ kind: 'msg', payload: { msg: 'third' } })).rejects.toThrow('E_JOURNAL_CORRUPT');
+  });
 });
 
 
