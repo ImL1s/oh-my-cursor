@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { assertSafeArgv } from '../host/cursor-agent.js';
+import { formatRedactedCommandLine } from '../runtime/redaction.js';
 import { isKnownCommand, nearestCommand } from './parser.js';
 
 export const MADMAX_FLAG = '--madmax';
@@ -472,7 +473,7 @@ export async function runHostLaunch(argv: readonly string[], options: {
   const label = plan.mode === 'madmax'
     ? 'madmax (--yolo --sandbox disabled; deny rules + MCP/trust remain separate)'
     : 'interactive';
-  stderr(`omcu ${label}: cursor-agent ${plan.argv.map(shellQuote).join(' ')}\n`);
+  stderr(`omcu ${label}: ${formatRedactedCommandLine(plan.executable, plan.argv)}\n`);
 
   // POL-02: inside tmux always direct. POL-05: explicit tmux before print shortcuts.
   if (insideTmux(env) || plan.policy === 'direct') {

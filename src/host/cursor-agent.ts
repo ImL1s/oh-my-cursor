@@ -25,6 +25,11 @@ export function assertSafeArgv(argv: readonly string[]): void {
 }
 
 export function buildPrintArgv(prompt: string, options: { readonly format?: CursorOutputFormat; readonly mode?: 'plan' | 'ask'; readonly model?: string; readonly resume?: string; readonly continue?: boolean } = {}): string[] {
+  if (typeof prompt !== 'string') throw new Error('E_PROMPT_INVALID');
+  if (prompt.includes('\0')) throw new Error('E_PROMPT_INVALID');
+  if (prompt.startsWith('-')) {
+    throw new Error('E_PROMPT_UNSAFE: prompt must not begin with a dash; leading-dash prompts are ambiguous with Cursor options');
+  }
   if (options.resume !== undefined && options.continue === true) throw new Error('E_SESSION_ROUTE_CONFLICT');
   const argv = ['--print', '--output-format', options.format ?? 'json'];
   if (options.mode !== undefined) argv.push('--mode', options.mode);
@@ -87,9 +92,41 @@ export const defaultCursorRunner: CursorRunner = (executable, invocation, option
     stdio: invocation.interactive ? 'inherit' : ['ignore', 'pipe', 'pipe'],
     detached: ownsProcessGroup,
   });
+
+  let settled = false;
   let terminalFailure: Error | null = null;
   let forceTimer: NodeJS.Timeout | undefined;
   let groupTermination: Promise<void> | null = null;
+
+  const signalMap = new Map<NodeJS.Signals, () => void>();
+
+  const cleanupSignals = (): void => {
+    for (const [sig, listener] of signalMap) {
+      process.off(sig, listener);
+    }
+    signalMap.clear();
+  };
+
+  const cleanup = (): void => {
+    if (timer !== undefined) clearTimeout(timer);
+    if (forceTimer !== undefined) clearTimeout(forceTimer);
+    cleanupSignals();
+  };
+
+  const safeResolve = (result: CursorResult): void => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    resolve(result);
+  };
+
+  const safeReject = (error: Error): void => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    reject(error);
+  };
+
   const terminate = (failure: Error): void => {
     if (terminalFailure !== null) return;
     terminalFailure = failure;
@@ -101,24 +138,46 @@ export const defaultCursorRunner: CursorRunner = (executable, invocation, option
       forceTimer = setTimeout(() => child.kill('SIGKILL'), TERMINATION_GRACE_MS);
     }
   };
+
+  if (ownsProcessGroup && child.pid !== undefined) {
+    const SIGNALS: readonly NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+    for (const sig of SIGNALS) {
+      const hadPreExistingListener = process.listenerCount(sig) > 0;
+      const listener = () => {
+        cleanupSignals();
+        terminate(new Error(`E_PARENT_SIGNAL: parent received ${sig}`));
+        if (!hadPreExistingListener) {
+          void (async () => {
+            if (groupTermination !== null) {
+              try { await groupTermination; } catch { /* ignore */ }
+            }
+            try {
+              process.kill(process.pid, sig);
+            } catch { /* ignore */ }
+          })();
+        }
+      };
+      signalMap.set(sig, listener);
+      process.on(sig, listener);
+    }
+  }
+
   const timeoutMs = options.timeoutMs ?? (invocation.interactive ? undefined : 120_000);
   const timer = timeoutMs === undefined
     ? undefined
     : setTimeout(() => terminate(new Error('E_CURSOR_TIMEOUT')), timeoutMs);
+
   if (invocation.interactive) {
     child.once('error', (error) => {
-      if (timer !== undefined) clearTimeout(timer);
-      if (forceTimer !== undefined) clearTimeout(forceTimer);
-      reject(terminalFailure ?? error);
+      safeReject(terminalFailure ?? error);
     });
     child.once('close', (code) => {
-      if (timer !== undefined) clearTimeout(timer);
-      if (forceTimer !== undefined) clearTimeout(forceTimer);
-      if (terminalFailure !== null) reject(terminalFailure);
-      else resolve({ code: code ?? 1, stdout: '', stderr: '' });
+      if (terminalFailure !== null) safeReject(terminalFailure);
+      else safeResolve({ code: code ?? 1, stdout: '', stderr: '' });
     });
     return;
   }
+
   let stdout: Buffer = Buffer.alloc(0);
   let stderr: Buffer = Buffer.alloc(0);
   let overflow = false;
@@ -134,28 +193,24 @@ export const defaultCursorRunner: CursorRunner = (executable, invocation, option
   child.stdout?.on('data', (chunk: Buffer) => { stdout = append(stdout, chunk); });
   child.stderr?.on('data', (chunk: Buffer) => { stderr = append(stderr, chunk); });
   child.once('error', async (error) => {
-    if (timer !== undefined) clearTimeout(timer);
-    if (forceTimer !== undefined) clearTimeout(forceTimer);
     try {
       if (groupTermination !== null) await groupTermination;
-      reject(terminalFailure ?? error);
+      safeReject(terminalFailure ?? error);
     } catch (terminationError) {
-      reject(terminationError);
+      safeReject(terminationError as Error);
     }
   });
   child.once('close', async (code) => {
-    if (timer !== undefined) clearTimeout(timer);
-    if (forceTimer !== undefined) clearTimeout(forceTimer);
     if (terminalFailure !== null) {
       try {
         if (groupTermination !== null) await groupTermination;
-        return reject(terminalFailure);
+        return safeReject(terminalFailure);
       } catch (terminationError) {
-        return reject(terminationError);
+        return safeReject(terminationError as Error);
       }
     }
-    if (overflow) return reject(new Error('E_OUTPUT_TOO_LARGE'));
-    resolve({
+    if (overflow) return safeReject(new Error('E_OUTPUT_TOO_LARGE'));
+    safeResolve({
       code: code ?? 1,
       stdout: stdout.toString('utf8'),
       stderr: redactText(stderr.toString('utf8')),
