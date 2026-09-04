@@ -1601,8 +1601,17 @@ export class Journal<T = unknown> {
       fs.mkdirSync(this.receiptsDir(), { recursive: true, mode: 0o700 });
 
       const timestamp = this.now().getTime();
-      const backupFile = path.join(this.quarantineDir(), `${segment}.tail-corrupt-${timestamp}`);
-      fs.copyFileSync(segmentPath, backupFile);
+      let nonce = crypto.randomBytes(6).toString('hex');
+      let backupFile = path.join(this.quarantineDir(), `${segment}.tail-corrupt-${timestamp}-${nonce}`);
+      let receiptPath = path.join(this.receiptsDir(), `repair-${timestamp}-${nonce}.json`);
+
+      while (fs.existsSync(backupFile) || fs.existsSync(receiptPath)) {
+        nonce = crypto.randomBytes(6).toString('hex');
+        backupFile = path.join(this.quarantineDir(), `${segment}.tail-corrupt-${timestamp}-${nonce}`);
+        receiptPath = path.join(this.receiptsDir(), `repair-${timestamp}-${nonce}.json`);
+      }
+
+      fs.copyFileSync(segmentPath, backupFile, fs.constants.COPYFILE_EXCL);
       syncPathToDisk(backupFile);
 
       // Truncate the segment to the last valid committed byte offset
@@ -1627,8 +1636,13 @@ export class Journal<T = unknown> {
         if (idx !== null && ((targetSegIndex !== null && idx > targetSegIndex) || idx > headActiveIndex)) {
           const extraPath = path.join(this.segmentsDir(), seg);
           if (fs.existsSync(extraPath)) {
-            const extraBackup = path.join(this.quarantineDir(), `${seg}.orphaned-${timestamp}`);
-            fs.copyFileSync(extraPath, extraBackup);
+            let extraNonce = crypto.randomBytes(6).toString('hex');
+            let extraBackup = path.join(this.quarantineDir(), `${seg}.orphaned-${timestamp}-${extraNonce}`);
+            while (fs.existsSync(extraBackup)) {
+              extraNonce = crypto.randomBytes(6).toString('hex');
+              extraBackup = path.join(this.quarantineDir(), `${seg}.orphaned-${timestamp}-${extraNonce}`);
+            }
+            fs.copyFileSync(extraPath, extraBackup, fs.constants.COPYFILE_EXCL);
             syncPathToDisk(extraBackup);
             fs.unlinkSync(extraPath);
           }
@@ -1659,7 +1673,6 @@ export class Journal<T = unknown> {
         receipt_sha256: receiptSha256,
       };
 
-      const receiptPath = path.join(this.receiptsDir(), `repair-${timestamp}.json`);
       atomicWriteJson(receiptPath, receipt);
 
       return receipt;

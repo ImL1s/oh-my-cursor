@@ -961,6 +961,49 @@ describe('Journal primitive', () => {
     const afterHead = JSON.parse(fs.readFileSync(headPath, 'utf8'));
     expect(afterHead.head_sequence).toBe(2);
   });
+
+  it('gives each repair receipt and quarantine backup a collision-resistant name even when now() is frozen', async () => {
+    const streamDir = path.join(tempDir, 'collision-resistant-receipts');
+    const fixedTime = new Date('2026-09-04T12:00:00.000Z');
+    const journal = new Journal<{ msg: string }>(streamDir, 'collision-check', {
+      now: () => fixedTime,
+    });
+
+    await journal.append({ kind: 'msg', payload: { msg: 'first' } });
+
+    // Simulate incomplete tail #1
+    const activeSegPath = path.join(streamDir, 'segments', '00000001.jsonl');
+    fs.appendFileSync(activeSegPath, '{"broken":1');
+    expect(journal.verify().status).toBe('incomplete_tail');
+
+    const receipt1 = await journal.repairIncompleteTail();
+    expect(fs.existsSync(receipt1.backup_file)).toBe(true);
+
+    // Simulate incomplete tail #2 at the exact same frozen millisecond
+    fs.appendFileSync(activeSegPath, '{"broken":2');
+    expect(journal.verify().status).toBe('incomplete_tail');
+
+    const receipt2 = await journal.repairIncompleteTail();
+    expect(fs.existsSync(receipt2.backup_file)).toBe(true);
+
+    // Verify receipt and backup paths are distinct
+    expect(receipt1.backup_file).not.toBe(receipt2.backup_file);
+    expect(fs.existsSync(receipt1.backup_file)).toBe(true);
+    expect(fs.existsSync(receipt2.backup_file)).toBe(true);
+
+    // Verify two distinct repair receipts exist in receipts dir
+    const receiptsDir = path.join(streamDir, 'receipts');
+    const receiptFiles = fs.readdirSync(receiptsDir);
+    expect(receiptFiles).toHaveLength(2);
+    expect(receiptFiles[0]).not.toBe(receiptFiles[1]);
+
+    // Verify quarantine dir contains both backups
+    const quarantineDir = path.join(streamDir, 'quarantine');
+    const quarantineFiles = fs.readdirSync(quarantineDir);
+    expect(quarantineFiles).toHaveLength(2);
+    expect(quarantineFiles).toContain(path.basename(receipt1.backup_file));
+    expect(quarantineFiles).toContain(path.basename(receipt2.backup_file));
+  });
 });
 
 
