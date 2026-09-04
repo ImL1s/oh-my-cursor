@@ -397,5 +397,41 @@ describe('team mailbox primitives', () => {
     expect(all).toHaveLength(3);
     expect(all[2]?.message_id).toBe(newMsg.message_id);
   });
+
+  it('preserves delivered_at when a duplicate stale send event is appended after delivered event', async () => {
+    const { root } = workspace();
+    initializeTeamState(root, {
+      teamName: 'stale-dup-mail',
+      task: 'handle stale duplicates',
+      workers: [{ name: 'one', owned_paths: ['a'] }, { name: 'two', owned_paths: ['b'] }],
+    });
+
+    const msg = await sendDirectMessage(root, 'stale-dup-mail', 'one', 'two', 'test message');
+    await markMessageDelivered(root, 'stale-dup-mail', 'two', msg.message_id);
+
+    // Verify delivered
+    const beforeStale = await listMailboxMessages(root, 'stale-dup-mail', 'two', { includeDelivered: true });
+    expect(beforeStale[0]?.delivered_at).toBeDefined();
+
+    // Now simulate a stale concurrent migration or external append of the original send event
+    const journalDir = path.join(root.path, 'state', 'journal', 'team', 'stale-dup-mail', 'mailbox', 'two');
+    const { Journal } = await import('../../src/runtime/journal.js');
+    const journal = new Journal(journalDir, 'team/stale-dup-mail/mailbox/two');
+    await journal.append({
+      kind: 'send',
+      payload: { kind: 'send', message: { ...msg, delivered_at: undefined } },
+      at: msg.created_at,
+    });
+
+    // listMailboxMessages must preserve the delivered status and not restore the unread state
+    const afterStale = await listMailboxMessages(root, 'stale-dup-mail', 'two', { includeDelivered: true });
+    expect(afterStale).toHaveLength(1);
+    expect(afterStale[0]?.message_id).toBe(msg.message_id);
+    expect(afterStale[0]?.delivered_at).toBeDefined();
+
+    const unreadOnly = await listMailboxMessages(root, 'stale-dup-mail', 'two', { includeDelivered: false });
+    expect(unreadOnly).toHaveLength(0);
+  });
 });
+
 

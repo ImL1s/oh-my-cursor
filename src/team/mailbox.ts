@@ -130,7 +130,17 @@ function readMessagesFromJournal(journal: Journal<TeamMailboxEvent>): TeamMailbo
   for (const rec of records) {
     const event = rec.payload;
     if (event.kind === 'send') {
-      messagesMap.set(event.message.message_id, event.message);
+      const existing = messagesMap.get(event.message.message_id);
+      if (existing) {
+        const deliveredAt = existing.delivered_at ?? event.message.delivered_at;
+        const merged: TeamMailboxMessage = {
+          ...event.message,
+          ...(deliveredAt !== undefined ? { delivered_at: deliveredAt } : {}),
+        };
+        messagesMap.set(event.message.message_id, merged);
+      } else {
+        messagesMap.set(event.message.message_id, event.message);
+      }
     } else if (event.kind === 'delivered') {
       const existing = messagesMap.get(event.message_id);
       if (existing) {
@@ -147,20 +157,27 @@ export async function listMailboxMessages(
   workerName: string,
   options: { readonly includeDelivered?: boolean } = {},
 ): Promise<readonly TeamMailboxMessage[]> {
-  const legacy = readMailboxUnlocked(root, teamName, workerName);
-  const journal = mailboxJournal(root, teamName, workerName, () => new Date());
-  await migrateLegacyMailboxIfNeeded(root, teamName, workerName, journal);
+  const name = assertSafeWorkerName(workerName);
+  const file = teamMailboxPath(root, teamName, name);
+  if (!fs.existsSync(file)) return [];
 
-  const head = journal.readHead();
-  let messages: TeamMailboxMessage[];
-  if (head !== null && head.head_sequence > 0) {
-    messages = readMessagesFromJournal(journal);
-  } else {
-    messages = [...legacy.messages];
-  }
+  return withDirectoryLock(file, async () => {
+    if (!fs.existsSync(file)) return [];
+    const legacy = readMailboxUnlocked(root, teamName, name);
+    const journal = mailboxJournal(root, teamName, name, () => new Date());
+    await migrateLegacyMailboxIfNeeded(root, teamName, name, journal);
 
-  if (options.includeDelivered === false) return messages.filter((message) => message.delivered_at === undefined);
-  return messages;
+    const head = journal.readHead();
+    let messages: TeamMailboxMessage[];
+    if (head !== null && head.head_sequence > 0) {
+      messages = readMessagesFromJournal(journal);
+    } else {
+      messages = [...legacy.messages];
+    }
+
+    if (options.includeDelivered === false) return messages.filter((message) => message.delivered_at === undefined);
+    return messages;
+  });
 }
 
 export async function sendDirectMessage(

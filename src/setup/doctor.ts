@@ -109,6 +109,7 @@ async function inspectProjectJournals(projectRoot: string, repair = false): Prom
   const omcuDir = path.join(projectRoot, '.omcu');
   if (!fs.existsSync(omcuDir)) return [];
 
+  const checks: SetupCheck[] = [];
   const journalDirs: string[] = [];
   function search(dir: string, depth = 0): void {
     if (depth > 6 || !fs.existsSync(dir)) return;
@@ -122,15 +123,16 @@ async function inspectProjectJournals(projectRoot: string, repair = false): Prom
           search(path.join(dir, entry.name), depth + 1);
         }
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      checks.push({
+        id: 'journal_unreadable',
+        status: 'fail',
+        message: `Failed to inspect journal directory ${dir}`,
+        detail: { dir, error: String(err) },
+      });
     }
   }
   search(omcuDir);
-
-  if (journalDirs.length === 0) return [];
-
-  const checks: SetupCheck[] = [];
   let validCount = 0;
 
   for (const dir of journalDirs) {

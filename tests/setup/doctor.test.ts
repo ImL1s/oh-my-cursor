@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { runSetupDoctor } from '../../src/setup/doctor.js';
 import type { CommandRunner } from '../../src/setup/types.js';
 
@@ -214,4 +214,49 @@ describe('Cursor setup doctor', () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it('reports journal_unreadable check when discovery encounters an unreadable directory', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-doctor-unreadable-'));
+    try {
+      fs.mkdirSync(path.join(root, '.cursor-plugin'), { recursive: true });
+      fs.writeFileSync(path.join(root, '.cursor-plugin', 'plugin.json'), JSON.stringify({
+        name: 'oh-my-cursor', version: '1.0.0',
+      }));
+      const subDir = path.join(root, '.omcu', 'restricted');
+      fs.mkdirSync(subDir, { recursive: true });
+
+      // Mock fs.readdirSync to fail on the restricted directory
+      const originalReaddirSync = fs.readdirSync;
+      const readdirSpy = vi.spyOn(fs, 'readdirSync').mockImplementation(((target: any, options: any) => {
+        if (typeof target === 'string' && path.resolve(target) === path.resolve(subDir)) {
+          const err = new Error('EACCES: permission denied');
+          (err as any).code = 'EACCES';
+          throw err;
+        }
+        return (originalReaddirSync as any)(target, options);
+      }) as any);
+
+      const runner: CommandRunner = {
+        async run(_command, args) {
+          if (args[0] === '--version') return { code: 0, stdout: '2026.07.20\n', stderr: '' };
+          if (args[0] === 'status') return { code: 0, stdout: 'authenticated\n', stderr: '' };
+          return { code: 0, stdout: '--version --help status --plugin-dir', stderr: '' };
+        },
+      };
+
+      try {
+        const report = await runSetupDoctor({ packageRoot: root, projectRoot: root, runner });
+        const unreadableCheck = report.checks.find((c) => c.id === 'journal_unreadable');
+        expect(unreadableCheck).toBeDefined();
+        expect(unreadableCheck?.status).toBe('fail');
+        expect(unreadableCheck?.message).toContain('Failed to inspect journal directory');
+        expect(report.ok).toBe(false);
+      } finally {
+        readdirSpy.mockRestore();
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
+
