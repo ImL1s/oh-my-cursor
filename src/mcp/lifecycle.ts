@@ -853,6 +853,20 @@ export async function installMcpServer(options: McpInstallOptions = {}): Promise
     const servers = (parsed.mcpServers ?? {}) as Record<string, unknown>;
     const currentServer = servers['oh-my-cursor'] as McpServerConfig | undefined;
     const existingReceiptPath = findMcpReceipt(target, cwd, options.receiptFile);
+    let existingReceipt: McpInstallReceipt | null = null;
+    if (existingReceiptPath) {
+      try {
+        existingReceipt = readMcpInstallReceipt(existingReceiptPath);
+      } catch {
+        // invalid receipt
+      }
+    }
+
+    const isOwnedDrift =
+      existingReceipt !== null &&
+      currentServer !== null &&
+      typeof currentServer === 'object' &&
+      areServerConfigsEqual(currentServer, existingReceipt.installed_server);
 
     if (currentServer && areServerConfigsEqual(currentServer, expectedLauncher.server)) {
       return {
@@ -878,7 +892,7 @@ export async function installMcpServer(options: McpInstallOptions = {}): Promise
         );
       }
       action = 'replace';
-      previousConfig = currentServer;
+      previousConfig = (typeof currentServer === 'object' && currentServer !== null) ? currentServer : null;
     } else {
       action = 'install';
     }
@@ -920,6 +934,8 @@ export async function installMcpServer(options: McpInstallOptions = {}): Promise
     const receiptPath = resolveMcpReceiptPath(target, cwd, options.receiptFile);
     fs.mkdirSync(path.dirname(receiptPath), { recursive: true, mode: 0o755 });
 
+    const rollbackServer = isOwnedDrift && existingReceipt !== null ? existingReceipt.previous_server : previousConfig;
+
     const receipt = createMcpInstallReceipt({
       store_kind: 'omcu_mcp_install_receipt',
       schema_version: 1,
@@ -931,7 +947,7 @@ export async function installMcpServer(options: McpInstallOptions = {}): Promise
       target_ino: updatedStat.ino,
       server_name: 'oh-my-cursor',
       installed_server: expectedLauncher.server,
-      previous_server: previousConfig,
+      previous_server: rollbackServer,
       launcher_kind: expectedLauncher.launcher_kind,
       managed_updates: expectedLauncher.managed_updates,
       omcu_version: PACKAGE_VERSION,

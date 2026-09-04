@@ -234,6 +234,39 @@ describe('MCP lifecycle management (Issue #17)', () => {
       const receipt = readMcpInstallReceipt(result.receipt_path!);
       expect(receipt.previous_server).toEqual(foreignConfig);
     });
+
+    it('preserves original rollback config in receipt when replacing owned-drift', async () => {
+      const dir = makeDir();
+      const target = path.join(dir, '.cursor', 'mcp.json');
+      const home = path.join(dir, 'home');
+
+      // Initial install in developer-checkout mode (target was clean, previous_server is null)
+      const initial = await installMcpServer({ targetFile: target, homeDir: home, cwd: dir });
+      expect(initial.action).toBe('install');
+      const initialReceipt = readMcpInstallReceipt(initial.receipt_path!);
+      expect(initialReceipt.previous_server).toBeNull();
+
+      // Now create a stable shim in home to change expected launcher to stable-shim
+      const binDir = path.join(home, '.local', 'bin');
+      fs.mkdirSync(binDir, { recursive: true });
+      const shim = path.join(binDir, 'omcu');
+      fs.writeFileSync(shim, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+
+      // Run install with replace to upgrade to stable shim
+      const upgraded = await installMcpServer({ targetFile: target, homeDir: home, cwd: dir, replace: true });
+      expect(upgraded.action).toBe('replace');
+      const upgradedReceipt = readMcpInstallReceipt(upgraded.receipt_path!);
+      expect(upgradedReceipt.installed_server.command).toBe(shim);
+      // Crucial: previous_server MUST still be null (not the obsolete developer checkout config)
+      expect(upgradedReceipt.previous_server).toBeNull();
+
+      // Uninstall should remove 'oh-my-cursor' entirely rather than restoring the obsolete dev checkout
+      const uninstalled = await uninstallMcpServer({ targetFile: target, cwd: dir, homeDir: home });
+      expect(uninstalled.action).toBe('removed');
+      expect(uninstalled.restored_config).toBeNull();
+      const parsed = JSON.parse(fs.readFileSync(target, 'utf8'));
+      expect(parsed.mcpServers['oh-my-cursor']).toBeUndefined();
+    });
   });
 
   describe('Uninstall and rollback lifecycle', () => {
