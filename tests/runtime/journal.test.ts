@@ -1360,6 +1360,31 @@ describe('Journal primitive', () => {
     expect(filtered).toHaveLength(1);
     expect(filtered[0]?.receipt_sha256).toBe(legitReceipt.receipt_sha256);
   });
+
+  it('rejects an invalid active segment for an empty journal during verify', async () => {
+    const streamDir = path.join(tempDir, 'empty-invalid-active-seg');
+    const journal = new Journal<{ msg: string }>(streamDir, 'empty-active');
+    journal.init();
+
+    // Verify initially passes
+    expect(journal.verify().ok).toBe(true);
+
+    // Tamper head.json to reference nonexistent later segment (00000002.jsonl) while journal is empty
+    const headPath = path.join(streamDir, 'head.json');
+    const head = JSON.parse(fs.readFileSync(headPath, 'utf8'));
+    head.active_segment = '00000002.jsonl';
+    fs.writeFileSync(headPath, JSON.stringify(head));
+
+    // verify() should reject this layout as corrupt with E_JOURNAL_HEAD_MISMATCH
+    const v = journal.verify();
+    expect(v.ok).toBe(false);
+    expect(v.status).toBe('corrupt');
+    expect(v.error?.code).toBe('E_JOURNAL_HEAD_MISMATCH');
+    expect(v.repairable).toBe(false);
+
+    // append() should also reject the layout as corrupt
+    await expect(journal.append({ kind: 'msg', payload: { msg: 'test' } })).rejects.toThrow('E_JOURNAL_CORRUPT');
+  });
 });
 
 

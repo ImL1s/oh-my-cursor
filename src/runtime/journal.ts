@@ -1626,10 +1626,12 @@ export class Journal<T = unknown> {
     }
     if (segments.length === 0) {
       if (head.head_sequence === 0) {
+        const expectedActiveSegment = segmentFileName(1);
         if (
           head.total_records !== 0 ||
           head.total_bytes !== 0 ||
-          (head.active_segment_records !== undefined && head.active_segment_records !== 0)
+          (head.active_segment_records !== undefined && head.active_segment_records !== 0) ||
+          head.active_segment !== expectedActiveSegment
         ) {
           return {
             ok: false,
@@ -1640,7 +1642,9 @@ export class Journal<T = unknown> {
             head_digest: null,
             error: {
               code: 'E_JOURNAL_HEAD_MISMATCH',
-              message: 'Head counters nonzero for empty stream',
+              message: head.active_segment !== expectedActiveSegment
+                ? `Head active_segment mismatch: head has ${head.active_segment}, expected ${expectedActiveSegment} for empty stream`
+                : 'Head counters nonzero for empty stream',
             },
             repairable: false,
           };
@@ -2122,6 +2126,27 @@ export class Journal<T = unknown> {
     }
 
     // Now compare scanned total against head.json
+    if (totalValid >= head.head_sequence) {
+      const expectedActiveSegment = head.head_sequence > 0 ? lastCommittedSegment : segmentFileName(1);
+      if (expectedActiveSegment !== null && head.active_segment !== expectedActiveSegment) {
+        return {
+          ok: false,
+          status: 'corrupt',
+          stream_id: this.streamId,
+          total_records: totalValid,
+          head_sequence: head.head_sequence,
+          head_digest: head.head_digest,
+          error: {
+            code: 'E_JOURNAL_HEAD_MISMATCH',
+            message: head.head_sequence > 0
+              ? `Head active_segment mismatch: head has ${head.active_segment}, scanned last committed segment is ${lastCommittedSegment}`
+              : `Head active_segment mismatch: head has ${head.active_segment}, expected ${segmentFileName(1)} for empty stream`,
+          },
+          repairable: false,
+        };
+      }
+    }
+
     if (totalValid === head.head_sequence) {
       if (head.head_sequence > 0 && head.head_digest !== expectedPreviousDigest) {
         return {
@@ -2166,22 +2191,6 @@ export class Journal<T = unknown> {
           error: {
             code: 'E_JOURNAL_HEAD_MISMATCH',
             message: `Head total_bytes mismatch: head has ${head.total_bytes}, scanned ${scannedTotalBytes}`,
-          },
-          repairable: false,
-        };
-      }
-
-      if (head.head_sequence > 0 && lastCommittedSegment !== null && head.active_segment !== lastCommittedSegment) {
-        return {
-          ok: false,
-          status: 'corrupt',
-          stream_id: this.streamId,
-          total_records: totalValid,
-          head_sequence: head.head_sequence,
-          head_digest: head.head_digest,
-          error: {
-            code: 'E_JOURNAL_HEAD_MISMATCH',
-            message: `Head active_segment mismatch: head has ${head.active_segment}, scanned last committed segment is ${lastCommittedSegment}`,
           },
           repairable: false,
         };
