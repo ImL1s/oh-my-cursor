@@ -10,6 +10,7 @@ import {
   markMessageDelivered,
   sendDirectMessage,
   teamConfigPath,
+  teamMailboxJournalDir,
   teamMailboxPath,
   teamManifestV2Path,
   teamStateDir,
@@ -315,6 +316,11 @@ describe('team mailbox primitives', () => {
     expect(dup.message_id).toBe(again.message_id);
 
     fs.writeFileSync(teamMailboxPath(root, 'mail', 'two'), '{not-json', 'utf8');
+    fs.writeFileSync(
+      path.join(teamMailboxJournalDir(root, 'mail', 'two'), 'segments', '00000001.jsonl'),
+      '{not-json\n',
+      'utf8',
+    );
     await expect(listMailboxMessages(root, 'mail', 'two')).rejects.toThrow('E_TEAM_MAILBOX_CORRUPT');
 
     fs.writeFileSync(
@@ -326,4 +332,179 @@ describe('team mailbox primitives', () => {
 
     await expect(sendDirectMessage(root, 'mail', 'ghost', 'two', 'nope')).rejects.toThrow('E_TEAM_WORKER_NOT_FOUND');
   });
+
+  it('supports sending messages with body near the 64 KiB limit without E_JOURNAL_RECORD_TOO_LARGE', async () => {
+    const { root } = workspace();
+    initializeTeamState(root, {
+      teamName: 'big-mail',
+      task: 'messages',
+      workers: [{ name: 'one', owned_paths: ['a'] }, { name: 'two', owned_paths: ['b'] }],
+    });
+
+    const largeBody = 'x'.repeat(64 * 1024);
+    const message = await sendDirectMessage(root, 'big-mail', 'one', 'two', largeBody);
+    expect(message.body).toBe(largeBody);
+
+    const messages = await listMailboxMessages(root, 'big-mail', 'two');
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.body).toBe(largeBody);
+  });
+
+  it('migrates legacy JSON mailbox to journal asynchronously and handles concurrent access', async () => {
+    const { root } = workspace();
+    initializeTeamState(root, {
+      teamName: 'legacy-mail',
+      task: 'migrate legacy messages',
+      workers: [{ name: 'one', owned_paths: ['a'] }, { name: 'two', owned_paths: ['b'] }],
+    });
+
+    // Write a legacy JSON mailbox file with multiple messages before any journal exists
+    const legacyFile = teamMailboxPath(root, 'legacy-mail', 'two');
+    const legacyData = {
+      worker: 'two',
+      messages: [
+        {
+          message_id: 'msg-legacy-1',
+          from_worker: 'one',
+          to_worker: 'two',
+          body: 'legacy unread message',
+          created_at: '2026-08-01T10:00:00.000Z',
+        },
+        {
+          message_id: 'msg-legacy-2',
+          from_worker: 'one',
+          to_worker: 'two',
+          body: 'legacy delivered message',
+          created_at: '2026-08-01T10:05:00.000Z',
+          delivered_at: '2026-08-01T10:06:00.000Z',
+        },
+      ],
+    };
+    fs.writeFileSync(legacyFile, JSON.stringify(legacyData, null, 2), 'utf8');
+
+    // Concurrent reads should both await migration cleanly and observe consistent state
+    const [read1, read2] = await Promise.all([
+      listMailboxMessages(root, 'legacy-mail', 'two', { includeDelivered: true }),
+      listMailboxMessages(root, 'legacy-mail', 'two', { includeDelivered: true }),
+    ]);
+
+    expect(read1).toHaveLength(2);
+    expect(read2).toHaveLength(2);
+    expect(read1[0]?.message_id).toBe('msg-legacy-1');
+    expect(read1[0]?.delivered_at).toBeUndefined();
+    expect(read1[1]?.message_id).toBe('msg-legacy-2');
+    expect(read1[1]?.delivered_at).toBe('2026-08-01T10:06:00.000Z');
+
+    // Send a new message, which should append after the migrated events
+    const newMsg = await sendDirectMessage(root, 'legacy-mail', 'one', 'two', 'new message after migration');
+    expect(newMsg.body).toBe('new message after migration');
+
+    const all = await listMailboxMessages(root, 'legacy-mail', 'two', { includeDelivered: true });
+    expect(all).toHaveLength(3);
+    expect(all[2]?.message_id).toBe(newMsg.message_id);
+  });
+
+  it('preserves delivered_at when a duplicate stale send event is appended after delivered event', async () => {
+    const { root } = workspace();
+    initializeTeamState(root, {
+      teamName: 'stale-dup-mail',
+      task: 'handle stale duplicates',
+      workers: [{ name: 'one', owned_paths: ['a'] }, { name: 'two', owned_paths: ['b'] }],
+    });
+
+    const msg = await sendDirectMessage(root, 'stale-dup-mail', 'one', 'two', 'test message');
+    await markMessageDelivered(root, 'stale-dup-mail', 'two', msg.message_id);
+
+    // Verify delivered
+    const beforeStale = await listMailboxMessages(root, 'stale-dup-mail', 'two', { includeDelivered: true });
+    expect(beforeStale[0]?.delivered_at).toBeDefined();
+
+    // Now simulate a stale concurrent migration or external append of the original send event
+    const journalDir = teamMailboxJournalDir(root, 'stale-dup-mail', 'two');
+    const { Journal } = await import('../../src/runtime/journal.js');
+    const journal = new Journal(journalDir, 'team/stale-dup-mail/mailbox/two');
+    await journal.append({
+      kind: 'send',
+      payload: { kind: 'send', message: { ...msg, delivered_at: undefined } },
+      at: msg.created_at,
+    });
+
+    // listMailboxMessages must preserve the delivered status and not restore the unread state
+    const afterStale = await listMailboxMessages(root, 'stale-dup-mail', 'two', { includeDelivered: true });
+    expect(afterStale).toHaveLength(1);
+    expect(afterStale[0]?.message_id).toBe(msg.message_id);
+    expect(afterStale[0]?.delivered_at).toBeDefined();
+
+    const unreadOnly = await listMailboxMessages(root, 'stale-dup-mail', 'two', { includeDelivered: false });
+    expect(unreadOnly).toHaveLength(0);
+  });
+
+  it('reads messages from journal even after legacy mailbox JSON file is deleted', async () => {
+    const { root } = workspace();
+    initializeTeamState(root, {
+      teamName: 'absent-legacy-mail',
+      task: 'read durable journal without legacy file',
+      workers: [{ name: 'one', owned_paths: ['a'] }, { name: 'two', owned_paths: ['b'] }],
+    });
+
+    // Send a message and list it to ensure it is migrated to journal
+    const msg = await sendDirectMessage(root, 'absent-legacy-mail', 'one', 'two', 'durable message');
+    const beforeRemove = await listMailboxMessages(root, 'absent-legacy-mail', 'two');
+    expect(beforeRemove).toHaveLength(1);
+    expect(beforeRemove[0]?.message_id).toBe(msg.message_id);
+
+    // Delete the legacy mailbox JSON file
+    const legacyFile = teamMailboxPath(root, 'absent-legacy-mail', 'two');
+    expect(fs.existsSync(legacyFile)).toBe(true);
+    fs.rmSync(legacyFile);
+    expect(fs.existsSync(legacyFile)).toBe(false);
+
+    // listMailboxMessages should still read and return the durable messages from the journal
+    const afterRemove = await listMailboxMessages(root, 'absent-legacy-mail', 'two');
+    expect(afterRemove).toHaveLength(1);
+    expect(afterRemove[0]?.message_id).toBe(msg.message_id);
+    expect(afterRemove[0]?.body).toBe('durable message');
+  });
+
+  it('keeps listMailboxMessages strictly read-only and does not create journal directories for legacy mailbox', async () => {
+    const { root } = workspace();
+    initializeTeamState(root, {
+      teamName: 'ro-legacy-mail',
+      task: 'read legacy without mutating state',
+      workers: [{ name: 'one', owned_paths: ['a'] }, { name: 'two', owned_paths: ['b'] }],
+    });
+
+    // Write a legacy mailbox JSON file directly
+    const legacyFile = teamMailboxPath(root, 'ro-legacy-mail', 'two');
+    fs.writeFileSync(
+      legacyFile,
+      JSON.stringify({
+        worker: 'two',
+        messages: [
+          {
+            message_id: 'legacy-msg-1',
+            from_worker: 'one',
+            to_worker: 'two',
+            body: 'legacy content',
+            created_at: new Date().toISOString(),
+          },
+        ],
+      }),
+    );
+
+    const journalDir = teamMailboxJournalDir(root, 'ro-legacy-mail', 'two');
+    expect(fs.existsSync(journalDir)).toBe(false);
+
+    // Call listMailboxMessages
+    const msgs = await listMailboxMessages(root, 'ro-legacy-mail', 'two');
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]?.message_id).toBe('legacy-msg-1');
+    expect(msgs[0]?.body).toBe('legacy content');
+
+    // Journal directory must NOT have been created (strictly read-only)
+    expect(fs.existsSync(journalDir)).toBe(false);
+  });
 });
+
+
+

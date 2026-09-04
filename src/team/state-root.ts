@@ -90,6 +90,10 @@ export function teamMailboxPath(root: StateRoot, teamName: string, workerName: s
   return path.join(teamMailboxDir(root, teamName), `${assertSafeWorkerName(workerName)}.json`);
 }
 
+export function teamMailboxJournalDir(root: StateRoot, teamName: string, workerName: string): string {
+  return path.join(teamStateDir(root, teamName), 'mailbox-journals', assertSafeWorkerName(workerName));
+}
+
 export function teamWorkerDir(root: StateRoot, teamName: string, workerName: string): string {
   return path.join(teamStateDir(root, teamName), 'workers', assertSafeWorkerName(workerName));
 }

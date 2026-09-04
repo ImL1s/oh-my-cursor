@@ -583,4 +583,122 @@ describe('CLI integration for cancellation and state transition invariants', () 
     expect(h1.stderr).toEqual([]);
     expect(h2.stderr).toEqual([]);
   });
+
+  it('migrates legacy events.jsonl into journal and supports readEvents', async () => {
+    const root = projectStateRoot(workspace());
+    const authority = createCliMutationAuthority(root);
+    const store = new RunStateStore(root, authority);
+    await store.create('run-migrate', 'test migration');
+
+    // Manually create legacy events.jsonl
+    const runDir = path.join(root.path, 'runs', 'run-migrate');
+    const legacyEvent = {
+      store_kind: 'run_event',
+      schema_version: 1,
+      repository_id: 'OMCU',
+      run_id: 'run-migrate',
+      sequence: 1,
+      type: 'legacy_init',
+      at: '2026-07-23T01:00:00.000Z',
+      payload: { old: true },
+      mutation: {
+        source: 'omcu-cli',
+        owner_token_sha256: 'a'.repeat(64),
+        writer_pid: process.pid,
+        mutated_at: '2026-07-23T01:00:00.000Z',
+      },
+    };
+    fs.writeFileSync(path.join(runDir, 'events.jsonl'), `${JSON.stringify(legacyEvent)}\n`);
+
+    // Appending a new event should migrate legacy event and append new event at seq 2
+    const ev2 = await store.appendEvent('run-migrate', 'step2', { count: 2 });
+    expect(ev2.sequence).toBe(2);
+
+    const allEvents = store.readEvents('run-migrate');
+    expect(allEvents).toHaveLength(2);
+    expect(allEvents[0]?.type).toBe('legacy_init');
+    expect(allEvents[1]?.type).toBe('step2');
+  });
+
+  it('fails closed with E_EVENT_CORRUPT when legacy events.jsonl contains corrupt lines during migration', async () => {
+    const root = projectStateRoot(workspace());
+    const authority = createCliMutationAuthority(root);
+    const store = new RunStateStore(root, authority);
+    await store.create('run-corrupt-legacy', 'test corrupt migration');
+
+    const runDir = path.join(root.path, 'runs', 'run-corrupt-legacy');
+    const legacyFile = path.join(runDir, 'events.jsonl');
+    fs.writeFileSync(legacyFile, '{"valid": true}\n{malformed_json\n');
+
+    // appendEvent must fail with E_EVENT_CORRUPT
+    await expect(store.appendEvent('run-corrupt-legacy', 'step', { ok: true }))
+      .rejects.toThrow('E_EVENT_CORRUPT');
+
+    // readEvents must also fail with E_EVENT_CORRUPT
+    expect(() => store.readEvents('run-corrupt-legacy')).toThrow('E_EVENT_CORRUPT');
+  });
+
+  it('does not fail appendEvent when legacy events.jsonl mirror encounters write failure', async () => {
+    const root = projectStateRoot(workspace());
+    const authority = createCliMutationAuthority(root);
+    const store = new RunStateStore(root, authority);
+    const run = await store.create('run-mirror-fail', 'goal');
+
+    const runDir = path.join(root.path, 'runs', run.run_id);
+    const legacyFile = path.join(runDir, 'events.jsonl');
+
+    // Append first event
+    await store.appendEvent(run.run_id, 'first', { ok: true });
+
+    // Make events.jsonl unwritable by replacing it with a directory so appendFileSync throws
+    fs.unlinkSync(legacyFile);
+    fs.mkdirSync(legacyFile);
+
+    // Appending should still succeed authoritatively via journal
+    const ev2 = await store.appendEvent(run.run_id, 'second', { ok: true });
+    expect(ev2.sequence).toBe(2);
+
+    const allEvents = store.readEvents(run.run_id);
+    expect(allEvents).toHaveLength(2);
+    expect(allEvents[1]?.type).toBe('second');
+  });
+
+  it('supports run IDs with dots and 128-char length across journal operations', async () => {
+    const root = projectStateRoot(workspace());
+    const authority = createCliMutationAuthority(root);
+    const store = new RunStateStore(root, authority);
+
+    // ID with dots
+    const runDots = await store.create('my..dotted..run', 'goal');
+    const ev1 = await store.appendEvent(runDots.run_id, 'dotted_step', { ok: true });
+    expect(ev1.sequence).toBe(1);
+    expect(store.readEvents(runDots.run_id)).toHaveLength(1);
+
+    // 128-char ID (entity max)
+    const longId = 'r'.repeat(128);
+    const runLong = await store.create(longId, 'goal');
+    const ev2 = await store.appendEvent(runLong.run_id, 'long_step', { ok: true });
+    expect(ev2.sequence).toBe(1);
+    expect(store.readEvents(runLong.run_id)).toHaveLength(1);
+  });
+
+  it('supports appending events near the 64 KiB event limit without E_JOURNAL_RECORD_TOO_LARGE', async () => {
+    const root = projectStateRoot(workspace());
+    const authority = createCliMutationAuthority(root);
+    const store = new RunStateStore(root, authority);
+    const run = await store.create('run-large-event', 'goal');
+
+    // Create a structured payload that, together with the RunEventV1 structure, is near 63 KiB
+    // Each string is under 2048 chars to avoid single-string redaction truncation
+    const payload: Record<string, string> = {};
+    for (let i = 0; i < 31; i++) {
+      payload[`field_${i}`] = 'x'.repeat(2000);
+    }
+    const ev = await store.appendEvent(run.run_id, 'large_data', payload);
+    expect(ev.sequence).toBe(1);
+
+    const read = store.readEvents(run.run_id);
+    expect(read).toHaveLength(1);
+    expect((read[0]?.payload as any)?.field_0).toBe('x'.repeat(2000));
+  });
 });

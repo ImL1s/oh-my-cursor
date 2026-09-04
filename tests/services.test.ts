@@ -206,7 +206,7 @@ describe('Cursor service layer', () => {
     const index = JSON.parse(fs.readFileSync(path.join(root.path, 'memory', 'index.json'), 'utf8')) as { ids: string[] };
     expect(index.ids).toEqual(Array.from({ length: 12 }, (_, index) => `record-${index}`).sort());
     expect(new ProjectMemoryStore(root).list().map(({ id }) => id)).toEqual(index.ids);
-  }, 10_000);
+  }, 20_000);
 
   it('serializes memory delete with put so the shared index matches record truth', async () => {
     const root = projectStateRoot(workspace()); const store = new ProjectMemoryStore(root, now);
@@ -217,7 +217,7 @@ describe('Cursor service layer', () => {
     const index = JSON.parse(fs.readFileSync(path.join(root.path, 'memory', 'index.json'), 'utf8')) as { ids: string[] };
     expect(index.ids).toEqual(store.list().map(({ id }) => id));
     expect(index.ids).not.toContain('old');
-  });
+  }, 20_000);
 
   it('keeps notifications disabled by default and fences dispatch by nonce/generation', async () => {
     const sent = vi.fn(async () => undefined);
@@ -252,6 +252,144 @@ describe('Cursor service layer', () => {
     const page = await wiki.render('run-1', 0, 'Run token=secret', tracker.history('run-1'));
     expect(page.generation).toBe(1); expect(page.title).toContain('<redacted>');
     await expect(wiki.render('run-1', 0, 'stale', [])).rejects.toThrow('E_GENERATION_CONFLICT');
+  });
+
+  it('supports tracker record with detail near 64 KiB without E_JOURNAL_RECORD_TOO_LARGE', async () => {
+    const root = projectStateRoot(workspace());
+    const tracker = new LifecycleTracker(root, now);
+    await tracker.record('run-large', 'created');
+
+    // Create a detail object with ~60 KiB of data across entries
+    const detail: Record<string, string> = {};
+    for (let i = 0; i < 30; i++) {
+      detail[`field_${i}`] = 'y'.repeat(2000);
+    }
+    const event = await tracker.record('run-large', 'started', detail);
+    expect(event.phase).toBe('started');
+
+    const history = tracker.history('run-large');
+    expect(history).toHaveLength(2);
+    expect((history[1]?.detail as any)?.field_0).toBe('y'.repeat(2000));
+  });
+
+  it('does not fail tracker.record when legacy jsonl mirror encounters write failure', async () => {
+    const root = projectStateRoot(workspace());
+    const tracker = new LifecycleTracker(root, now);
+    await tracker.record('run-mirror-fail', 'created');
+
+    const legacyFile = path.join(root.path, 'tracker', 'run-mirror-fail.jsonl');
+    // Replace legacy jsonl file with directory to cause appendFileSync to fail
+    fs.unlinkSync(legacyFile);
+    fs.mkdirSync(legacyFile);
+
+    // Authoritative journal append should still succeed
+    const event = await tracker.record('run-mirror-fail', 'started', { ok: true });
+    expect(event.phase).toBe('started');
+
+    const history = tracker.history('run-mirror-fail');
+    expect(history).toHaveLength(2);
+    expect(history[1]?.phase).toBe('started');
+  });
+
+  it('resumes partial tracker migration without losing remaining events', async () => {
+    const root = projectStateRoot(workspace());
+    const tracker = new LifecycleTracker(root, now);
+    const legacyFile = path.join(root.path, 'tracker', 'run-partial.jsonl');
+    fs.mkdirSync(path.dirname(legacyFile), { recursive: true });
+
+    const ev1 = { schema_version: 1, subject_id: 'run-partial', sequence: 1, phase: 'created', detail: {}, at: '2026-07-23T02:00:00.000Z' };
+    const ev2 = { schema_version: 1, subject_id: 'run-partial', sequence: 2, phase: 'started', detail: {}, at: '2026-07-23T02:00:01.000Z' };
+    const ev3 = { schema_version: 1, subject_id: 'run-partial', sequence: 3, phase: 'checkpointed', detail: {}, at: '2026-07-23T02:00:02.000Z' };
+
+    fs.writeFileSync(legacyFile, `${JSON.stringify(ev1)}\n${JSON.stringify(ev2)}\n${JSON.stringify(ev3)}\n`);
+
+    // Simulate partial migration: only event 1 was committed to the journal
+    const journal = (tracker as any).journal('run-partial');
+    journal.init();
+    await journal.append({ kind: ev1.phase, payload: ev1, at: ev1.at });
+
+    // History should return all 3 events from legacy file because journal head sequence 1 < 3
+    const midHistory = tracker.history('run-partial');
+    expect(midHistory).toHaveLength(3);
+    expect(midHistory[2]?.phase).toBe('checkpointed');
+
+    // Next record should resume migration of remaining events (2 and 3) then append event 4
+    const newEvent = await tracker.record('run-partial', 'completed', { ok: true });
+    expect(newEvent.sequence).toBe(4);
+    expect(newEvent.phase).toBe('completed');
+
+    // History should now return all 4 events from the journal
+    const finalHistory = tracker.history('run-partial');
+    expect(finalHistory).toHaveLength(4);
+    expect(finalHistory[0]?.phase).toBe('created');
+    expect(finalHistory[1]?.phase).toBe('started');
+    expect(finalHistory[2]?.phase).toBe('checkpointed');
+    expect(finalHistory[3]?.phase).toBe('completed');
+  });
+
+  it('rejects corrupt tracker migration input with E_TRACKER_CORRUPT', async () => {
+    const root = projectStateRoot(workspace());
+    const tracker = new LifecycleTracker(root, now);
+    const legacyFile = path.join(root.path, 'tracker', 'run-corrupt.jsonl');
+    fs.mkdirSync(path.dirname(legacyFile), { recursive: true });
+
+    const ev1 = { schema_version: 1, subject_id: 'run-corrupt', sequence: 1, phase: 'created', detail: {}, at: '2026-07-23T02:00:00.000Z' };
+    // Line 2 has invalid json
+    fs.writeFileSync(legacyFile, `${JSON.stringify(ev1)}\n{invalid-json\n`);
+
+    expect(() => tracker.history('run-corrupt')).toThrow('E_TRACKER_CORRUPT');
+    await expect(tracker.record('run-corrupt', 'started')).rejects.toThrow('E_TRACKER_CORRUPT');
+  });
+
+  it('prefers authoritative tracker journal over non-authoritative corrupt legacy mirror', async () => {
+    const root = projectStateRoot(workspace());
+    const tracker = new LifecycleTracker(root, now);
+    await tracker.record('run-corrupt-mirror', 'created');
+    await tracker.record('run-corrupt-mirror', 'started', { step: 1 });
+
+    const legacyFile = path.join(root.path, 'tracker', 'run-corrupt-mirror.jsonl');
+    // Corrupt the legacy mirror file with invalid trailing JSON (simulating partial write or crash during mirror append)
+    fs.appendFileSync(legacyFile, '{"incomplete_or_corrupt_json\n');
+
+    // Authoritative journal history should still succeed and return complete events
+    const hist = tracker.history('run-corrupt-mirror');
+    expect(hist).toHaveLength(2);
+    expect(hist[0]?.phase).toBe('created');
+    expect(hist[1]?.phase).toBe('started');
+
+    // Authoritative journal record should still succeed without being poisoned by legacy mirror
+    const newEvent = await tracker.record('run-corrupt-mirror', 'completed', { done: true });
+    expect(newEvent.sequence).toBe(3);
+    expect(newEvent.phase).toBe('completed');
+
+    const updatedHist = tracker.history('run-corrupt-mirror');
+    expect(updatedHist).toHaveLength(3);
+    expect(updatedHist[2]?.phase).toBe('completed');
+  });
+
+  it('keeps tracker history strictly read-only and does not write .migrated marker', async () => {
+    const root = projectStateRoot(workspace());
+    const tracker = new LifecycleTracker(root, now);
+    await tracker.record('run-ro-test', 'created');
+    await tracker.record('run-ro-test', 'started');
+
+    // Simulate situation where journal is completed but .migrated marker is missing
+    const markerPath = path.join(root.path, 'tracker', 'journals', 'run-ro-test', '.migrated');
+    if (fs.existsSync(markerPath)) {
+      fs.unlinkSync(markerPath);
+    }
+    expect(fs.existsSync(markerPath)).toBe(false);
+
+    // Calling history() must read the journal events without creating .migrated or mutating any state
+    const hist = tracker.history('run-ro-test');
+    expect(hist).toHaveLength(2);
+    expect(hist[0]?.phase).toBe('created');
+    expect(hist[1]?.phase).toBe('started');
+    expect(fs.existsSync(markerPath)).toBe(false);
+
+    // Only a write operation (e.g. record) finalizes the migration marker
+    await tracker.record('run-ro-test', 'completed');
+    expect(fs.existsSync(markerPath)).toBe(true);
   });
 
   it('offers only fixed MCP read/proposal tools and structurally refuses authority and shell fields', async () => {

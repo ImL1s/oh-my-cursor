@@ -190,12 +190,12 @@ function invokeFault(options: AtomicWriteOptions, point: AtomicWriteFaultPoint):
   options.faultInjector?.(point);
 }
 
-interface DirectoryIdentity {
+export interface DirectoryIdentity {
   readonly dev: number;
   readonly ino: number;
 }
 
-interface SecuredFilePath {
+export interface SecuredFilePath {
   readonly file: string;
   readonly parent: string;
   readonly parentIdentity: DirectoryIdentity;
@@ -825,7 +825,7 @@ function directoryIdentity(stat: fs.Stats): DirectoryIdentity {
   return { dev: stat.dev, ino: stat.ino };
 }
 
-function assertDirectoryIdentity(
+export function assertDirectoryIdentity(
   directory: string,
   expected: DirectoryIdentity,
   errorPrefix: string,
@@ -842,7 +842,7 @@ function assertDirectoryIdentity(
  * existing ancestors are walked explicitly so a symlink cannot hide between
  * the requested target and its trusted, non-user-controlled ancestor.
  */
-function secureFilePath(
+export function secureFilePath(
   file: string,
   errorPrefix: string,
   beforeCanonicalize?: (phase: 'parent' | 'segment') => void,

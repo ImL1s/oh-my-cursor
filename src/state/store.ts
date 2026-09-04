@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { atomicWriteJson, withDirectoryLock } from '../runtime/atomic.js';
+import { Journal } from '../runtime/journal.js';
 import { redact } from '../runtime/redaction.js';
 import { withinStateRoot, type StateRoot } from '../runtime/state-root.js';
 import { assertCliMutationAuthority, authorityDigest, type CliMutationAuthority } from './authority.js';
@@ -156,6 +157,9 @@ function readLease(root: StateRoot, runId: string, leaseName: string, absentAsNu
   }
 }
 
+export const RUN_JOURNAL_MAX_RECORD_BYTES = 128 * 1024; // 128 KiB provides ample envelope headroom for 64 KiB events
+export const RUN_JOURNAL_MAX_SEGMENT_BYTES = 4 * 1024 * 1024; // 4 MiB
+
 export class RunStateStore {
   constructor(private readonly root: StateRoot, private readonly authority: CliMutationAuthority, private readonly now: () => Date = () => new Date()) {
     assertCliMutationAuthority(authority);
@@ -227,36 +231,117 @@ export class RunStateStore {
     });
   }
 
+  private runJournal(runId: string): Journal<RunEventV1> {
+    const journalDir = path.join(this.runDir(runId), 'journal');
+    return new Journal<RunEventV1>(journalDir, `runs/${safeKey(runId, 'run_id')}`, {
+      now: this.now,
+      maxRecordBytes: RUN_JOURNAL_MAX_RECORD_BYTES,
+      maxSegmentBytes: RUN_JOURNAL_MAX_SEGMENT_BYTES,
+    });
+  }
+
+  private async migrateLegacyEventsIfNeeded(runId: string, journal: Journal<RunEventV1>): Promise<void> {
+    const legacyFile = path.join(this.runDir(runId), 'events.jsonl');
+    if (fs.existsSync(legacyFile)) {
+      const head = journal.readHead();
+      if (head === null || head.head_sequence === 0) {
+        const content = fs.readFileSync(legacyFile, 'utf8');
+        const lines = content.trim().split(/\r?\n/).filter(Boolean);
+        const parsedEvents: RunEventV1[] = [];
+        for (const line of lines) {
+          let parsed: RunEventV1;
+          try {
+            parsed = JSON.parse(line) as RunEventV1;
+          } catch (error) {
+            throw new Error('E_EVENT_CORRUPT', { cause: error });
+          }
+          if (!parsed || typeof parsed !== 'object' || typeof parsed.type !== 'string' || typeof parsed.sequence !== 'number') {
+            throw new Error('E_EVENT_CORRUPT');
+          }
+          parsedEvents.push(parsed);
+        }
+        journal.init();
+        for (const parsed of parsedEvents) {
+          try {
+            await journal.append({ kind: parsed.type, payload: parsed, at: parsed.at });
+          } catch (error) {
+            throw new Error('E_EVENT_CORRUPT', { cause: error });
+          }
+        }
+      }
+    }
+  }
+
   async appendEvent(runId: string, type: string, payload: unknown): Promise<RunEventV1> {
     safeKey(type, 'event_type');
     const runState = this.read(runId);
     const file = path.join(this.runDir(runId), 'events.jsonl');
-    return withDirectoryLock(file, () => {
+    const journal = this.runJournal(runId);
+    return withDirectoryLock(file, async () => {
       assertCliMutationAuthority(this.authority);
-      const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split(/\r?\n/).filter(Boolean) : [];
-      if (existing.length >= 10_000) throw new Error('E_EVENT_LIMIT');
+      await this.migrateLegacyEventsIfNeeded(runId, journal);
+      const head = journal.readHead();
+      const existingCount = head?.head_sequence ?? 0;
+      if (existingCount >= 10_000) throw new Error('E_EVENT_LIMIT');
+
       const rawNow = this.now();
       let lastAtMs = Date.parse(runState.created_at);
-      if (existing.length > 0) {
-        try {
-          const lastEvent = JSON.parse(existing[existing.length - 1]!) as RunEventV1;
-          if (validDate(lastEvent.at)) {
-            lastAtMs = Math.max(lastAtMs, Date.parse(lastEvent.at));
-          }
-        } catch {
-          // ignore corrupted trailing event when computing clock clamp
-        }
+      const lastRec = journal.tail(1)[0];
+      if (lastRec && validDate(lastRec.at)) {
+        lastAtMs = Math.max(lastAtMs, Date.parse(lastRec.at));
       }
       const atMs = Math.max(rawNow.getTime(), lastAtMs);
       const now = new Date(atMs);
-      const event: RunEventV1 = { store_kind: 'run_event', schema_version: 1, repository_id: 'OMCU', run_id: runId, sequence: existing.length + 1, type, at: now.toISOString(), payload: redact(payload), mutation: proof(this.authority, now) };
+
+      const event: RunEventV1 = {
+        store_kind: 'run_event',
+        schema_version: 1,
+        repository_id: 'OMCU',
+        run_id: runId,
+        sequence: existingCount + 1,
+        type,
+        at: now.toISOString(),
+        payload: redact(payload),
+        mutation: proof(this.authority, now),
+      };
+
       const line = `${JSON.stringify(event)}\n`;
       if (Buffer.byteLength(line) > 64 * 1024) throw new Error('E_EVENT_TOO_LARGE');
-      fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-      fs.appendFileSync(file, line, { mode: 0o600 });
-      fs.chmodSync(file, 0o600);
+
+      await journal.append({ kind: type, payload: event, at: now.toISOString() });
+
+      try {
+        fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+        fs.appendFileSync(file, line, { mode: 0o600 });
+        fs.chmodSync(file, 0o600);
+      } catch {
+        // Non-authoritative legacy mirror write is best-effort after authoritative journal append
+      }
       return event;
     });
+  }
+
+  readEvents(runId: string): readonly RunEventV1[] {
+    const journal = this.runJournal(runId);
+    const legacyFile = path.join(this.runDir(runId), 'events.jsonl');
+    if (fs.existsSync(legacyFile)) {
+      const head = journal.readHead();
+      if (head === null || head.head_sequence === 0) {
+        try {
+          return fs.readFileSync(legacyFile, 'utf8').trim().split(/\r?\n/).filter(Boolean).map((l) => {
+            const parsed = JSON.parse(l) as RunEventV1;
+            if (!parsed || typeof parsed !== 'object' || typeof parsed.type !== 'string' || typeof parsed.sequence !== 'number') {
+              throw new Error('E_EVENT_CORRUPT');
+            }
+            return parsed;
+          });
+        } catch (error) {
+          if ((error as Error).message === 'E_EVENT_CORRUPT') throw error;
+          throw new Error('E_EVENT_CORRUPT', { cause: error });
+        }
+      }
+    }
+    return journal.readRange().map((r) => r.payload);
   }
 }
 

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { atomicWriteJson, withDirectoryLock } from '../runtime/atomic.js';
+import { Journal } from '../runtime/journal.js';
 import {
   observeStartIdentity,
   processNonceSha256,
@@ -12,6 +13,9 @@ import {
 } from '../runtime/process-identity.js';
 import { withinStateRoot, type StateRoot } from '../runtime/state-root.js';
 import { digestObject, eventDigest, validateWorkflowDefinition, type WorkflowDefinition, type WorkflowJournalEvent, type WorkflowPlan } from './schema.js';
+
+export const WORKFLOW_JOURNAL_MAX_RECORD_BYTES = 4 * 1024 * 1024; // 4 MiB provides ample envelope headroom for 1 MiB stdout + 1 MiB stderr + receipt metadata
+export const WORKFLOW_JOURNAL_MAX_SEGMENT_BYTES = 16 * 1024 * 1024; // 16 MiB per segment
 
 /** Current durable workflow run schema. V1 is read-only migration input. */
 export interface WorkflowRunRecord {
@@ -119,6 +123,11 @@ export interface WorkflowLockRunner {
 
 const MAX_LEASE_HISTORY = 128;
 
+interface WorkflowJournalEntry {
+  readonly event: WorkflowJournalEvent;
+  readonly revision: number;
+}
+
 export class WorkflowPersistenceStore {
   constructor(
     private readonly root: StateRoot,
@@ -131,6 +140,7 @@ export class WorkflowPersistenceStore {
 
   private recordFile(runId: string): string { return withinStateRoot(this.root, 'workflows', 'runs', safe(runId, 'run_id'), 'record.json'); }
   private definitionFile(name: string, version: string): string { return withinStateRoot(this.root, 'workflows', 'definitions', safe(name, 'workflow_name'), `${safe(version, 'workflow_version')}.json`); }
+  private writeWorkflowRecord(file: string, record: WorkflowRunRecord): void { this.writeJson(file, { ...record, events: [] }); }
 
   async installDefinition(definition: WorkflowDefinition): Promise<WorkflowDefinition> {
     const validated = validateWorkflowDefinition(definition);
@@ -159,15 +169,16 @@ export class WorkflowPersistenceStore {
   listDefinitions(): readonly WorkflowDefinition[] {
     const base = withinStateRoot(this.root, 'workflows', 'definitions');
     if (!fs.existsSync(base)) return [];
-    const definitions: WorkflowDefinition[] = [];
+    const results: WorkflowDefinition[] = [];
     for (const name of fs.readdirSync(base).sort()) {
-      const directory = path.join(base, name);
-      if (!fs.statSync(directory).isDirectory()) continue;
-      for (const file of fs.readdirSync(directory).filter((entry) => entry.endsWith('.json')).sort()) {
-        definitions.push(validateWorkflowDefinition(readJson<WorkflowDefinition>(path.join(directory, file))));
+      const dir = path.join(base, name);
+      if (!fs.statSync(dir).isDirectory()) continue;
+      for (const file of fs.readdirSync(dir).sort()) {
+        if (!file.endsWith('.json')) continue;
+        results.push(this.readDefinition(name, file.slice(0, -'.json'.length)));
       }
     }
-    return definitions.sort((left, right) => `${left.name}@${left.version}`.localeCompare(`${right.name}@${right.version}`));
+    return results;
   }
 
   async create(plan: WorkflowPlan): Promise<WorkflowRunRecord> {
@@ -175,28 +186,106 @@ export class WorkflowPersistenceStore {
     const file = this.recordFile(plan.run_id);
     return this.withLock(file, () => {
       if (fs.existsSync(file)) throw new Error('E_WORKFLOW_RUN_EXISTS');
+      const now = this.now().toISOString();
       const record: WorkflowRunRecord = {
         schema_version: 2,
         store_kind: 'workflow_run_record',
-        revision: 1,
         plan,
+        revision: 1,
         events: [],
         event_head_sha256: null,
         lease_generation: 0,
         execution_lease: null,
         lease_journal_sequence: 0,
         lease_history: [],
-        updated_at: this.now().toISOString(),
+        updated_at: now,
       };
-      this.writeJson(file, record);
+      this.writeWorkflowRecord(file, record);
       return record;
     });
+  }
+
+  private journalDir(runId: string): string {
+    return withinStateRoot(this.root, 'workflows', 'runs', safe(runId, 'run_id'), 'events_journal');
+  }
+
+  private hasJournalArtifacts(runId: string): boolean {
+    const dir = this.journalDir(runId);
+    if (!fs.existsSync(dir)) return false;
+    try {
+      const stat = fs.lstatSync(dir);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) return true;
+      if (fs.existsSync(path.join(dir, 'meta.json'))) return true;
+      if (fs.existsSync(path.join(dir, 'head.json'))) return true;
+      const segDir = path.join(dir, 'segments');
+      if (fs.existsSync(segDir)) {
+        const segStat = fs.lstatSync(segDir);
+        if (segStat.isSymbolicLink() || !segStat.isDirectory()) return true;
+        if (fs.readdirSync(segDir).length > 0) return true;
+      }
+      const recDir = path.join(dir, 'receipts');
+      if (fs.existsSync(recDir)) {
+        const recStat = fs.lstatSync(recDir);
+        if (recStat.isSymbolicLink() || !recStat.isDirectory()) return true;
+        if (fs.readdirSync(recDir).length > 0) return true;
+      }
+    } catch {
+      return true;
+    }
+    return false;
+  }
+
+  private eventJournal(runId: string): Journal<WorkflowJournalEntry> {
+    return new Journal<WorkflowJournalEntry>(this.journalDir(runId), `workflows/${safe(runId, 'run_id')}`, {
+      now: this.now,
+      maxRecordBytes: WORKFLOW_JOURNAL_MAX_RECORD_BYTES,
+      maxSegmentBytes: WORKFLOW_JOURNAL_MAX_SEGMENT_BYTES,
+    });
+  }
+
+  private async migrateLegacyEvents(current: WorkflowRunRecord, journal: Journal<WorkflowJournalEntry>): Promise<void> {
+    if (current.events.length > 0) {
+      const head = journal.readHead();
+      const startIndex = head !== null ? head.head_sequence : 0;
+      if (startIndex < current.events.length) {
+        for (let i = startIndex; i < current.events.length; i++) {
+          const event = current.events[i]!;
+          await journal.append({
+            kind: event.kind,
+            payload: { event, revision: i + 2 },
+            at: this.now().toISOString(),
+          });
+        }
+      }
+    }
   }
 
   read(runId: string): WorkflowRunRecord {
     const file = this.recordFile(runId);
     try {
-      const record = normalizeRecord(readJson<unknown>(file), runId);
+      const journal = this.eventJournal(runId);
+      let record = normalizeRecord(readJson<unknown>(file), runId);
+      const journalHead = journal.readHead();
+
+      if (journalHead === null && this.hasJournalArtifacts(runId)) {
+        throw new Error('E_WORKFLOW_RUN_CORRUPT');
+      }
+
+      const shouldLoadJournal =
+        journalHead !== null &&
+        journalHead.head_sequence > 0 &&
+        (record.events.length === 0 || journalHead.head_sequence >= record.events.length);
+
+      if (shouldLoadJournal) {
+        const entries = journal.readRange();
+        const events = entries.map((r) => ('event' in (r.payload as any) ? (r.payload as any).event : (r.payload as any)) as WorkflowJournalEvent);
+        const lastEntry = entries.at(-1);
+        const committedRevision = lastEntry && typeof (lastEntry.payload as any)?.revision === 'number'
+          ? (lastEntry.payload as any).revision as number
+          : events.length + 1;
+        const effectiveRevision = Math.max(record.revision, committedRevision);
+        record = { ...record, revision: effectiveRevision, events, event_head_sha256: events.at(-1)?.event_sha256 ?? null };
+      }
       validateRecord(record, runId);
       return record;
     } catch (error) {
@@ -207,22 +296,44 @@ export class WorkflowPersistenceStore {
 
   async append(runId: string, expectedRevision: number, event: WorkflowJournalEvent): Promise<WorkflowRunRecord> {
     const file = this.recordFile(runId);
-    return this.withLock(file, () => {
+    const journal = this.eventJournal(runId);
+    return this.withLock(file, async () => {
       const current = this.read(runId);
       if (current.revision !== expectedRevision) throw new Error('E_WORKFLOW_REVISION_CONFLICT');
+      await this.migrateLegacyEvents(current, journal);
+
       if (event.run_id !== runId || event.sequence !== current.events.length + 1 || event.previous_event_sha256 !== current.event_head_sha256) throw new Error('E_WORKFLOW_EVENT_FENCE');
       const { event_sha256: claimedDigest, ...material } = event;
       if (eventDigest(material) !== claimedDigest) throw new Error('E_WORKFLOW_EVENT_DIGEST');
+
+      const nextRevision = current.revision + 1;
+      await journal.append({
+        kind: event.kind,
+        payload: { event, revision: nextRevision },
+        at: this.now().toISOString(),
+      });
+
+      const updatedEvents = [...current.events, event];
       const next: WorkflowRunRecord = {
         ...current,
-        revision: current.revision + 1,
-        events: [...current.events, event],
+        revision: nextRevision,
+        events: updatedEvents,
         event_head_sha256: event.event_sha256,
         updated_at: this.now().toISOString(),
       };
-      this.writeJson(file, next);
+      this.writeWorkflowRecord(file, next);
       return next;
     });
+  }
+
+  readEvents(runId: string): readonly WorkflowJournalEvent[] {
+    const journal = this.eventJournal(runId);
+    const head = journal.readHead();
+    const current = this.read(runId);
+    if (head !== null && head.head_sequence > 0 && (current.events.length === 0 || head.head_sequence >= current.events.length)) {
+      return journal.readRange().map((r) => ('event' in (r.payload as any) ? (r.payload as any).event : (r.payload as any)) as WorkflowJournalEvent);
+    }
+    return current.events;
   }
 
   async acquireExecutionLease(
@@ -237,8 +348,10 @@ export class WorkflowPersistenceStore {
     validateProcessIdentity(ownerIdentity);
     if (!Number.isSafeInteger(ttlMs) || ttlMs < 1000 || ttlMs > 3_600_000) throw new Error('E_WORKFLOW_LEASE_INPUT');
     const file = this.recordFile(runId);
-    return this.withLock(file, () => {
+    const journal = this.eventJournal(runId);
+    return this.withLock(file, async () => {
       const current = this.read(runId);
+      await this.migrateLegacyEvents(current, journal);
       if (current.revision !== expectedRevision) throw new Error('E_WORKFLOW_REVISION_CONFLICT');
       if (!current.plan.tasks.some((task) => task.task_id === taskId)) throw new Error('E_WORKFLOW_LEASE_TASK_NOT_IN_PLAN');
       const now = this.now();
@@ -291,7 +404,7 @@ export class WorkflowPersistenceStore {
         ]),
         updated_at: now.toISOString(),
       };
-      this.writeJson(file, next);
+      this.writeWorkflowRecord(file, next);
       return { record: next, credential };
     });
   }
@@ -299,8 +412,10 @@ export class WorkflowPersistenceStore {
   async releaseExecutionLease(runId: string, expectedRevision: number, credential: WorkflowLeaseCredential): Promise<WorkflowRunRecord> {
     const token = persistedTokenFromCredential(credential, runId);
     const file = this.recordFile(runId);
-    return this.withLock(file, () => {
+    const journal = this.eventJournal(runId);
+    return this.withLock(file, async () => {
       const current = this.read(runId);
+      await this.migrateLegacyEvents(current, journal);
       const lease = current.execution_lease;
       if (lease === null) {
         const last = current.lease_history.at(-1);
@@ -320,7 +435,7 @@ export class WorkflowPersistenceStore {
         lease_history: appendLeaseHistory(current.lease_history, [leaseJournal(current.lease_journal_sequence + 1, 'release', lease, this.now(), null)]),
         updated_at: this.now().toISOString(),
       };
-      this.writeJson(file, next);
+      this.writeWorkflowRecord(file, next);
       return next;
     });
   }
@@ -356,8 +471,10 @@ export class WorkflowPersistenceStore {
     const token = acknowledgement ? null : persistedTokenFromCredential(proof, runId);
     if (acknowledgement) validateLeaseReconciliation(proof, runId);
     const file = this.recordFile(runId);
-    return this.withLock(file, () => {
+    const journal = this.eventJournal(runId);
+    return this.withLock(file, async () => {
       const current = this.read(runId);
+      await this.migrateLegacyEvents(current, journal);
       if (current.revision !== expectedRevision) throw new Error('E_WORKFLOW_REVISION_CONFLICT');
       const lease = current.execution_lease;
       if (lease === null) throw new Error('E_WORKFLOW_LEASE_NOT_OWNER');
@@ -376,7 +493,7 @@ export class WorkflowPersistenceStore {
         lease_history: appendLeaseHistory(current.lease_history, [leaseJournal(current.lease_journal_sequence + 1, 'reconcile', lease, now, liveness.status)]),
         updated_at: now.toISOString(),
       };
-      this.writeJson(file, next);
+      this.writeWorkflowRecord(file, next);
       return next;
     });
   }

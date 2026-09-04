@@ -40,7 +40,7 @@ Host launch (OMX-aligned):
 
 Lifecycle / orchestration:
   omcu setup|update [--init-project-state]           lifecycle (project state is opt-in)
-  omcu doctor [--repair-owner]|uninstall             observational doctor; explicit owner repair
+  omcu doctor [--repair-owner|--repair-journals]|uninstall  observational doctor; explicit owner/journal repair
   omcu capabilities discover|native-status          pinned host probes
   omcu state create|status|transition|verify|event   CLI-authoritative state
   omcu cancel --id <run-id>                          CLI-authoritative cancellation

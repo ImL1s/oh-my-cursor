@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { Journal, DEFAULT_MAX_METADATA_BYTES } from '../runtime/journal.js';
 import { defaultCommandRunner } from './runner.js';
 import type { CommandRunner, SetupCheck } from './types.js';
 
@@ -12,6 +13,7 @@ export interface DoctorInput {
   readonly runner?: CommandRunner;
   /** Setup/update opt-out must not even inspect project-local `.omcu`. */
   readonly inspectProjectState?: boolean;
+  readonly repairJournals?: boolean;
 }
 
 export interface DoctorReport {
@@ -103,6 +105,119 @@ function configTier(root: string, projectRoot: string, resources: PluginInspecti
   return { checks, tier };
 }
 
+async function inspectProjectJournals(projectRoot: string, repair = false): Promise<SetupCheck[]> {
+  const omcuDir = path.join(projectRoot, '.omcu');
+  if (!fs.existsSync(omcuDir)) return [];
+
+  const checks: SetupCheck[] = [];
+  const journalDirs: string[] = [];
+  function search(dir: string, depth = 0): void {
+    if (depth > 6 || !fs.existsSync(dir)) return;
+    try {
+      if (
+        (fs.existsSync(path.join(dir, 'meta.json')) && fs.existsSync(path.join(dir, 'head.json'))) ||
+        (fs.existsSync(path.join(dir, 'segments')) && (fs.existsSync(path.join(dir, 'meta.json')) || fs.existsSync(path.join(dir, 'head.json'))))
+      ) {
+        journalDirs.push(dir);
+        return;
+      }
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (entry.isDirectory() && !entry.name.startsWith('.')) {
+          search(path.join(dir, entry.name), depth + 1);
+        }
+      }
+    } catch (err) {
+      checks.push({
+        id: 'journal_unreadable',
+        status: 'fail',
+        message: `Failed to inspect journal directory ${dir}`,
+        detail: { dir, error: String(err) },
+      });
+    }
+  }
+  search(omcuDir);
+  let validCount = 0;
+
+  for (const dir of journalDirs) {
+    try {
+      let streamId = path.basename(dir);
+      try {
+        const metaPath = path.join(dir, 'meta.json');
+        const metaStat = fs.lstatSync(metaPath);
+        if (!metaStat.isSymbolicLink() && metaStat.isFile() && metaStat.size <= DEFAULT_MAX_METADATA_BYTES) {
+          const raw = fs.readFileSync(metaPath, 'utf8');
+          const parsed = JSON.parse(raw) as { stream_id?: string };
+          if (typeof parsed.stream_id === 'string') streamId = parsed.stream_id;
+        }
+      } catch {}
+      const journal = new Journal(dir, streamId);
+      const verify = journal.verify();
+
+      if (verify.ok) {
+        validCount++;
+      } else if (verify.status === 'incomplete_tail') {
+        if (repair) {
+          const receipt = await journal.repairIncompleteTail();
+          const reverify = journal.verify();
+          if (reverify.ok) {
+            validCount++;
+            checks.push({
+              id: 'journal_repaired',
+              status: 'pass',
+              message: `Repaired incomplete tail for journal stream ${streamId}`,
+              detail: { stream_id: streamId, receipt },
+            });
+          } else {
+            checks.push({
+              id: 'journal_corrupt',
+              status: 'fail',
+              message: `Journal for stream ${streamId} remains corrupt after repairing incomplete tail (${reverify.error?.code ?? 'unknown'})`,
+              detail: { stream_id: streamId, receipt, error: reverify.error },
+            });
+          }
+        } else {
+          checks.push({
+            id: 'journal_tail',
+            status: 'warn',
+            message: `Journal for stream ${streamId} has incomplete tail at ${verify.error?.segment}:${verify.error?.byte_offset} (repairable with receipt)`,
+            detail: {
+              stream_id: streamId,
+              segment: verify.error?.segment,
+              offset: verify.error?.byte_offset,
+              repairable: true,
+            },
+          });
+        }
+      } else {
+        checks.push({
+          id: 'journal_corrupt',
+          status: 'fail',
+          message: `Journal for stream ${streamId} is corrupt at ${verify.error?.segment ?? 'unknown'}:${verify.error?.sequence ?? 0} (non-tail corruption cannot be repaired automatically)`,
+          detail: { stream_id: streamId, error: verify.error },
+        });
+      }
+    } catch (err) {
+      checks.push({
+        id: 'journal_unreadable',
+        status: 'fail',
+        message: `Failed to inspect journal at ${dir}`,
+        detail: { error: String(err) },
+      });
+    }
+  }
+
+  if (checks.length === 0 && validCount > 0) {
+    checks.push({
+      id: 'journal_integrity',
+      status: 'pass',
+      message: `All inspected journals (${validCount}) are valid and verified`,
+      detail: { count: validCount },
+    });
+  }
+
+  return checks;
+}
+
 export async function runSetupDoctor(input: DoctorInput): Promise<DoctorReport> {
   const root = path.resolve(input.packageRoot);
   const projectRoot = path.resolve(input.projectRoot ?? root);
@@ -133,10 +248,6 @@ export async function runSetupDoctor(input: DoctorInput): Promise<DoctorReport> 
   if (manifest.check.status === 'fail') {
     checks.push({ id: 'plugin_dir', status: 'fail', message: 'Plugin directory cannot be considered loadable because its manifest is invalid' });
   } else if (plugin.code === 0) {
-    // --help with --plugin-dir proves host acceptance, not that a live agent
-    // session loaded skills/commands. Keep that honesty in the message, but do
-    // not warn: every healthy install would otherwise look yellow and make
-    // curl|bash bootstrap look failed (exit 2) after a successful receipt.
     const skillsDir = path.join(root, 'skills');
     const commandsDir = path.join(root, 'commands');
     checks.push({
@@ -158,6 +269,8 @@ export async function runSetupDoctor(input: DoctorInput): Promise<DoctorReport> 
   checks.push(...tiers.checks);
   if (input.inspectProjectState !== false) {
     checks.push(fileCheck('project_state', path.join(projectRoot, '.omcu'), 'warn'));
+    const journalChecks = await inspectProjectJournals(projectRoot, input.repairJournals ?? false);
+    checks.push(...journalChecks);
   }
 
   const hasFail = checks.some((check) => check.status === 'fail');
