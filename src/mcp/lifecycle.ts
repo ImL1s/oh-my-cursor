@@ -180,11 +180,22 @@ export function resolveMcpReceiptPath(target: string, projectRoot: string, custo
 }
 
 export function findMcpReceipt(target: string, projectRoot: string, customReceipt?: string): string | null {
+  const resolvedTarget = path.resolve(target);
   if (customReceipt !== undefined && customReceipt.trim() !== '') {
     const resolved = path.resolve(projectRoot, customReceipt);
-    return fs.existsSync(resolved) ? resolved : null;
+    if (!fs.existsSync(resolved)) {
+      return null;
+    }
+    try {
+      const receipt = readMcpInstallReceipt(resolved);
+      if (path.resolve(receipt.target_file) === resolvedTarget) {
+        return resolved;
+      }
+    } catch {
+      // ignore invalid receipt
+    }
+    return null;
   }
-  const resolvedTarget = path.resolve(target);
   const resolvedProject = path.resolve(projectRoot);
   const candidates = [
     path.join(resolvedProject, '.omcu', 'mcp-install-receipt.json'),
@@ -809,11 +820,29 @@ export async function uninstallMcpServer(options: McpUninstallOptions = {}): Pro
   }
 
   return withDirectoryLock(target, async () => {
+    if (options.receiptFile !== undefined && options.receiptFile.trim() !== '') {
+      const explicitReceiptPath = path.resolve(cwd, options.receiptFile);
+      if (!fs.existsSync(explicitReceiptPath)) {
+        throw new Error(`E_MCP_RECEIPT_MISSING: Specified receipt file not found: ${explicitReceiptPath}`);
+      }
+      const explicitReceipt = readMcpInstallReceipt(explicitReceiptPath);
+      if (path.resolve(explicitReceipt.target_file) !== target) {
+        throw new Error(
+          `E_MCP_RECEIPT_TARGET_MISMATCH: Receipt recorded target '${explicitReceipt.target_file}' does not match target '${target}'`,
+        );
+      }
+    }
+
     const receiptPath = findMcpReceipt(target, cwd, options.receiptFile);
     if (!receiptPath) {
       throw new Error(`E_MCP_RECEIPT_MISSING: No install receipt found for ${target}`);
     }
     const receipt = readMcpInstallReceipt(receiptPath);
+    if (path.resolve(receipt.target_file) !== target) {
+      throw new Error(
+        `E_MCP_RECEIPT_TARGET_MISMATCH: Receipt recorded target '${receipt.target_file}' does not match target '${target}'`,
+      );
+    }
 
     if (!fs.existsSync(target)) {
       if (options.dryRun !== true) {

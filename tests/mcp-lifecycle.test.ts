@@ -264,6 +264,32 @@ describe('MCP lifecycle management (Issue #17)', () => {
       );
     });
 
+    it('refuses uninstall with E_MCP_RECEIPT_TARGET_MISMATCH when custom receipt targets a different file', async () => {
+      const dir = makeDir();
+      const targetA = path.join(dir, 'a', 'mcp.json');
+      const targetB = path.join(dir, 'b', 'mcp.json');
+      const receiptA = path.join(dir, 'receipt-a.json');
+      const receiptB = path.join(dir, 'receipt-b.json');
+      const home = path.join(dir, 'home');
+
+      await installMcpServer({ targetFile: targetA, receiptFile: receiptA, homeDir: home, cwd: dir });
+      await installMcpServer({ targetFile: targetB, receiptFile: receiptB, homeDir: home, cwd: dir });
+
+      // findMcpReceipt with custom receipt for another file returns null
+      expect(findMcpReceipt(targetB, dir, receiptA)).toBeNull();
+
+      // uninstalling targetB with receiptA throws E_MCP_RECEIPT_TARGET_MISMATCH
+      await expect(
+        uninstallMcpServer({ targetFile: targetB, receiptFile: receiptA, cwd: dir, homeDir: home }),
+      ).rejects.toThrow('E_MCP_RECEIPT_TARGET_MISMATCH');
+
+      // Verify neither targetB nor receiptA was removed or modified
+      expect(fs.existsSync(targetB)).toBe(true);
+      expect(fs.existsSync(receiptA)).toBe(true);
+      const parsedB = JSON.parse(fs.readFileSync(targetB, 'utf8'));
+      expect(parsedB.mcpServers['oh-my-cursor']).toBeDefined();
+    });
+
     it('uninstall dry-run previews removal without changing file or receipt', async () => {
       const dir = makeDir();
       const target = path.join(dir, '.cursor', 'mcp.json');
