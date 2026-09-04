@@ -459,6 +459,8 @@ export class Journal<T = unknown> {
     const initialSegmentPath = path.join(this.segmentsDir(), initialSegment);
     if (!fs.existsSync(initialSegmentPath)) {
       fs.writeFileSync(initialSegmentPath, '', { mode: 0o600 });
+      syncPathToDisk(initialSegmentPath);
+      syncPathToDisk(this.segmentsDir());
     }
 
     const head: JournalHead = {
@@ -488,6 +490,14 @@ export class Journal<T = unknown> {
       let head = this.readHead();
       if (head === null) {
         head = this.initUnlocked();
+      } else {
+        const verification = this.verify();
+        if (!verification.ok) {
+          if (verification.status === 'incomplete_tail') {
+            throw new Error('E_JOURNAL_INCOMPLETE_TAIL');
+          }
+          throw new Error(verification.error?.code ?? 'E_JOURNAL_CORRUPT');
+        }
       }
 
       const limits = this.resolveLimits();
@@ -537,6 +547,8 @@ export class Journal<T = unknown> {
         : (fs.existsSync(activeSegmentPath) ? fs.readFileSync(activeSegmentPath, 'utf8').trim().split(/\r?\n/).filter(Boolean).length : 0);
       let activeSegmentIndex = parseSegmentIndex(activeSegment) ?? 1;
 
+      let isNewSegment = !fs.existsSync(activeSegmentPath);
+
       // Check if rotation is needed by byte limit or record limit
       if (
         (currentSegmentBytes > 0 && currentSegmentBytes + lineBytes > limits.maxSegmentBytes) ||
@@ -547,6 +559,7 @@ export class Journal<T = unknown> {
         activeSegmentPath = path.join(this.segmentsDir(), activeSegment);
         currentSegmentBytes = 0;
         currentSegmentRecords = 0;
+        isNewSegment = true;
       }
 
       // Append and fsync active segment file before updating head
@@ -559,6 +572,10 @@ export class Journal<T = unknown> {
         fs.closeSync(fd);
       }
       fs.chmodSync(activeSegmentPath, 0o600);
+
+      if (isNewSegment) {
+        syncPathToDisk(this.segmentsDir());
+      }
 
       const nextHead: JournalHead = {
         schema_version: 1,

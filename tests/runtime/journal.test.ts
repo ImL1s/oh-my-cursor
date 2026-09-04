@@ -677,4 +677,74 @@ describe('Journal primitive', () => {
     expect(vMulti.error?.code).toBe('E_JOURNAL_CORRUPT');
     expect(vMulti.error?.message).toContain('exceeds maximum segment bytes');
   });
+
+  it('refuses appends with E_JOURNAL_INCOMPLETE_TAIL when an uncommitted tail exists until repaired', async () => {
+    const streamDir = path.join(tempDir, 'refuse-tail-append');
+    const journal = new Journal<{ msg: string }>(streamDir, 'refuse-tail');
+
+    const r1 = await journal.append({ kind: 'msg', payload: { msg: 'first' } });
+
+    // Simulate crash after appending line to segment but before updating head.json
+    const seg = path.join(streamDir, 'segments', '00000001.jsonl');
+    const uncommittedRecord = {
+      schema_version: 1,
+      stream_id: 'refuse-tail',
+      sequence: 2,
+      kind: 'msg',
+      payload: { msg: 'uncommitted' },
+      at: new Date().toISOString(),
+      previous_digest: r1.digest,
+    };
+    const uncommittedDigest = sha256(canonicalJson(uncommittedRecord));
+    const uncommittedLine = `${canonicalJson({ ...uncommittedRecord, digest: uncommittedDigest })}\n`;
+    fs.appendFileSync(seg, uncommittedLine);
+
+    // Subsequent append is refused with E_JOURNAL_INCOMPLETE_TAIL
+    await expect(journal.append({ kind: 'msg', payload: { msg: 'second' } }))
+      .rejects.toThrow('E_JOURNAL_INCOMPLETE_TAIL');
+
+    // Repair the tail
+    await journal.repairIncompleteTail();
+
+    // Now append succeeds and assigns sequence 2 cleanly
+    const r2 = await journal.append({ kind: 'msg', payload: { msg: 'second' } });
+    expect(r2.sequence).toBe(2);
+    expect(journal.verify().ok).toBe(true);
+
+    // Also verify un-terminated trailing line is refused with E_JOURNAL_INCOMPLETE_TAIL
+    fs.appendFileSync(seg, '{"incomplete_json');
+    await expect(journal.append({ kind: 'msg', payload: { msg: 'third' } }))
+      .rejects.toThrow('E_JOURNAL_INCOMPLETE_TAIL');
+    await journal.repairIncompleteTail();
+    const r3 = await journal.append({ kind: 'msg', payload: { msg: 'third' } });
+    expect(r3.sequence).toBe(3);
+    expect(journal.verify().ok).toBe(true);
+  });
+
+  it('fsyncs segments directory when a new rotated segment is created', async () => {
+    const streamDir = path.join(tempDir, 'fsync-segments-dir');
+    const journal = new Journal<{ msg: string }>(streamDir, 'fsync-seg', {
+      maxSegmentRecords: 1,
+    });
+
+    const segmentsDir = path.join(streamDir, 'segments');
+    let segmentsDirSynced = false;
+    const realOpenSync = fs.openSync.bind(fs);
+    const spyOpen = vi.spyOn(fs, 'openSync').mockImplementation((p: any, flags: any, ...rest: any[]) => {
+      if (typeof p === 'string' && path.resolve(p) === path.resolve(segmentsDir)) {
+        segmentsDirSynced = true;
+      }
+      return (realOpenSync as any)(p, flags, ...rest);
+    });
+
+    try {
+      await journal.append({ kind: 'msg', payload: { msg: 'record1' } });
+      // Record 2 triggers rotation to segment 2 and fsyncs segments dir
+      segmentsDirSynced = false;
+      await journal.append({ kind: 'msg', payload: { msg: 'record2' } });
+      expect(segmentsDirSynced).toBe(true);
+    } finally {
+      spyOpen.mockRestore();
+    }
+  });
 });
