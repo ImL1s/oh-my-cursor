@@ -745,9 +745,9 @@ export async function inspectMcpStatus(options: {
   }
 
   const servers = parsed.mcpServers as Record<string, unknown> | undefined;
-  const configured = (servers?.['oh-my-cursor'] ?? null) as McpServerConfig | null;
+  const hasServer = servers !== undefined && servers !== null && typeof servers === 'object' && Object.prototype.hasOwnProperty.call(servers, 'oh-my-cursor');
 
-  if (!configured) {
+  if (!hasServer) {
     return {
       file: target,
       state: 'absent',
@@ -763,7 +763,14 @@ export async function inspectMcpStatus(options: {
     };
   }
 
-  if (typeof configured !== 'object' || typeof configured.command !== 'string' || !Array.isArray(configured.args)) {
+  const rawServer = servers['oh-my-cursor'];
+  if (
+    typeof rawServer !== 'object' ||
+    rawServer === null ||
+    Array.isArray(rawServer) ||
+    typeof (rawServer as Record<string, unknown>).command !== 'string' ||
+    !Array.isArray((rawServer as Record<string, unknown>).args)
+  ) {
     return {
       file: target,
       state: 'malformed',
@@ -779,6 +786,8 @@ export async function inspectMcpStatus(options: {
       details: "Configured 'oh-my-cursor' server is missing command or args array",
     };
   }
+
+  const configured = rawServer as McpServerConfig;
 
   const execExists = checkExecutableExists(configured);
   const resolvesCurrent = checkResolvesToCurrentRelease(configured, pkgRoot, home);
@@ -1004,9 +1013,10 @@ export async function uninstallMcpServer(options: McpUninstallOptions = {}): Pro
     const beforeSha256 = sha256(raw);
     const parsed = parseMcpJson(raw, target);
     const servers = (parsed.mcpServers ?? {}) as Record<string, unknown>;
+    const hasCurrentServer = Object.prototype.hasOwnProperty.call(servers, 'oh-my-cursor');
     const currentServer = servers['oh-my-cursor'] as McpServerConfig | undefined;
 
-    if (!currentServer) {
+    if (!hasCurrentServer) {
       if (options.dryRun !== true) {
         fs.rmSync(receiptPath, { force: true });
       }
@@ -1020,7 +1030,7 @@ export async function uninstallMcpServer(options: McpUninstallOptions = {}): Pro
       };
     }
 
-    if (!areServerConfigsEqual(currentServer, receipt.installed_server)) {
+    if (!currentServer || !areServerConfigsEqual(currentServer, receipt.installed_server)) {
       throw new Error(
         `E_MCP_UNINSTALL_COLLISION: Server 'oh-my-cursor' in ${target} was modified since installation; refusing to remove or overwrite`,
       );

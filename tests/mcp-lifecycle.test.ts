@@ -371,6 +371,24 @@ describe('MCP lifecycle management (Issue #17)', () => {
       expect(fs.existsSync(target)).toBe(true);
       expect(findMcpReceipt(target, dir)).not.toBeNull();
     });
+
+    it('throws E_MCP_UNINSTALL_COLLISION when server entry is corrupted to null or invalid value', async () => {
+      const dir = makeDir();
+      const target = path.join(dir, '.cursor', 'mcp.json');
+      const home = path.join(dir, 'home');
+
+      await installMcpServer({ targetFile: target, homeDir: home, cwd: dir });
+
+      // Corrupt server entry to null
+      fs.writeFileSync(target, JSON.stringify({ mcpServers: { 'oh-my-cursor': null } }));
+
+      await expect(
+        uninstallMcpServer({ targetFile: target, cwd: dir, homeDir: home }),
+      ).rejects.toThrow('E_MCP_UNINSTALL_COLLISION');
+
+      // Receipt must NOT have been removed
+      expect(findMcpReceipt(target, dir)).not.toBeNull();
+    });
   });
 
   describe('Status inspection and target classification', () => {
@@ -415,6 +433,19 @@ describe('MCP lifecycle management (Issue #17)', () => {
       expect(status.state).toBe('malformed');
       expect(status.details).toContain('line 4');
       expect(status.details).toContain('Remediation');
+    });
+
+    it('classifies falsy server entries (null, false, empty string, non-object) as malformed', async () => {
+      const dir = makeDir();
+      const target = path.join(dir, '.cursor', 'mcp.json');
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+
+      for (const falsyVal of [null, false, '', 0, {}]) {
+        fs.writeFileSync(target, JSON.stringify({ mcpServers: { 'oh-my-cursor': falsyVal } }));
+        const status = await inspectMcpStatus({ targetFile: target, cwd: dir, noProbe: true });
+        expect(status.state).toBe('malformed');
+        expect(status.details).toContain("Configured 'oh-my-cursor' server is missing command or args array");
+      }
     });
 
     it('classifies unsafe symlink target', async () => {
