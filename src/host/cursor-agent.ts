@@ -27,7 +27,7 @@ export function assertSafeArgv(argv: readonly string[]): void {
 export function buildPrintArgv(prompt: string, options: { readonly format?: CursorOutputFormat; readonly mode?: 'plan' | 'ask'; readonly model?: string; readonly resume?: string; readonly continue?: boolean } = {}): string[] {
   if (typeof prompt !== 'string') throw new Error('E_PROMPT_INVALID');
   if (prompt.includes('\0')) throw new Error('E_PROMPT_INVALID');
-  if (prompt.trimStart().startsWith('-')) {
+  if (prompt.startsWith('-')) {
     throw new Error('E_PROMPT_UNSAFE: prompt must not begin with a dash; leading-dash prompts are ambiguous with Cursor options');
   }
   if (options.resume !== undefined && options.continue === true) throw new Error('E_SESSION_ROUTE_CONFLICT');
@@ -142,17 +142,20 @@ export const defaultCursorRunner: CursorRunner = (executable, invocation, option
   if (ownsProcessGroup && child.pid !== undefined) {
     const SIGNALS: readonly NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
     for (const sig of SIGNALS) {
+      const hadPreExistingListener = process.listenerCount(sig) > 0;
       const listener = () => {
         cleanupSignals();
         terminate(new Error(`E_PARENT_SIGNAL: parent received ${sig}`));
-        void (async () => {
-          if (groupTermination !== null) {
-            try { await groupTermination; } catch { /* ignore */ }
-          }
-          try {
-            process.kill(process.pid, sig);
-          } catch { /* ignore */ }
-        })();
+        if (!hadPreExistingListener) {
+          void (async () => {
+            if (groupTermination !== null) {
+              try { await groupTermination; } catch { /* ignore */ }
+            }
+            try {
+              process.kill(process.pid, sig);
+            } catch { /* ignore */ }
+          })();
+        }
       };
       signalMap.set(sig, listener);
       process.on(sig, listener);

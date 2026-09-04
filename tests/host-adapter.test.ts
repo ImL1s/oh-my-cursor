@@ -121,10 +121,10 @@ describe('Cursor host adapter', () => {
     }
   });
 
-  it('rejects ambiguous leading-dash prompts and NUL characters', () => {
+  it('rejects ambiguous leading-dash prompts and NUL characters; allows whitespace-prefixed prompts', () => {
     expect(() => buildPrintArgv('--help')).toThrow('E_PROMPT_UNSAFE');
     expect(() => buildPrintArgv('-m plan')).toThrow('E_PROMPT_UNSAFE');
-    expect(() => buildPrintArgv('  -flag')).toThrow('E_PROMPT_UNSAFE');
+    expect(buildPrintArgv('  - check the logs')).toContain('  - check the logs');
     expect(() => buildPrintArgv('hello\0world')).toThrow('E_PROMPT_INVALID');
   });
 
