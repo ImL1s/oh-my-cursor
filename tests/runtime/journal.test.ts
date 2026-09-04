@@ -299,6 +299,41 @@ describe('Journal primitive', () => {
     expect(() => new Journal(tempDir, `team/${'a'.repeat(64)}/mailbox/${'b'.repeat(64)}`)).not.toThrow();
   });
 
+  it('completes append when writeSync returns short writes across multiple chunks', async () => {
+    const streamDir = path.join(tempDir, 'short-writes');
+    const journal = new Journal<{ msg: string }>(streamDir, 'short-writes');
+
+    const originalWriteSync = fs.writeSync;
+    let writeCalls = 0;
+    const writeSpy = vi.spyOn(fs, 'writeSync').mockImplementation(function (
+      this: unknown,
+      fd: number,
+      buffer: any,
+      offset?: any,
+      length?: any,
+      position?: any,
+    ) {
+      if (Buffer.isBuffer(buffer) && typeof length === 'number' && length > 5) {
+        writeCalls += 1;
+        // Return a short write of 5 bytes on the first call for this buffer
+        if (writeCalls === 1) {
+          return (originalWriteSync as any).call(this, fd, buffer, offset, 5, position);
+        }
+      }
+      return (originalWriteSync as any).call(this, fd, buffer, offset, length, position);
+    });
+
+    const record = await journal.append({ kind: 'chunked', payload: { msg: 'hello world durable' } });
+    expect(record.sequence).toBe(1);
+    expect(writeCalls).toBeGreaterThanOrEqual(2);
+    writeSpy.mockRestore();
+
+    const verify = journal.verify();
+    expect(verify.ok).toBe(true);
+    expect(verify.head_sequence).toBe(1);
+    expect(journal.tail(1)[0]?.payload.msg).toBe('hello world durable');
+  });
+
   it('serializes concurrent appends with identical expectedHead so exactly one wins', async () => {
     const streamDir = path.join(tempDir, 'concurrent-race');
     const journal = new Journal<{ id: string }>(streamDir, 'concurrent');

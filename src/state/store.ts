@@ -157,6 +157,9 @@ function readLease(root: StateRoot, runId: string, leaseName: string, absentAsNu
   }
 }
 
+export const RUN_JOURNAL_MAX_RECORD_BYTES = 128 * 1024; // 128 KiB provides ample envelope headroom for 64 KiB events
+export const RUN_JOURNAL_MAX_SEGMENT_BYTES = 4 * 1024 * 1024; // 4 MiB
+
 export class RunStateStore {
   constructor(private readonly root: StateRoot, private readonly authority: CliMutationAuthority, private readonly now: () => Date = () => new Date()) {
     assertCliMutationAuthority(authority);
@@ -230,7 +233,11 @@ export class RunStateStore {
 
   private runJournal(runId: string): Journal<RunEventV1> {
     const journalDir = path.join(this.runDir(runId), 'journal');
-    return new Journal<RunEventV1>(journalDir, `runs/${safeKey(runId, 'run_id')}`, { now: this.now });
+    return new Journal<RunEventV1>(journalDir, `runs/${safeKey(runId, 'run_id')}`, {
+      now: this.now,
+      maxRecordBytes: RUN_JOURNAL_MAX_RECORD_BYTES,
+      maxSegmentBytes: RUN_JOURNAL_MAX_SEGMENT_BYTES,
+    });
   }
 
   private async migrateLegacyEventsIfNeeded(runId: string, journal: Journal<RunEventV1>): Promise<void> {

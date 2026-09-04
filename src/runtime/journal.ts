@@ -170,6 +170,17 @@ function syncPathToDisk(targetPath: string): void {
   }
 }
 
+export function writeAllSync(fd: number, buffer: Buffer): void {
+  let written = 0;
+  while (written < buffer.length) {
+    const bytesWritten = fs.writeSync(fd, buffer, written, buffer.length - written);
+    if (bytesWritten === 0) {
+      throw new Error('E_JOURNAL_WRITE_STALL');
+    }
+    written += bytesWritten;
+  }
+}
+
 export function sha256(value: string | Buffer): string {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
@@ -460,9 +471,10 @@ export class Journal<T = unknown> {
       }
 
       // Append and fsync active segment file before updating head
+      const buffer = Buffer.from(line, 'utf8');
       const fd = fs.openSync(activeSegmentPath, 'a', 0o600);
       try {
-        fs.writeSync(fd, line);
+        writeAllSync(fd, buffer);
         fs.fsyncSync(fd);
       } finally {
         fs.closeSync(fd);

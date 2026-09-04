@@ -663,4 +663,24 @@ describe('CLI integration for cancellation and state transition invariants', () 
     expect(ev2.sequence).toBe(1);
     expect(store.readEvents(runLong.run_id)).toHaveLength(1);
   });
+
+  it('supports appending events near the 64 KiB event limit without E_JOURNAL_RECORD_TOO_LARGE', async () => {
+    const root = projectStateRoot(workspace());
+    const authority = createCliMutationAuthority(root);
+    const store = new RunStateStore(root, authority);
+    const run = await store.create('run-large-event', 'goal');
+
+    // Create a structured payload that, together with the RunEventV1 structure, is near 63 KiB
+    // Each string is under 2048 chars to avoid single-string redaction truncation
+    const payload: Record<string, string> = {};
+    for (let i = 0; i < 31; i++) {
+      payload[`field_${i}`] = 'x'.repeat(2000);
+    }
+    const ev = await store.appendEvent(run.run_id, 'large_data', payload);
+    expect(ev.sequence).toBe(1);
+
+    const read = store.readEvents(run.run_id);
+    expect(read).toHaveLength(1);
+    expect((read[0]?.payload as any)?.field_0).toBe('x'.repeat(2000));
+  });
 });
