@@ -8,6 +8,7 @@ import {
   isMainEntry,
   parseHookInput,
   persistFollowup,
+  preToolAudit,
   redactHookValue,
   resolveOmcuEntrypoint,
   responseForEvent,
@@ -68,6 +69,37 @@ describe('Cursor lifecycle hooks', () => {
     const source = fs.readFileSync(path.join(root, 'hooks/omcu-hook.mjs'), 'utf8');
     expect(source).not.toMatch(/writeFile|appendFile|mkdir|verification\s*[:=]|passes\s*[:=]/);
     expect(source).not.toMatch(/permission\s*:\s*['"]allow|sandbox(?:ed)?\s*:\s*true/i);
+  });
+
+  it('preToolAudit evaluates safety through CLI test runner', () => {
+    expect(preToolAudit('{"command":"npm test"}', {})).toEqual({ safe: true });
+
+    const denyRunner = () => ({
+      status: 1,
+      stdout: JSON.stringify({ ok: false, dispatchResult: { reason: 'Destructive deletion blocked' } }),
+      stderr: '',
+    });
+    expect(preToolAudit('{"command":"rm -rf /"}', { CURSOR_PLUGIN_ROOT: root }, denyRunner as any))
+      .toEqual({ safe: false, reason: 'Destructive deletion blocked' });
+
+    const allowRunner = () => ({
+      status: 0,
+      stdout: JSON.stringify({ ok: true, dispatchResult: { reason: undefined } }),
+      stderr: '',
+    });
+    expect(preToolAudit('{"command":"npm test"}', { CURSOR_PLUGIN_ROOT: root }, allowRunner as any))
+      .toEqual({ safe: true });
+  });
+
+  it('blocks destructive commands end-to-end with status 1 and OMCU_HOOK_SAFETY_DENY', () => {
+    const result = spawnSync(process.execPath, [path.join(root, 'hooks/omcu-hook.mjs'), 'preToolUse'], {
+      input: JSON.stringify({ tool_name: 'Shell', tool_input: { command: 'rm -rf /' } }),
+      encoding: 'utf8',
+      env: { ...process.env, CURSOR_PLUGIN_ROOT: root },
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('OMCU_HOOK_SAFETY_DENY');
+    expect(result.stderr).toContain('Destructive recursive deletion');
   });
 });
 

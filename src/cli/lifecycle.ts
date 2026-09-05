@@ -497,8 +497,16 @@ export async function handleLifecycle(context: CliContext): Promise<number | nul
         let fixtureInput: unknown;
         if (fixtureStr.startsWith('@') || fs.existsSync(fixtureStr)) {
           const filePath = fixtureStr.startsWith('@') ? fixtureStr.slice(1) : fixtureStr;
-          fixtureInput = JSON.parse(fs.readFileSync(path.resolve(context.cwd, filePath), 'utf8'));
+          const resolvedPath = path.resolve(context.cwd, filePath);
+          const stat = fs.statSync(resolvedPath);
+          if (stat.size > 1024 * 1024) {
+            throw new Error('E_HOOK_INPUT_TOO_LARGE');
+          }
+          fixtureInput = JSON.parse(fs.readFileSync(resolvedPath, 'utf8'));
         } else {
+          if (Buffer.byteLength(fixtureStr, 'utf8') > 1024 * 1024) {
+            throw new Error('E_HOOK_INPUT_TOO_LARGE');
+          }
           fixtureInput = JSON.parse(fixtureStr);
         }
         const dispatchResult = await dispatchHook(event, fixtureInput, { cwd: context.cwd });

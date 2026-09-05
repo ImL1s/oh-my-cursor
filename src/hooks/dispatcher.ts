@@ -1,11 +1,12 @@
 import crypto from 'node:crypto';
 import { getHookRegistry } from './registry.js';
 import { recordHookTrace } from './trace.js';
-import type {
-  CursorNativeHookEvent,
-  HookExecutionContext,
-  HookHandlerResult,
-  HookTraceEntry,
+import {
+  CURSOR_NATIVE_HOOK_EVENTS,
+  type CursorNativeHookEvent,
+  type HookExecutionContext,
+  type HookHandlerResult,
+  type HookTraceEntry,
 } from './types.js';
 
 const MAX_INPUT_BYTES = 1024 * 1024;
@@ -75,6 +76,18 @@ export async function dispatchHook(
         throw new Error('E_HOOK_INPUT_INVALID');
       }
     }
+  } else if (rawInput !== undefined && rawInput !== null) {
+    try {
+      const serialized = JSON.stringify(rawInput);
+      if (Buffer.byteLength(serialized, 'utf8') > MAX_INPUT_BYTES) {
+        throw new Error('E_HOOK_INPUT_TOO_LARGE');
+      }
+    } catch (e) {
+      if (e instanceof Error && e.message === 'E_HOOK_INPUT_TOO_LARGE') {
+        throw e;
+      }
+      throw new Error('E_HOOK_INPUT_INVALID');
+    }
   }
 
   // Redact input for safety (passwords, tokens, cookies)
@@ -104,6 +117,18 @@ export async function dispatchHook(
 
   // 3. Match native hook event
   const nativeEvent = event as CursorNativeHookEvent;
+  if (!CURSOR_NATIVE_HOOK_EVENTS.includes(nativeEvent)) {
+    return {
+      success: false,
+      event,
+      response: {},
+      durationMs: Date.now() - start,
+      denied: true,
+      reason: `Unknown or unsupported hook event: ${event}`,
+      errorCode: 'E_HOOK_UNKNOWN_EVENT',
+      results: [],
+    };
+  }
   const registry = getHookRegistry();
   const handlers = registry.getOrderedHandlersForEvent(nativeEvent);
 
@@ -124,7 +149,7 @@ export async function dispatchHook(
     toolName: options?.toolName ?? (typeof inputObj.tool_name === 'string' ? inputObj.tool_name : undefined),
     toolInput: typeof inputObj.tool_input === 'object' && inputObj.tool_input !== null
       ? (inputObj.tool_input as Record<string, unknown>)
-      : undefined,
+      : (typeof inputObj === 'object' && inputObj !== null ? inputObj : undefined),
     toolOutput: inputObj.tool_output,
     agentResponse: typeof inputObj.agent_response === 'string' ? inputObj.agent_response : undefined,
     prompt: typeof inputObj.prompt === 'string' ? inputObj.prompt : undefined,
