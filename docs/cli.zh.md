@@ -287,7 +287,9 @@ Do not edit this block manually; it is generated from `COMMAND_SCHEMAS`.
 - `omcu memory show` | options: --id:string required | positionals: none
 - `omcu memory search` | options: --query:string required; --limit:integer default=20 | positionals: none
 - `omcu memory export` | options: none | positionals: none
-- `omcu memory import` | options: --file:string required | positionals: none
+- `omcu memory import` | options: --file:string required; --conflict:string default="reject"; --dry-run:flag | positionals: none
+- `omcu memory delete` | options: --id:string required; --expected-updated-at:string | positionals: none
+- `omcu memory doctor` | options: --repair:flag | positionals: none
 - `omcu memory rescan` | options: none | positionals: none
 - `omcu notify` | options: none | positionals: none
 - `omcu notify status` | options: none | positionals: none
