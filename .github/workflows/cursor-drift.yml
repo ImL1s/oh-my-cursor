@@ -21,21 +21,6 @@ jobs:
       - run: npm run build
       - name: Verify existing parity matrix
         run: npm run parity
-      - name: Inspect Cursor SDK and plugin reference updates
-        run: |
-          set -euo pipefail
-          node -e '
-            const fs = require("fs");
-            const sdk = JSON.parse(fs.readFileSync("parity/cursor/sdk.lock.json", "utf8"));
-            const plugins = JSON.parse(fs.readFileSync("parity/cursor/plugins.lock.json", "utf8"));
-            const cookbook = JSON.parse(fs.readFileSync("parity/cursor/cookbook.lock.json", "utf8"));
-            console.log("Pinned Cursor SDK version:", sdk.version);
-            console.log("Pinned cursor/plugins commit:", plugins.commit);
-            console.log("Pinned cursor/cookbook commit:", cookbook.commit);
-          '
-          echo "Checking npm registry for @cursor/sdk releases..."
-          npm view @cursor/sdk version || true
-          echo "Checking cursor/plugins and cursor/cookbook remote commits..."
-          git ls-remote https://github.com/cursor/plugins.git HEAD || true
-          git ls-remote https://github.com/cursor/cookbook.git HEAD || true
-          echo "NOTE: Cursor SDK pins must be updated deliberately with clean capability diffs."
+      - name: Check Cursor SDK and reference drift against pinned locks
+        run: node scripts/check-cursor-drift.mjs
+

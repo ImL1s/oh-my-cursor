@@ -21,20 +21,6 @@ jobs:
       - run: npm run build
       - name: Verify existing parity matrix
         run: npm run parity
-      - name: Inspect OMC / OMX / OMO upstream drift
-        run: |
-          set -euo pipefail
-          node -e '
-            const fs = require("fs");
-            const omc = JSON.parse(fs.readFileSync("parity/upstreams/omc.lock.json", "utf8"));
-            const omx = JSON.parse(fs.readFileSync("parity/upstreams/omx.lock.json", "utf8"));
-            const omo = JSON.parse(fs.readFileSync("parity/upstreams/omo.lock.json", "utf8"));
-            console.log("Pinned OMC commit:", omc.commit);
-            console.log("Pinned OMX commit:", omx.commit);
-            console.log("Pinned OMO commit:", omo.commit);
-          '
-          echo "Checking remote repositories for upstream updates..."
-          git ls-remote https://github.com/Yeachan-Heo/oh-my-claudecode.git HEAD || true
-          git ls-remote https://github.com/Yeachan-Heo/oh-my-codex.git HEAD || true
-          git ls-remote https://github.com/code-yeongyu/oh-my-openagent.git HEAD || true
-          echo "NOTE: Upstream pins must never be advanced automatically without manual review."
+      - name: Check OMC / OMX / OMO upstream drift against pinned commits
+        run: node scripts/check-upstream-drift.mjs
+
