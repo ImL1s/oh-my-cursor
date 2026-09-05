@@ -401,9 +401,25 @@ function normalizeTask(task: TeamTask): TeamTask {
       };
     }
     if (updatedClaim.acquired_at === undefined) {
+      const leasedUntilMs = Date.parse(updatedClaim.leased_until);
+      const createdAtMs = Date.parse(task.created_at);
+      let derivedMs: number;
+      if (Number.isFinite(leasedUntilMs)) {
+        derivedMs = leasedUntilMs - CLAIM_LEASE_MS;
+        if (Number.isFinite(createdAtMs)) {
+          derivedMs = Math.max(createdAtMs, derivedMs);
+        }
+        if (derivedMs > leasedUntilMs) {
+          derivedMs = leasedUntilMs;
+        }
+      } else if (Number.isFinite(createdAtMs)) {
+        derivedMs = createdAtMs;
+      } else {
+        derivedMs = 0;
+      }
       updatedClaim = {
         ...updatedClaim,
-        acquired_at: task.created_at,
+        acquired_at: new Date(derivedMs).toISOString(),
       };
     }
     normalized = {

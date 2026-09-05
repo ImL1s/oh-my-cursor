@@ -651,6 +651,44 @@ describe('team tasks lifecycle & generation fencing', { timeout: 20_000 }, () =>
       if (renewAmbig.ok) return;
       expect(renewAmbig.error).toBe('process_ambiguous');
     });
+
+    it('derives acquired_at from leased_until for legacy claims so tasks older than 24 hours can be renewed', async () => {
+      const { root, teamName } = workspace();
+      // Task created 48 hours ago
+      const createdAt = '2026-09-03T10:00:00.000Z';
+      const task = await createTask(root, teamName, {
+        subject: 'Old Task Legacy Claim',
+        description: 'Created 2 days ago',
+      }, () => new Date(createdAt));
+
+      // Simulate a legacy claim from 5 minutes ago without acquired_at or generation
+      const now = new Date('2026-09-05T10:05:00.000Z');
+      const leasedUntil = new Date('2026-09-05T10:15:00.000Z').toISOString();
+      const filePath = path.join(teamTasksDir(root, teamName), `task-${task.id}.json`);
+      const raw = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      raw.status = 'in_progress';
+      raw.owner = 'worker-1';
+      raw.claim = {
+        owner: 'worker-1',
+        token: 'legacy-token-123',
+        leased_until: leasedUntil,
+      };
+      fs.writeFileSync(filePath, JSON.stringify(raw));
+
+      // Try renewing the legacy claim now (2 days after creation, but only 5 min into the lease)
+      const renew = await renewTaskClaim(
+        root,
+        teamName,
+        task.id,
+        'worker-1',
+        'legacy-token-123',
+        { now: () => now },
+      );
+      expect(renew.ok).toBe(true);
+      if (!renew.ok) return;
+      expect(renew.task.claim?.acquired_at).toBe('2026-09-05T10:00:00.000Z');
+      expect(renew.task.claim?.generation).toBe(1);
+    });
   });
 
   describe('Lease Expiry, Duplicate Work Prevention & Safe Reclaim', () => {
