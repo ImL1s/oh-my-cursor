@@ -1254,6 +1254,65 @@ describe('team tasks lifecycle & generation fencing', { timeout: 20_000 }, () =>
       expect(finalTask2?.status).toBe('blocked');
     });
 
+    it('discovers and unblocks journal-only dependent tasks when prerequisite completes', async () => {
+      const { root, teamName } = workspace();
+      const task1 = await createTask(root, teamName, { subject: 'Prereq', description: 'Step 1' });
+      const task2 = await createTask(root, teamName, { subject: 'Dependent', description: 'Step 2', blocked_by: [task1.id] });
+
+      expect(task2.status).toBe('blocked');
+
+      // Delete task2 snapshot JSON from disk, simulating crash/loss while journal remains
+      const task2Path = path.join(teamTasksDir(root, teamName), `task-${task2.id}.json`);
+      fs.unlinkSync(task2Path);
+      expect(fs.existsSync(task2Path)).toBe(false);
+
+      // Complete task1
+      const c1 = await claimTask(root, teamName, task1.id, 'worker-1');
+      expect(c1.ok).toBe(true);
+      if (!c1.ok) return;
+      const comp1 = await transitionTaskStatus(root, teamName, task1.id, 'in_progress', 'completed', c1.claimToken);
+      expect(comp1.ok).toBe(true);
+
+      // unblockDependentTasks should have discovered task2 via task-journals, unblocked it to pending, and restored snapshot
+      expect(fs.existsSync(task2Path)).toBe(true);
+      const readTask2 = await readTask(root, teamName, task2.id);
+      expect(readTask2?.status).toBe('pending');
+    });
+
+    it('discovers and reblocks journal-only dependent tasks when prerequisite is reopened', async () => {
+      const { root, teamName } = workspace();
+      const task1 = await createTask(root, teamName, { subject: 'Prereq', description: 'Step 1' });
+      const task2 = await createTask(root, teamName, { subject: 'Dependent', description: 'Step 2', blocked_by: [task1.id] });
+
+      // Complete task1 -> task2 unblocks to pending
+      const c1 = await claimTask(root, teamName, task1.id, 'worker-1');
+      expect(c1.ok).toBe(true);
+      if (!c1.ok) return;
+      await transitionTaskStatus(root, teamName, task1.id, 'in_progress', 'completed', c1.claimToken);
+
+      // Complete task2
+      const c2 = await claimTask(root, teamName, task2.id, 'worker-2');
+      expect(c2.ok).toBe(true);
+      if (!c2.ok) return;
+      await transitionTaskStatus(root, teamName, task2.id, 'in_progress', 'completed', c2.claimToken, { result: 'done2' });
+
+      // Delete task2 snapshot JSON
+      const task2Path = path.join(teamTasksDir(root, teamName), `task-${task2.id}.json`);
+      fs.unlinkSync(task2Path);
+      expect(fs.existsSync(task2Path)).toBe(false);
+
+      // Now reopen task1
+      const reopen = await reopenTask(root, teamName, task1.id);
+      expect(reopen.ok).toBe(true);
+
+      // reblockDependentTasks should have discovered task2 from journal, invalidated it to blocked, and restored snapshot
+      expect(fs.existsSync(task2Path)).toBe(true);
+      const readTask2 = await readTask(root, teamName, task2.id);
+      expect(readTask2?.status).toBe('blocked');
+      expect(readTask2?.completed_at).toBeUndefined();
+      expect(readTask2?.result).toBeUndefined();
+    });
+
     it('caps initial leaseMs to MAX_TOTAL_LEASE_MS on claimTask and reclaimTask', async () => {
       const { root, teamName } = workspace();
       const task = await createTask(root, teamName, { subject: 'Lease Cap', description: 'Bound check' });

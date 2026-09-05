@@ -14,6 +14,7 @@ import {
   assertSafeWorkerName,
   readTeamConfig,
   teamConfigPath,
+  teamStateDir,
   teamTaskJournalDir,
   teamTasksDir,
   writeTeamConfig,
@@ -653,14 +654,36 @@ function checkDependencyCycle(
   }
 }
 
+function enumerateAllTaskIds(root: StateRoot, teamName: string): Set<string> {
+  const taskIds = new Set<string>();
+
+  const tasksDir = teamTasksDir(root, teamName);
+  if (fs.existsSync(tasksDir)) {
+    for (const entry of fs.readdirSync(tasksDir, { withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      const match = /^task-(\d{1,20})\.json$/.exec(entry.name);
+      if (match) {
+        taskIds.add(match[1]!);
+      }
+    }
+  }
+
+  const journalsBaseDir = path.join(teamStateDir(root, teamName), 'task-journals');
+  if (fs.existsSync(journalsBaseDir)) {
+    for (const entry of fs.readdirSync(journalsBaseDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      if (/^\d{1,20}$/.test(entry.name)) {
+        taskIds.add(entry.name);
+      }
+    }
+  }
+
+  return taskIds;
+}
+
 async function unblockDependentTasks(root: StateRoot, teamName: string, completedTaskId: string, now: () => Date): Promise<void> {
-  const dir = teamTasksDir(root, teamName);
-  if (!fs.existsSync(dir)) return;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (!entry.isFile()) continue;
-    const match = /^task-(\d+)\.json$/.exec(entry.name);
-    if (!match) continue;
-    const otherId = match[1]!;
+  const taskIds = enumerateAllTaskIds(root, teamName);
+  for (const otherId of taskIds) {
     if (otherId === completedTaskId) continue;
     await withDirectoryLock(taskFilePath(root, teamName, otherId), async () => {
       const other = readTaskUnlocked(root, teamName, otherId);
@@ -702,20 +725,13 @@ async function reblockDependentTasks(
   now: () => Date,
   writeOptions?: AtomicWriteOptions,
 ): Promise<void> {
-  const dir = teamTasksDir(root, teamName);
-  if (!fs.existsSync(dir)) return;
-
   const toCheck = new Set<string>([reopenedTaskId]);
   while (toCheck.size > 0) {
     const currentUncompletedId = toCheck.values().next().value as string;
     toCheck.delete(currentUncompletedId);
 
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isFile()) continue;
-      const match = /^task-(\d+)\.json$/.exec(entry.name);
-      if (!match) continue;
-      const otherId = match[1]!;
+    const taskIds = enumerateAllTaskIds(root, teamName);
+    for (const otherId of taskIds) {
       if (otherId === currentUncompletedId) continue;
 
       await withDirectoryLock(taskFilePath(root, teamName, otherId), async () => {
@@ -769,14 +785,10 @@ export function canTransitionTaskStatus(from: TeamTaskStatus, to: TeamTaskStatus
 }
 
 export async function listTasks(root: StateRoot, teamName: string): Promise<readonly TeamTask[]> {
-  const dir = teamTasksDir(root, teamName);
-  if (!fs.existsSync(dir)) return [];
+  const taskIds = enumerateAllTaskIds(root, teamName);
   const tasks: TeamTask[] = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (!entry.isFile()) continue;
-    const match = /^task-(\d+)\.json$/.exec(entry.name);
-    if (!match) continue;
-    const task = readTaskUnlocked(root, teamName, match[1]!);
+  for (const id of taskIds) {
+    const task = readTaskUnlocked(root, teamName, id);
     if (task) tasks.push(task);
   }
   tasks.sort((left, right) => Number(left.id) - Number(right.id));
@@ -940,13 +952,10 @@ function isRequestId(value: string): boolean {
 }
 
 function findTaskByRequestId(root: StateRoot, teamName: string, requestId: string): TeamTask | undefined {
-  const dir = teamTasksDir(root, teamName);
-  if (!fs.existsSync(dir)) return undefined;
+  const taskIds = enumerateAllTaskIds(root, teamName);
   let found: TeamTask | undefined;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const match = entry.isFile() ? /^task-(\d+)\.json$/.exec(entry.name) : null;
-    if (match === null) continue;
-    const task = readTaskUnlocked(root, teamName, match[1]!);
+  for (const id of taskIds) {
+    const task = readTaskUnlocked(root, teamName, id);
     if (task?.request_id !== requestId) continue;
     const expectedPayload = canonicalTaskRequestSha256({
       subject: task.subject,
