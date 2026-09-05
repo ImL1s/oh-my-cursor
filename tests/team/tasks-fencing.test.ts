@@ -988,6 +988,39 @@ describe('team tasks fencing & reconciliation', { timeout: 20_000 }, () => {
       await expect(listTasks(root, teamName)).rejects.toThrow('E_TEAM_TASK_CORRUPT');
     });
 
+    it('propagates corrupt task journal as E_TEAM_TASK_CORRUPT when snapshot is absent', async () => {
+      const { root, teamName } = workspace();
+      const task = await createTask(root, teamName, {
+        subject: 'Journal Corruption Test',
+        description: 'Ensure corrupt journal is not reported as absent',
+      });
+
+      // Delete snapshot JSON file so it must rebuild from journal
+      const taskPath = path.join(teamTasksDir(root, teamName), `task-${task.id}.json`);
+      fs.unlinkSync(taskPath);
+      expect(fs.existsSync(taskPath)).toBe(false);
+
+      // Corrupt the journal head
+      const journalDir = teamTaskJournalDir(root, teamName, task.id);
+      const headFile = path.join(journalDir, 'head.json');
+      fs.writeFileSync(headFile, '{"broken_head": true, bad_json');
+
+      // rebuildTaskFromJournal must throw E_TEAM_TASK_CORRUPT instead of returning null
+      expect(() => rebuildTaskFromJournal(root, teamName, task.id)).toThrow('E_TEAM_TASK_CORRUPT');
+
+      // readTask must throw E_TEAM_TASK_CORRUPT instead of returning null
+      await expect(readTask(root, teamName, task.id)).rejects.toThrow('E_TEAM_TASK_CORRUPT');
+
+      // listTasks must throw E_TEAM_TASK_CORRUPT instead of silently omitting the task
+      await expect(listTasks(root, teamName)).rejects.toThrow('E_TEAM_TASK_CORRUPT');
+    });
+
+    it('returns null for truly absent task without journal or snapshot', async () => {
+      const { root, teamName } = workspace();
+      expect(await readTask(root, teamName, '9999')).toBeNull();
+      expect(rebuildTaskFromJournal(root, teamName, '9999')).toBeNull();
+    });
+
     it('fences prerequisite checks against concurrent reopen', async () => {
       const { root, teamName } = workspace();
       // 1. Create Prereq (Task 1) and complete it

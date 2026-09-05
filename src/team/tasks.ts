@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { atomicCreateJson, atomicWriteJson, withDirectoryLock, type AtomicWriteOptions } from '../runtime/atomic.js';
-import { Journal, type JournalRecord } from '../runtime/journal.js';
+import { Journal, type JournalHead, type JournalRecord } from '../runtime/journal.js';
 import {
   classifyProcessLiveness,
   processNonceSha256,
@@ -468,22 +468,52 @@ async function appendTaskJournalEvent(
 }
 
 export function rebuildTaskFromJournal(root: StateRoot, teamName: string, taskId: string): TeamTask | null {
+  const dir = teamTaskJournalDir(root, teamName, taskId);
+  if (!fs.existsSync(dir)) return null;
+
+  const journal = taskJournal(root, teamName, taskId, () => new Date());
+  let head: JournalHead | null;
   try {
-    const journal = taskJournal(root, teamName, taskId, () => new Date());
-    const head = journal.readHead();
-    if (head === null || head.head_sequence === 0) return null;
-    const records = journal.readRange();
-    let currentTask: TeamTask | null = null;
-    for (const record of records) {
-      const p = (record as JournalRecord<TeamTaskJournalEvent>).payload;
-      if (p && 'task' in p && p.task) {
-        currentTask = p.task;
+    head = journal.readHead();
+  } catch (error) {
+    throw new Error('E_TEAM_TASK_CORRUPT', { cause: error });
+  }
+
+  if (head === null || head.head_sequence === 0) {
+    const segmentsDir = path.join(dir, 'segments');
+    if (fs.existsSync(segmentsDir)) {
+      try {
+        const files = fs.readdirSync(segmentsDir);
+        if (files.length > 0) {
+          throw new Error('E_TEAM_TASK_CORRUPT');
+        }
+      } catch (error) {
+        if ((error as Error).message === 'E_TEAM_TASK_CORRUPT') throw error;
       }
     }
-    return currentTask;
-  } catch {
     return null;
   }
+
+  let records: readonly JournalRecord<TeamTaskJournalEvent>[];
+  try {
+    records = journal.readRange();
+  } catch (error) {
+    throw new Error('E_TEAM_TASK_CORRUPT', { cause: error });
+  }
+
+  let currentTask: TeamTask | null = null;
+  for (const record of records) {
+    const p = (record as JournalRecord<TeamTaskJournalEvent>).payload;
+    if (p && 'task' in p && p.task) {
+      currentTask = p.task;
+    }
+  }
+
+  if (currentTask === null || !isTeamTask(currentTask) || currentTask.id !== taskId) {
+    throw new Error('E_TEAM_TASK_CORRUPT');
+  }
+
+  return currentTask;
 }
 
 function leaseExpired(claim: TeamTaskClaim | undefined, now: Date): boolean {
@@ -517,11 +547,14 @@ function readTaskUnlocked(root: StateRoot, teamName: string, taskId: string): Te
   const file = taskFilePath(root, teamName, taskId);
   if (!fs.existsSync(file)) {
     const recovered = rebuildTaskFromJournal(root, teamName, taskId);
-    if (recovered && isTeamTask(recovered) && recovered.id === taskId) {
+    if (recovered === null) {
+      return null;
+    }
+    if (isTeamTask(recovered) && recovered.id === taskId) {
       writeTaskUnlocked(root, teamName, recovered);
       return normalizeTask(recovered);
     }
-    return null;
+    throw new Error('E_TEAM_TASK_CORRUPT');
   }
   try {
     const raw = fs.readFileSync(file, 'utf8');
