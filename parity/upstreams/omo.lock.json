@@ -1,0 +1,232 @@
+{
+  "schema_version": 1,
+  "upstream_id": "omo",
+  "repository": "code-yeongyu/oh-my-openagent",
+  "commit": "888a26b6182ffbc5369cda3d35bd3eafb389dd96",
+  "default_license": "Clean-room behavioral specification (No upstream copy)",
+  "observed_at": "2026-07-24T00:00:00.000Z",
+  "total_items": 9,
+  "items": [
+    {
+      "id": "omo_orchestrate",
+      "source_project": "code-yeongyu/oh-my-openagent",
+      "commit": "888a26b6182ffbc5369cda3d35bd3eafb389dd96",
+      "path": "specs/workflows/orchestrate.md",
+      "hash_sha256": "43866f40ae2ed712c186bc00c0b1e3d87830139f411828f8adee449183ed3514",
+      "license_class": "clean_room_required",
+      "surface_family": "workflow",
+      "source_name": "omo-orchestrate",
+      "aliases": [
+        "orchestrate"
+      ],
+      "invocation_grammar": "/orchestrate <spec>",
+      "agents_models_tools_hooks": [
+        "omo-lead",
+        "omo-worker"
+      ],
+      "state_lifecycle": ".omcu/workflows/orchestrate.json",
+      "parallel_team_behavior": "Independent worktree-based agent execution orchestrator",
+      "permission_requirements": [
+        "read",
+        "write",
+        "shell"
+      ],
+      "artifacts_verification": "Worktree isolation plan and merge receipts",
+      "cancel_resume_recovery": "Orphaned worktrees cleaned up on failure",
+      "upstream_evidence": "Independently specified clean-room multi-worktree orchestration"
+    },
+    {
+      "id": "omo_consensus_review",
+      "source_project": "code-yeongyu/oh-my-openagent",
+      "commit": "888a26b6182ffbc5369cda3d35bd3eafb389dd96",
+      "path": "specs/workflows/consensus-review.md",
+      "hash_sha256": "845752605197c7f1b24d85ae8638cb2b60a60fa06ae0f838fd23b156fa64a154",
+      "license_class": "clean_room_required",
+      "surface_family": "workflow",
+      "source_name": "omo-consensus-review",
+      "aliases": [
+        "consensus-review"
+      ],
+      "invocation_grammar": "/consensus-review [target]",
+      "agents_models_tools_hooks": [
+        "omo-inspector"
+      ],
+      "state_lifecycle": ".omcu/reviews/consensus.json",
+      "parallel_team_behavior": "Multi-agent consensus gate where 2+ independent reviewers must agree",
+      "permission_requirements": [
+        "read"
+      ],
+      "artifacts_verification": "Consensus score matrix and signature block",
+      "cancel_resume_recovery": "Re-evaluates only discordant review sections",
+      "upstream_evidence": "Independently specified clean-room consensus review"
+    },
+    {
+      "id": "omo_context_router",
+      "source_project": "code-yeongyu/oh-my-openagent",
+      "commit": "888a26b6182ffbc5369cda3d35bd3eafb389dd96",
+      "path": "specs/workflows/context-router.md",
+      "hash_sha256": "afb138f4a0b90b331f32a4ab4efebeb30320a592f0524c7baae0a421042633ba",
+      "license_class": "clean_room_required",
+      "surface_family": "workflow",
+      "source_name": "omo-context-router",
+      "aliases": [
+        "context-router"
+      ],
+      "invocation_grammar": "/context-router [auto|manual]",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": ".omcu/routing/context.json",
+      "parallel_team_behavior": "Context window utilization monitor and model tier switcher",
+      "permission_requirements": [
+        "read"
+      ],
+      "artifacts_verification": "Context window metrics and tier switch logs",
+      "cancel_resume_recovery": "Graceful fallback to standard model context",
+      "upstream_evidence": "Independently specified clean-room context routing"
+    },
+    {
+      "id": "omo_worktree_runner",
+      "source_project": "code-yeongyu/oh-my-openagent",
+      "commit": "888a26b6182ffbc5369cda3d35bd3eafb389dd96",
+      "path": "specs/tools/worktree-runner.md",
+      "hash_sha256": "68ea9296fa355f6b24b78894ed695cbd00fd142fe521017930db20a4d7e71c75",
+      "license_class": "clean_room_required",
+      "surface_family": "tool",
+      "source_name": "omo-worktree-runner",
+      "aliases": [
+        "worktree-runner"
+      ],
+      "invocation_grammar": "tool:worktree_spawn",
+      "agents_models_tools_hooks": [
+        "omo-worker"
+      ],
+      "state_lifecycle": ".omcu/worktrees/index.json",
+      "parallel_team_behavior": "Creates isolated git worktrees for non-conflicting agent execution",
+      "permission_requirements": [
+        "shell",
+        "write"
+      ],
+      "artifacts_verification": "Worktree lifecycle logs and commit diffs",
+      "cancel_resume_recovery": "Prunes stale worktrees and detaches branches safely",
+      "upstream_evidence": "Independently specified clean-room git worktree runner"
+    },
+    {
+      "id": "omo_lead",
+      "source_project": "code-yeongyu/oh-my-openagent",
+      "commit": "888a26b6182ffbc5369cda3d35bd3eafb389dd96",
+      "path": "specs/agents/lead.md",
+      "hash_sha256": "d839e7b73ff019010ae357b33d23f3c4d4de9ac8746b2b0f375aa6bc7a7c12ba",
+      "license_class": "clean_room_required",
+      "surface_family": "agent",
+      "source_name": "omo-lead",
+      "aliases": [
+        "lead"
+      ],
+      "invocation_grammar": "subagent:lead",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": "Orchestrator lead state",
+      "parallel_team_behavior": "Coordinates parallel worker worktrees and reviews outputs",
+      "permission_requirements": [
+        "read",
+        "write",
+        "shell"
+      ],
+      "artifacts_verification": "Lead task allocations and worktree aggregation logs",
+      "cancel_resume_recovery": "Re-allocates orphaned tasks if worker fails",
+      "upstream_evidence": "Independently specified clean-room lead agent specification"
+    },
+    {
+      "id": "omo_worker",
+      "source_project": "code-yeongyu/oh-my-openagent",
+      "commit": "888a26b6182ffbc5369cda3d35bd3eafb389dd96",
+      "path": "specs/agents/worker.md",
+      "hash_sha256": "d5000878c69f90c9387211188a365f95bb485696a6a26a6f847da57e769f4720",
+      "license_class": "clean_room_required",
+      "surface_family": "agent",
+      "source_name": "omo-worker",
+      "aliases": [
+        "worker"
+      ],
+      "invocation_grammar": "subagent:worker",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": "Isolated worktree state",
+      "parallel_team_behavior": "Executes implementation tasks inside dedicated git worktree",
+      "permission_requirements": [
+        "read",
+        "write",
+        "shell"
+      ],
+      "artifacts_verification": "Worktree isolated commits and test proofs",
+      "cancel_resume_recovery": "Isolated worktree discard on critical error",
+      "upstream_evidence": "Independently specified clean-room worker agent specification"
+    },
+    {
+      "id": "omo_inspector",
+      "source_project": "code-yeongyu/oh-my-openagent",
+      "commit": "888a26b6182ffbc5369cda3d35bd3eafb389dd96",
+      "path": "specs/agents/inspector.md",
+      "hash_sha256": "6e92e08bc7bf1bf62dfac32b446e04f8761dbdce6e7f54c1d64e4d1ce52b416a",
+      "license_class": "clean_room_required",
+      "surface_family": "agent",
+      "source_name": "omo-inspector",
+      "aliases": [
+        "inspector"
+      ],
+      "invocation_grammar": "subagent:inspector",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": "Stateless inspection",
+      "parallel_team_behavior": "Evaluates worktree diffs against contract specifications",
+      "permission_requirements": [
+        "read"
+      ],
+      "artifacts_verification": "Independent inspection verdict",
+      "cancel_resume_recovery": "N/A",
+      "upstream_evidence": "Independently specified clean-room inspector agent specification"
+    },
+    {
+      "id": "omo_pre_step_gate",
+      "source_project": "code-yeongyu/oh-my-openagent",
+      "commit": "888a26b6182ffbc5369cda3d35bd3eafb389dd96",
+      "path": "specs/hooks/pre-step-gate.md",
+      "hash_sha256": "5c4b35a59fbf51e49cf2bb3bce37f92bbe86438af5e5e688f9f14946f2a5c970",
+      "license_class": "clean_room_required",
+      "surface_family": "hook",
+      "source_name": "omo-pre-step-gate",
+      "aliases": [
+        "pre-step-gate"
+      ],
+      "invocation_grammar": "hook:pre-step-gate",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": ".omcu/hooks/gates.json",
+      "parallel_team_behavior": "Pre-flight safety gate before applying destructive file edits",
+      "permission_requirements": [
+        "read"
+      ],
+      "artifacts_verification": "Gate check receipts",
+      "cancel_resume_recovery": "Aborts step execution if safety invariant violated",
+      "upstream_evidence": "Independently specified clean-room pre-step gate hook"
+    },
+    {
+      "id": "omo_post_step_audit",
+      "source_project": "code-yeongyu/oh-my-openagent",
+      "commit": "888a26b6182ffbc5369cda3d35bd3eafb389dd96",
+      "path": "specs/hooks/post-step-audit.md",
+      "hash_sha256": "ba9710821cb42e71402f2b3eacb770e197a7c4cadc7ecbfaf511b54ad75f1235",
+      "license_class": "clean_room_required",
+      "surface_family": "hook",
+      "source_name": "omo-post-step-audit",
+      "aliases": [
+        "post-step-audit"
+      ],
+      "invocation_grammar": "hook:post-step-audit",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": ".omcu/hooks/audit.json",
+      "parallel_team_behavior": "Post-flight audit validating changes against target requirements",
+      "permission_requirements": [
+        "read"
+      ],
+      "artifacts_verification": "Post-step audit journal",
+      "cancel_resume_recovery": "Flags anomalous diffs for human review",
+      "upstream_evidence": "Independently specified clean-room post-step audit hook"
+    }
+  ]
+}

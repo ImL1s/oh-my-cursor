@@ -1,0 +1,41 @@
+name: cursor-drift
+on:
+  schedule:
+    - cron: '0 5 * * 1' # Every Monday at 05:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-cursor-drift:
+    name: Check Cursor SDK & Reference Plugins Drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Verify existing parity matrix
+        run: npm run parity
+      - name: Inspect Cursor SDK and plugin reference updates
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("fs");
+            const sdk = JSON.parse(fs.readFileSync("parity/cursor/sdk.lock.json", "utf8"));
+            const plugins = JSON.parse(fs.readFileSync("parity/cursor/plugins.lock.json", "utf8"));
+            const cookbook = JSON.parse(fs.readFileSync("parity/cursor/cookbook.lock.json", "utf8"));
+            console.log("Pinned Cursor SDK version:", sdk.version);
+            console.log("Pinned cursor/plugins commit:", plugins.commit);
+            console.log("Pinned cursor/cookbook commit:", cookbook.commit);
+          '
+          echo "Checking npm registry for @cursor/sdk releases..."
+          npm view @cursor/sdk version || true
+          echo "Checking cursor/plugins and cursor/cookbook remote commits..."
+          git ls-remote https://github.com/cursor/plugins.git HEAD || true
+          git ls-remote https://github.com/cursor/cookbook.git HEAD || true
+          echo "NOTE: Cursor SDK pins must be updated deliberately with clean capability diffs."

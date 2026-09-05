@@ -1,0 +1,411 @@
+{
+  "schema_version": 1,
+  "upstream_id": "omx",
+  "repository": "Yeachan-Heo/oh-my-codex",
+  "commit": "f43034aad68ed08dd886bf7f209a0415b8a7adb4",
+  "default_license": "MIT",
+  "observed_at": "2026-07-24T00:00:00.000Z",
+  "total_items": 16,
+  "items": [
+    {
+      "id": "omx_setup",
+      "source_project": "Yeachan-Heo/oh-my-codex",
+      "commit": "f43034aad68ed08dd886bf7f209a0415b8a7adb4",
+      "path": "skills/setup/SKILL.md",
+      "hash_sha256": "9d2bea43ef64457018f37178c08604fc0c9e3a717c722547a3283f3a7845016f",
+      "license_class": "mit",
+      "surface_family": "config",
+      "source_name": "omx-setup",
+      "aliases": [
+        "setup"
+      ],
+      "invocation_grammar": "/setup [options]",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": ".omcu/config.json",
+      "parallel_team_behavior": "Local environment configuration and initialization",
+      "permission_requirements": [
+        "read",
+        "write",
+        "shell"
+      ],
+      "artifacts_verification": "Installation report and capability matrix lock",
+      "cancel_resume_recovery": "Atomic config updates with backup rollback",
+      "upstream_evidence": "Upstream setup skill in oh-my-codex"
+    },
+    {
+      "id": "omx_doctor",
+      "source_project": "Yeachan-Heo/oh-my-codex",
+      "commit": "f43034aad68ed08dd886bf7f209a0415b8a7adb4",
+      "path": "skills/doctor/SKILL.md",
+      "hash_sha256": "e57e911eca09f73f354e8c43309f2cf10172e0bfd283d4acf54e3713f1e4cc33",
+      "license_class": "mit",
+      "surface_family": "skill",
+      "source_name": "omx-doctor",
+      "aliases": [
+        "doctor"
+      ],
+      "invocation_grammar": "/doctor [check-name]",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": "Ephemeral diagnostic state",
+      "parallel_team_behavior": "Verifies environment, dependencies, and permissions",
+      "permission_requirements": [
+        "read",
+        "shell"
+      ],
+      "artifacts_verification": "Diagnostic report with remediation instructions",
+      "cancel_resume_recovery": "Re-executable on demand",
+      "upstream_evidence": "Upstream doctor diagnostic skill"
+    },
+    {
+      "id": "omx_ultragoal",
+      "source_project": "Yeachan-Heo/oh-my-codex",
+      "commit": "f43034aad68ed08dd886bf7f209a0415b8a7adb4",
+      "path": "skills/ultragoal/SKILL.md",
+      "hash_sha256": "5fccfbea39db16568544c48690a817e186cca347a4a971de58976904d7570cc5",
+      "license_class": "mit",
+      "surface_family": "workflow",
+      "source_name": "omx-ultragoal",
+      "aliases": [
+        "ultragoal",
+        "ug"
+      ],
+      "invocation_grammar": "/ultragoal <goal-spec>",
+      "agents_models_tools_hooks": [
+        "omx-analyst",
+        "omc-executor",
+        "omc-verifier"
+      ],
+      "state_lifecycle": ".omcu/workflows/ultragoal.json",
+      "parallel_team_behavior": "Goal decomposition and durable multi-session tracking",
+      "permission_requirements": [
+        "read",
+        "write",
+        "shell"
+      ],
+      "artifacts_verification": "Goal ledger, milestone receipts, completion proof",
+      "cancel_resume_recovery": "Goal ledger survives process crashes and reboots",
+      "upstream_evidence": "Upstream ultragoal durable execution"
+    },
+    {
+      "id": "omx_performance_goal",
+      "source_project": "Yeachan-Heo/oh-my-codex",
+      "commit": "f43034aad68ed08dd886bf7f209a0415b8a7adb4",
+      "path": "skills/performance-goal/SKILL.md",
+      "hash_sha256": "fd430a82d3e300dd687acb176f6d8a23f56235f2a34c6b76e9a2fbe1aff87928",
+      "license_class": "mit",
+      "surface_family": "workflow",
+      "source_name": "omx-performance-goal",
+      "aliases": [
+        "performance-goal"
+      ],
+      "invocation_grammar": "/performance-goal <target-metric>",
+      "agents_models_tools_hooks": [
+        "omc-scientist",
+        "omc-executor"
+      ],
+      "state_lifecycle": ".omcu/workflows/performance.json",
+      "parallel_team_behavior": "Evaluator-gated performance tuning loop",
+      "permission_requirements": [
+        "read",
+        "write",
+        "shell"
+      ],
+      "artifacts_verification": "Benchmark profiles and optimization diffs",
+      "cancel_resume_recovery": "Preserves baseline benchmarks across iterations",
+      "upstream_evidence": "Upstream performance goal workflow"
+    },
+    {
+      "id": "omx_autoresearch_goal",
+      "source_project": "Yeachan-Heo/oh-my-codex",
+      "commit": "f43034aad68ed08dd886bf7f209a0415b8a7adb4",
+      "path": "skills/autoresearch-goal/SKILL.md",
+      "hash_sha256": "68776221f446d2bbe2b21fa185b1f7b50b39aae3ae07e0e60e01677287a6e9cc",
+      "license_class": "mit",
+      "surface_family": "workflow",
+      "source_name": "omx-autoresearch-goal",
+      "aliases": [
+        "autoresearch-goal"
+      ],
+      "invocation_grammar": "/autoresearch-goal <research-query>",
+      "agents_models_tools_hooks": [
+        "omc-scientist",
+        "omx-analyst"
+      ],
+      "state_lifecycle": ".omcu/workflows/research-goal.json",
+      "parallel_team_behavior": "Goal-oriented literature and codebase investigation",
+      "permission_requirements": [
+        "read",
+        "write"
+      ],
+      "artifacts_verification": "Durable research brief linked to goal ledger",
+      "cancel_resume_recovery": "Checkpoints literature findings into goal state",
+      "upstream_evidence": "Upstream autoresearch-goal workflow"
+    },
+    {
+      "id": "omx_prometheus_strict",
+      "source_project": "Yeachan-Heo/oh-my-codex",
+      "commit": "f43034aad68ed08dd886bf7f209a0415b8a7adb4",
+      "path": "skills/prometheus-strict/SKILL.md",
+      "hash_sha256": "07aa253991148ceec1354094183ddcd9f1712ccd5d4cd797a52282894c03a1a4",
+      "license_class": "mit",
+      "surface_family": "workflow",
+      "source_name": "omx-prometheus-strict",
+      "aliases": [
+        "prometheus-strict"
+      ],
+      "invocation_grammar": "/prometheus-strict <feature-request>",
+      "agents_models_tools_hooks": [
+        "omx-analyst",
+        "omc-critic",
+        "omc-architect"
+      ],
+      "state_lifecycle": ".omcu/workflows/prometheus.json",
+      "parallel_team_behavior": "Fail-closed clean-room interview and planning gate",
+      "permission_requirements": [
+        "read"
+      ],
+      "artifacts_verification": "Synthesized RFC and formal ambiguity score",
+      "cancel_resume_recovery": "Preserves interview transcripts across turns",
+      "upstream_evidence": "Upstream prometheus strict planner"
+    },
+    {
+      "id": "omx_analyst",
+      "source_project": "Yeachan-Heo/oh-my-codex",
+      "commit": "f43034aad68ed08dd886bf7f209a0415b8a7adb4",
+      "path": "agents/analyst.md",
+      "hash_sha256": "698cfe2f7a4282bbd7a0535b85ed868da93aa8a760445626f9b0104a5780c396",
+      "license_class": "mit",
+      "surface_family": "agent",
+      "source_name": "omx-analyst",
+      "aliases": [
+        "analyst"
+      ],
+      "invocation_grammar": "subagent:analyst",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": "Requirements state",
+      "parallel_team_behavior": "Intake and ambiguity analysis agent",
+      "permission_requirements": [
+        "read"
+      ],
+      "artifacts_verification": "Requirements clarification document",
+      "cancel_resume_recovery": "N/A",
+      "upstream_evidence": "Upstream analyst agent"
+    },
+    {
+      "id": "omx_build_fixer",
+      "source_project": "Yeachan-Heo/oh-my-codex",
+      "commit": "f43034aad68ed08dd886bf7f209a0415b8a7adb4",
+      "path": "agents/build-fixer.md",
+      "hash_sha256": "da759b2bd2e276f26f6a89f533f769c702d3daceb866f0fe7fe957af2401afe8",
+      "license_class": "mit",
+      "surface_family": "agent",
+      "source_name": "omx-build-fixer",
+      "aliases": [
+        "build-fixer"
+      ],
+      "invocation_grammar": "subagent:build-fixer",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": "Build diagnostics",
+      "parallel_team_behavior": "Minimal diff compiler error fixer",
+      "permission_requirements": [
+        "read",
+        "write",
+        "shell"
+      ],
+      "artifacts_verification": "Targeted compile fix diff",
+      "cancel_resume_recovery": "Restores baseline if build continues failing",
+      "upstream_evidence": "Upstream build fixer agent"
+    },
+    {
+      "id": "omx_code_simplifier",
+      "source_project": "Yeachan-Heo/oh-my-codex",
+      "commit": "f43034aad68ed08dd886bf7f209a0415b8a7adb4",
+      "path": "agents/code-simplifier.md",
+      "hash_sha256": "c973f79e527a1c4d900e4b35da6b64d8fded17e4a0ba46b9847133ed8bcfe939",
+      "license_class": "mit",
+      "surface_family": "agent",
+      "source_name": "omx-code-simplifier",
+      "aliases": [
+        "code-simplifier"
+      ],
+      "invocation_grammar": "subagent:code-simplifier",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": "Refactoring state",
+      "parallel_team_behavior": "Bounded complexity reduction without behavior change",
+      "permission_requirements": [
+        "read",
+        "write"
+      ],
+      "artifacts_verification": "Simplification diff with behavioral invariant proof",
+      "cancel_resume_recovery": "Rollback on test regression",
+      "upstream_evidence": "Upstream code simplifier agent"
+    },
+    {
+      "id": "omx_git_master",
+      "source_project": "Yeachan-Heo/oh-my-codex",
+      "commit": "f43034aad68ed08dd886bf7f209a0415b8a7adb4",
+      "path": "agents/git-master.md",
+      "hash_sha256": "5b4b73dd4fcc2a3fd4cc1b5c811c7aff816c9a663e5d8dcacfced998542ddcf7",
+      "license_class": "mit",
+      "surface_family": "agent",
+      "source_name": "omx-git-master",
+      "aliases": [
+        "git-master"
+      ],
+      "invocation_grammar": "subagent:git-master",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": "Git workspace state",
+      "parallel_team_behavior": "Atomic commit author and branch hygiene expert",
+      "permission_requirements": [
+        "read",
+        "write",
+        "shell"
+      ],
+      "artifacts_verification": "Structured atomic commits and branch logs",
+      "cancel_resume_recovery": "Reflog-guarded operations",
+      "upstream_evidence": "Upstream git-master agent"
+    },
+    {
+      "id": "omx_security_reviewer",
+      "source_project": "Yeachan-Heo/oh-my-codex",
+      "commit": "f43034aad68ed08dd886bf7f209a0415b8a7adb4",
+      "path": "agents/security-reviewer.md",
+      "hash_sha256": "058fb98f1fe682f4c7132021526ea6d57d955d027b706cd81c24d063a6f9fdee",
+      "license_class": "mit",
+      "surface_family": "agent",
+      "source_name": "omx-security-reviewer",
+      "aliases": [
+        "security-reviewer"
+      ],
+      "invocation_grammar": "subagent:security-reviewer",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": "Security audit state",
+      "parallel_team_behavior": "OWASP and supply chain auditor",
+      "permission_requirements": [
+        "read"
+      ],
+      "artifacts_verification": "Security vulnerability matrix",
+      "cancel_resume_recovery": "N/A",
+      "upstream_evidence": "Upstream security reviewer agent"
+    },
+    {
+      "id": "omx_tracer",
+      "source_project": "Yeachan-Heo/oh-my-codex",
+      "commit": "f43034aad68ed08dd886bf7f209a0415b8a7adb4",
+      "path": "agents/tracer.md",
+      "hash_sha256": "38405092c2d61f4740e60feb75c81227ff8b351e7bfecaed081c8e5480057e6d",
+      "license_class": "mit",
+      "surface_family": "agent",
+      "source_name": "omx-tracer",
+      "aliases": [
+        "tracer"
+      ],
+      "invocation_grammar": "subagent:tracer",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": "Execution tracing",
+      "parallel_team_behavior": "Call graph and data flow tracer",
+      "permission_requirements": [
+        "read"
+      ],
+      "artifacts_verification": "Control flow diagrams and stack trace analysis",
+      "cancel_resume_recovery": "N/A",
+      "upstream_evidence": "Upstream tracer agent"
+    },
+    {
+      "id": "omx_subagent_stop",
+      "source_project": "Yeachan-Heo/oh-my-codex",
+      "commit": "f43034aad68ed08dd886bf7f209a0415b8a7adb4",
+      "path": "hooks/subagent-stop.json",
+      "hash_sha256": "88e6cf945a94a0f8fa4e4edbf32fa56984833ee659e9badb92622d4367851ab2",
+      "license_class": "mit",
+      "surface_family": "hook",
+      "source_name": "omx-subagent-stop",
+      "aliases": [
+        "subagent-stop"
+      ],
+      "invocation_grammar": "hook:subagent-stop",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": ".omcu/hooks/subagent.json",
+      "parallel_team_behavior": "Lifecycle callback when child subagent completes",
+      "permission_requirements": [
+        "read",
+        "write"
+      ],
+      "artifacts_verification": "Subagent completion telemetry",
+      "cancel_resume_recovery": "Cleans up child resources on crash",
+      "upstream_evidence": "Upstream subagent termination hook"
+    },
+    {
+      "id": "omx_context_compact",
+      "source_project": "Yeachan-Heo/oh-my-codex",
+      "commit": "f43034aad68ed08dd886bf7f209a0415b8a7adb4",
+      "path": "hooks/context-compact.json",
+      "hash_sha256": "d356dcc082f8b8dc7b971e24f8956a6d9164f0321d167daeece3515662ee1734",
+      "license_class": "mit",
+      "surface_family": "hook",
+      "source_name": "omx-context-compact",
+      "aliases": [
+        "context-compact"
+      ],
+      "invocation_grammar": "hook:context-compact",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": ".omcu/compaction/state.json",
+      "parallel_team_behavior": "Preserves critical state across LLM context compaction",
+      "permission_requirements": [
+        "read",
+        "write"
+      ],
+      "artifacts_verification": "Compacted state ledger and restored context prompts",
+      "cancel_resume_recovery": "Fails closed if critical variables missing post-compact",
+      "upstream_evidence": "Upstream context compaction hook"
+    },
+    {
+      "id": "omx_generation_fencing",
+      "source_project": "Yeachan-Heo/oh-my-codex",
+      "commit": "f43034aad68ed08dd886bf7f209a0415b8a7adb4",
+      "path": "state/generation-fencing.json",
+      "hash_sha256": "aaf287a1d578ffc6bb3b2e9e9f994398367d9776fbc8bf83459ac7abf54566fb",
+      "license_class": "mit",
+      "surface_family": "team",
+      "source_name": "omx-generation-fencing",
+      "aliases": [
+        "generation-fencing"
+      ],
+      "invocation_grammar": "protocol:lease-acquire|renew|fence",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": ".omcu/team/leases.json",
+      "parallel_team_behavior": "Guarantees exclusive worker task ownership with generation tokens",
+      "permission_requirements": [
+        "read",
+        "write"
+      ],
+      "artifacts_verification": "Generation fence lease journals",
+      "cancel_resume_recovery": "Stale worker mutations rejected by generation mismatch",
+      "upstream_evidence": "Upstream generation fencing protocol"
+    },
+    {
+      "id": "omx_notepad",
+      "source_project": "Yeachan-Heo/oh-my-codex",
+      "commit": "f43034aad68ed08dd886bf7f209a0415b8a7adb4",
+      "path": "state/notepad.md",
+      "hash_sha256": "9d60da22805a26e27d9c87b234161de6812343e41d0c659d5dd8d92e1c7160b2",
+      "license_class": "mit",
+      "surface_family": "artifact",
+      "source_name": "omx-notepad",
+      "aliases": [
+        "notepad"
+      ],
+      "invocation_grammar": "artifact:notepad_append",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": ".omcu/notepad.md",
+      "parallel_team_behavior": "Durable markdown scratchpad for multi-stage workflows",
+      "permission_requirements": [
+        "read",
+        "write"
+      ],
+      "artifacts_verification": "Persistent notes and design decisions",
+      "cancel_resume_recovery": "Persisted on disk across all workflow phases",
+      "upstream_evidence": "Upstream notepad state persistence"
+    }
+  ]
+}

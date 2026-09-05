@@ -70,6 +70,10 @@
       "types": "./dist/src/team/index.d.ts",
       "import": "./dist/src/team/index.js"
     },
+    "./parity": {
+      "types": "./dist/src/parity/index.d.ts",
+      "import": "./dist/src/parity/index.js"
+    },
     "./package.json": "./package.json"
   },
   "bin": {
@@ -85,6 +89,9 @@
     "hooks",
     "skills",
     "templates",
+    "parity",
+    "docs/parity",
+    "THIRD-PARTY-NOTICES.md",
     "scripts/install.sh",
     "scripts/install-plugin.sh",
     "scripts/uninstall.sh",

@@ -1,0 +1,1090 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-24T00:00:00.000Z",
+  "target_cursor_sdk_version": "@cursor/sdk@1.0.31",
+  "total_contracts": 50,
+  "disposition_counts": {
+    "native": 26,
+    "composed": 16,
+    "thin-extension": 8,
+    "fallback": 0,
+    "unsupported": 0
+  },
+  "status_counts": {
+    "pass": 50,
+    "partial": 0,
+    "blocked": 0,
+    "unsupported": 0,
+    "not_run": 0,
+    "drifted": 0,
+    "license_review_required": 0
+  },
+  "contracts": [
+    {
+      "canonical_id": "omcu-workflow-autopilot",
+      "name": "Autopilot Workflow",
+      "surface_family": "workflow",
+      "source_analogs": {
+        "omc": "omc_autopilot"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-skill",
+        "cursor-sdk-local",
+        "omcu-domain-layer"
+      ],
+      "omcu_domain_behavior": "Coordinates 5-phase execution (interview -> ralplan -> ultragoal -> review -> ultraqa) with durable stage checkpoints",
+      "disposition": "composed",
+      "implementation_issue": "#27",
+      "test_ids": [
+        "tests/workflows/autopilot.test.ts"
+      ],
+      "intentional_differences": "Uses native Cursor skills and SDK subagents instead of Claude-code-specific background processes",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-workflow-ralph",
+      "name": "Ralph Iteration Loop",
+      "surface_family": "workflow",
+      "source_analogs": {
+        "omc": "omc_ralph"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-hook",
+        "cursor-sdk-local",
+        "omcu-domain-layer"
+      ],
+      "omcu_domain_behavior": "Enforces self-referential loop with generation-fenced journal until verifier passes",
+      "disposition": "composed",
+      "implementation_issue": "#26",
+      "test_ids": [
+        "tests/workflows/ralph.test.ts"
+      ],
+      "intentional_differences": "Employs official ralph-loop pattern from cursor/plugins with OMCU atomic state fencing",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-workflow-ultrawork",
+      "name": "Ultrawork Parallel Execution",
+      "surface_family": "workflow",
+      "source_analogs": {
+        "omc": "omc_ultrawork"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-sdk-subagent",
+        "cursor-worktree",
+        "omcu-domain-layer"
+      ],
+      "omcu_domain_behavior": "Fans out independent tasks across concurrent local SDK subagents with worker leases",
+      "disposition": "composed",
+      "implementation_issue": "#28",
+      "test_ids": [
+        "tests/workflows/ultrawork.test.ts"
+      ],
+      "intentional_differences": "Uses Cursor SDK child subagents and git worktrees rather than tmux panes",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-skill-ecomode",
+      "name": "Ecomode Token Routing",
+      "surface_family": "skill",
+      "source_analogs": {
+        "omc": "omc_ecomode"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-router",
+        "cursor-plugin-skill"
+      ],
+      "omcu_domain_behavior": "Sets model routing posture to prioritize efficient token consumption",
+      "disposition": "native",
+      "implementation_issue": "#29",
+      "test_ids": [
+        "tests/skills/ecomode.test.ts"
+      ],
+      "intentional_differences": "Maps directly to native Cursor model router fast-tier instead of custom prompt truncation",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-workflow-ultraqa",
+      "name": "UltraQA Dynamic Test Loop",
+      "surface_family": "workflow",
+      "source_analogs": {
+        "omc": "omc_ultraqa"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-skill",
+        "cursor-sdk-subagent",
+        "omcu-domain-layer"
+      ],
+      "omcu_domain_behavior": "Generates adversarial test scenarios and coordinates fix-verify loops until clean",
+      "disposition": "composed",
+      "implementation_issue": "#30",
+      "test_ids": [
+        "tests/workflows/ultraqa.test.ts"
+      ],
+      "intentional_differences": "Generates Vitest/Node native test scenarios and integrates with Cursor auto-review",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-team-coordination",
+      "name": "Team Coordination & Leasing",
+      "surface_family": "team",
+      "source_analogs": {
+        "omc": "omc_team",
+        "omx": "omx_generation_fencing"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-sdk-subagent",
+        "omcu-domain-layer",
+        "cursor-worktree"
+      ],
+      "omcu_domain_behavior": "Renewable generation-fenced task ownership with atomic lease compensation and heartbeat monitoring",
+      "disposition": "thin-extension",
+      "implementation_issue": "#23",
+      "test_ids": [
+        "tests/team/team-task-ownership.test.ts",
+        "tests/team/team-state-management.test.ts"
+      ],
+      "intentional_differences": "Native generation tokens and journal probes replace external tmux processes",
+      "license_strategy": "omcu_original",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-workflow-cancel",
+      "name": "Workflow Cancellation",
+      "surface_family": "workflow",
+      "source_analogs": {
+        "omc": "omc_cancel"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-cli",
+        "omcu-domain-layer"
+      ],
+      "omcu_domain_behavior": "Broadcasts abort signals to active worker leases and cleans up uncommitted state",
+      "disposition": "native",
+      "implementation_issue": "#20",
+      "test_ids": [
+        "tests/workflows/cancel.test.ts"
+      ],
+      "intentional_differences": "Cleans up atomic .omcu lease entries and terminates child SDK processes",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-skill-ask",
+      "name": "External Advisor Broker",
+      "surface_family": "skill",
+      "source_analogs": {
+        "omc": "omc_ask"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-skill",
+        "cursor-sdk-custom-tools"
+      ],
+      "omcu_domain_behavior": "Brokers queries to external frontier advisors (Claude, Gemini, GPT) and captures artifacts",
+      "disposition": "composed",
+      "implementation_issue": "#31",
+      "test_ids": [
+        "tests/skills/ask.test.ts"
+      ],
+      "intentional_differences": "Registered as custom tool callable within Cursor Agent sessions with caching",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-artifact-note",
+      "name": "Compaction-Resilient Notepad",
+      "surface_family": "artifact",
+      "source_analogs": {
+        "omc": "omc_note",
+        "omx": "omx_notepad"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-rule",
+        "omcu-domain-layer"
+      ],
+      "omcu_domain_behavior": "Maintains durable markdown scratchpad loaded into agent context and preserved on disk",
+      "disposition": "thin-extension",
+      "implementation_issue": "#21",
+      "test_ids": [
+        "tests/artifacts/note.test.ts"
+      ],
+      "intentional_differences": "Integrated with Cursor rules and AGENTS.md for persistent context loading",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-skill-hud",
+      "name": "Two-Layer Statusline HUD",
+      "surface_family": "skill",
+      "source_analogs": {
+        "omc": "omc_hud"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-canvas",
+        "omcu-domain-layer"
+      ],
+      "omcu_domain_behavior": "Computes two-layer statusline rendering mode, status, and worker lease health",
+      "disposition": "thin-extension",
+      "implementation_issue": "#22",
+      "test_ids": [
+        "tests/skills/hud.test.ts"
+      ],
+      "intentional_differences": "Renders in Cursor Canvas and terminal statusline instead of Claude Code HUD widget",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-workflow-deep-interview",
+      "name": "Socratic Deep Interview",
+      "surface_family": "workflow",
+      "source_analogs": {
+        "omc": "omc_deep_interview"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-skill",
+        "cursor-sdk-local"
+      ],
+      "omcu_domain_behavior": "Deterministic ambiguity clarification gate prior to plan formulation",
+      "disposition": "composed",
+      "implementation_issue": "#32",
+      "test_ids": [
+        "tests/workflows/deep-interview.test.ts"
+      ],
+      "intentional_differences": "Produces typed markdown requirements artifact under .omcu/artifacts/",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-workflow-ralplan",
+      "name": "Ralplan Plan Consensus",
+      "surface_family": "workflow",
+      "source_analogs": {
+        "omc": "omc_ralplan"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-skill",
+        "cursor-sdk-subagent"
+      ],
+      "omcu_domain_behavior": "Coordinates planner + critic consensus loop with steelman requirements review",
+      "disposition": "composed",
+      "implementation_issue": "#33",
+      "test_ids": [
+        "tests/workflows/ralplan.test.ts"
+      ],
+      "intentional_differences": "Dispatches subagents via @cursor/sdk createChild with role-scoped tools",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-skill-code-review",
+      "name": "Multi-Perspective Code Review",
+      "surface_family": "skill",
+      "source_analogs": {
+        "omc": "omc_code_review"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-permissions-auto-review",
+        "cursor-plugin-agent"
+      ],
+      "omcu_domain_behavior": "Read-only independent code review with exact file:line citations and diff hashing",
+      "disposition": "native",
+      "implementation_issue": "#34",
+      "test_ids": [
+        "tests/skills/code-review.test.ts"
+      ],
+      "intentional_differences": "Integrates with Cursor local.autoReview API for automated PR gates",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-skill-security-review",
+      "name": "Security & Secret Review",
+      "surface_family": "skill",
+      "source_analogs": {
+        "omc": "omc_security_review",
+        "omx": "omx_security_reviewer"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-agent",
+        "cursor-sdk-custom-tools"
+      ],
+      "omcu_domain_behavior": "Static analysis, OWASP rules, and secret token scanning before commit",
+      "disposition": "composed",
+      "implementation_issue": "#34",
+      "test_ids": [
+        "tests/skills/security-review.test.ts"
+      ],
+      "intentional_differences": "Executes within safe Node.js custom tool sandbox without external bash dependencies",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-skill-ai-slop-cleaner",
+      "name": "Anti-Slop Cleaner",
+      "surface_family": "skill",
+      "source_analogs": {
+        "omc": "omc_ai_slop_cleaner"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-skill",
+        "cursor-sdk-local"
+      ],
+      "omcu_domain_behavior": "Scans for boilerplate, redundant comments, and AI-generated noise",
+      "disposition": "composed",
+      "implementation_issue": "#34",
+      "test_ids": [
+        "tests/skills/ai-slop-cleaner.test.ts"
+      ],
+      "intentional_differences": "Operates with structured AST-aware cleanups for TypeScript and ESM codebases",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-skill-best-practice-research",
+      "name": "Best Practice Research",
+      "surface_family": "skill",
+      "source_analogs": {
+        "omc": "omc_best_practice_research"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-skill",
+        "cursor-mcp"
+      ],
+      "omcu_domain_behavior": "Gathers official documentation and upstream evidence into a structured brief",
+      "disposition": "composed",
+      "implementation_issue": "#34",
+      "test_ids": [
+        "tests/skills/best-practice-research.test.ts"
+      ],
+      "intentional_differences": "Connects to official Cursor MCP doc servers and web search tools",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-workflow-autoresearch",
+      "name": "Autoresearch Workflow",
+      "surface_family": "workflow",
+      "source_analogs": {
+        "omc": "omc_autoresearch",
+        "omx": "omx_autoresearch_goal"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-skill",
+        "cursor-sdk-local",
+        "omcu-domain-layer"
+      ],
+      "omcu_domain_behavior": "Stateful research loop recording hypothesis tests, citations, and validation status",
+      "disposition": "composed",
+      "implementation_issue": "#34",
+      "test_ids": [
+        "tests/workflows/autoresearch.test.ts"
+      ],
+      "intentional_differences": "Saves research journals under .omcu/research/ with checksums",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-workflow-pipeline",
+      "name": "Pipeline Orchestrator",
+      "surface_family": "workflow",
+      "source_analogs": {
+        "omc": "omc_pipeline"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-sdk-local",
+        "omcu-domain-layer"
+      ],
+      "omcu_domain_behavior": "Executes arbitrary stage pipelines with typed input/output passing and failure gates",
+      "disposition": "composed",
+      "implementation_issue": "#34",
+      "test_ids": [
+        "tests/workflows/pipeline.test.ts"
+      ],
+      "intentional_differences": "Implements cookbook DAG task runner architecture natively in TypeScript",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-artifact-wiki",
+      "name": "Repository Wiki & Memory",
+      "surface_family": "artifact",
+      "source_analogs": {
+        "omc": "omc_wiki"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-rule",
+        "omcu-domain-layer"
+      ],
+      "omcu_domain_behavior": "Maintains durable topic pages and architectural decisions in .omcu/wiki/",
+      "disposition": "thin-extension",
+      "implementation_issue": "#21",
+      "test_ids": [
+        "tests/artifacts/wiki.test.ts"
+      ],
+      "intentional_differences": "Indexed for fast keyword lookup and cross-referenced in AGENTS.md",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-agent-architect",
+      "name": "Architect Agent Persona",
+      "surface_family": "agent",
+      "source_analogs": {
+        "omc": "omc_architect"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-agent",
+        "cursor-sdk-subagent"
+      ],
+      "omcu_domain_behavior": "Evaluates architectural integrity and lifecycle boundaries",
+      "disposition": "native",
+      "implementation_issue": "#34",
+      "test_ids": [
+        "tests/agents/architect.test.ts"
+      ],
+      "intentional_differences": "Defined in agents/architect.md following Cursor plugin agent format",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-agent-critic",
+      "name": "Critic Agent Persona",
+      "surface_family": "agent",
+      "source_analogs": {
+        "omc": "omc_critic"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-agent",
+        "cursor-sdk-subagent"
+      ],
+      "omcu_domain_behavior": "Adversarially critiques implementation plans and diff proposals",
+      "disposition": "native",
+      "implementation_issue": "#34",
+      "test_ids": [
+        "tests/agents/critic.test.ts"
+      ],
+      "intentional_differences": "Read-only tool sandbox; cannot execute shell commands or write code",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-agent-debugger",
+      "name": "Debugger Agent Persona",
+      "surface_family": "agent",
+      "source_analogs": {
+        "omc": "omc_debugger"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-agent",
+        "cursor-sdk-subagent"
+      ],
+      "omcu_domain_behavior": "Isolates regression causes and performs call stack analysis",
+      "disposition": "native",
+      "implementation_issue": "#34",
+      "test_ids": [
+        "tests/agents/debugger.test.ts"
+      ],
+      "intentional_differences": "Equipped with structured diagnostic tools and vitest runners",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-agent-executor",
+      "name": "Executor Agent Persona",
+      "surface_family": "agent",
+      "source_analogs": {
+        "omc": "omc_executor"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-agent",
+        "cursor-sdk-subagent"
+      ],
+      "omcu_domain_behavior": "Implements code modifications in compliance with architectural guidelines",
+      "disposition": "native",
+      "implementation_issue": "#34",
+      "test_ids": [
+        "tests/agents/executor.test.ts"
+      ],
+      "intentional_differences": "Subject to OMCU lease boundaries and generation fencing",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-agent-explore",
+      "name": "Explore Reconnaissance Agent",
+      "surface_family": "agent",
+      "source_analogs": {
+        "omc": "omc_explore"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-agent",
+        "cursor-sdk-subagent"
+      ],
+      "omcu_domain_behavior": "Fast read-only codebase mapping without file edits",
+      "disposition": "native",
+      "implementation_issue": "#34",
+      "test_ids": [
+        "tests/agents/explore.test.ts"
+      ],
+      "intentional_differences": "Scoped with read-only tools and symbol grep utilities",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-agent-planner",
+      "name": "Planner Agent Persona",
+      "surface_family": "agent",
+      "source_analogs": {
+        "omc": "omc_planner"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-agent",
+        "cursor-sdk-subagent"
+      ],
+      "omcu_domain_behavior": "Decomposes tasks into dependency-ordered DAG batches",
+      "disposition": "native",
+      "implementation_issue": "#34",
+      "test_ids": [
+        "tests/agents/planner.test.ts"
+      ],
+      "intentional_differences": "Generates structured JSON task DAGs compatible with cookbook runner",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-agent-qa-tester",
+      "name": "QA Tester Agent Persona",
+      "surface_family": "agent",
+      "source_analogs": {
+        "omc": "omc_qa_tester"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-agent",
+        "cursor-sdk-subagent"
+      ],
+      "omcu_domain_behavior": "Writes and executes automated test suites to verify task completion",
+      "disposition": "native",
+      "implementation_issue": "#34",
+      "test_ids": [
+        "tests/agents/qa-tester.test.ts"
+      ],
+      "intentional_differences": "Adheres to repository-specific Vitest unit and integration suites",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-agent-scientist",
+      "name": "Scientist Empirical Agent",
+      "surface_family": "agent",
+      "source_analogs": {
+        "omc": "omc_scientist"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-agent",
+        "cursor-sdk-subagent"
+      ],
+      "omcu_domain_behavior": "Conducts empirical benchmarking and hypothesis testing",
+      "disposition": "native",
+      "implementation_issue": "#34",
+      "test_ids": [
+        "tests/agents/scientist.test.ts"
+      ],
+      "intentional_differences": "Emits structured telemetry JSON to .omcu/artifacts/",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-agent-verifier",
+      "name": "Verifier Gatekeeper Agent",
+      "surface_family": "agent",
+      "source_analogs": {
+        "omc": "omc_verifier"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-agent",
+        "cursor-sdk-subagent"
+      ],
+      "omcu_domain_behavior": "Authoritative completion verifier requiring fresh build/test proof",
+      "disposition": "native",
+      "implementation_issue": "#34",
+      "test_ids": [
+        "tests/agents/verifier.test.ts"
+      ],
+      "intentional_differences": "Never self-approves unverified code; requires nonzero automated proof",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-agent-writer",
+      "name": "Writer Documentation Agent",
+      "surface_family": "agent",
+      "source_analogs": {
+        "omc": "omc_writer"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-agent",
+        "cursor-sdk-subagent"
+      ],
+      "omcu_domain_behavior": "Drafts technical documentation and changelogs",
+      "disposition": "native",
+      "implementation_issue": "#34",
+      "test_ids": [
+        "tests/agents/writer.test.ts"
+      ],
+      "intentional_differences": "Scoped strictly to docs/ and markdown assets",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-hook-lifecycle",
+      "name": "Lifecycle Event Hooks",
+      "surface_family": "hook",
+      "source_analogs": {
+        "omc": "omc_hooks",
+        "omx": "omx_subagent_stop"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-hook",
+        "omcu-domain-layer"
+      ],
+      "omcu_domain_behavior": "Synchronous pre-tool, post-tool, and subagent termination interceptors",
+      "disposition": "native",
+      "implementation_issue": "#19",
+      "test_ids": [
+        "tests/hooks/lifecycle.test.ts"
+      ],
+      "intentional_differences": "Hooks registered via hooks/hooks.json adhering to Cursor hook specification",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-tool-tracker",
+      "name": "Event Timeline Tracker",
+      "surface_family": "tool",
+      "source_analogs": {
+        "omc": "omc_tracker",
+        "omx": "omx_tracer"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-sdk-custom-tools",
+        "omcu-domain-layer"
+      ],
+      "omcu_domain_behavior": "Appends structured event records to .omcu/tracker/events.jsonl",
+      "disposition": "thin-extension",
+      "implementation_issue": "#21",
+      "test_ids": [
+        "tests/tracker/tracker.test.ts"
+      ],
+      "intentional_differences": "Exposed as in-process custom tool with zero external shell dependencies",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-permissions-boundary",
+      "name": "Policy & Permission Boundary",
+      "surface_family": "permissions",
+      "source_analogs": {
+        "omc": "omc_permissions"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-permissions-auto-review",
+        "omcu-domain-layer"
+      ],
+      "omcu_domain_behavior": "Configures permissions and autoReview rules to safeguard repository assets",
+      "disposition": "native",
+      "implementation_issue": "#20",
+      "test_ids": [
+        "tests/permissions/permissions.test.ts"
+      ],
+      "intentional_differences": "Enforces fail-closed evaluation via Cursor local.autoReview API",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-config-setup-doctor",
+      "name": "Setup & Doctor Diagnostics",
+      "surface_family": "config",
+      "source_analogs": {
+        "omx": "omx_setup",
+        "omx_doctor": "omx_doctor"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-cli",
+        "omcu-domain-layer"
+      ],
+      "omcu_domain_behavior": "Scaffolds .omcu/ runtime state and validates environment readiness",
+      "disposition": "native",
+      "implementation_issue": "#18",
+      "test_ids": [
+        "tests/setup/setup.test.ts",
+        "tests/setup/doctor.test.ts"
+      ],
+      "intentional_differences": "Atomic configuration writes with rollback support",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-workflow-ultragoal",
+      "name": "Ultragoal Durable Ledger",
+      "surface_family": "workflow",
+      "source_analogs": {
+        "omx": "omx_ultragoal"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-sdk-local",
+        "omcu-domain-layer"
+      ],
+      "omcu_domain_behavior": "Durable multi-goal milestones tracked in JSON ledger across process lifetimes",
+      "disposition": "thin-extension",
+      "implementation_issue": "#34",
+      "test_ids": [
+        "tests/workflows/ultragoal.test.ts"
+      ],
+      "intentional_differences": "Integrated with Cursor SDK session persistence",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-workflow-performance-goal",
+      "name": "Performance Optimization Workflow",
+      "surface_family": "workflow",
+      "source_analogs": {
+        "omx": "omx_performance_goal"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-sdk-local",
+        "omcu-domain-layer"
+      ],
+      "omcu_domain_behavior": "Evaluator-gated performance tuning with benchmark capture",
+      "disposition": "composed",
+      "implementation_issue": "#34",
+      "test_ids": [
+        "tests/workflows/performance-goal.test.ts"
+      ],
+      "intentional_differences": "Benchmarks recorded into typed JSON artifacts under .omcu/benchmarks/",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-workflow-prometheus-strict",
+      "name": "Prometheus Strict Ambiguity Gate",
+      "surface_family": "workflow",
+      "source_analogs": {
+        "omx": "omx_prometheus_strict"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-skill",
+        "cursor-sdk-local"
+      ],
+      "omcu_domain_behavior": "Clean-room interview gate enforcing mathematical ambiguity threshold before coding",
+      "disposition": "composed",
+      "implementation_issue": "#34",
+      "test_ids": [
+        "tests/workflows/prometheus-strict.test.ts"
+      ],
+      "intentional_differences": "Rejects vague prompts with structured clarification questionnaires",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-agent-analyst",
+      "name": "Analyst Requirements Agent",
+      "surface_family": "agent",
+      "source_analogs": {
+        "omx": "omx_analyst"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-agent",
+        "cursor-sdk-subagent"
+      ],
+      "omcu_domain_behavior": "Analyzes user prompts and extracts formal acceptance criteria",
+      "disposition": "native",
+      "implementation_issue": "#34",
+      "test_ids": [
+        "tests/agents/analyst.test.ts"
+      ],
+      "intentional_differences": "Generates structured JSON/Markdown intake sheets",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-agent-build-fixer",
+      "name": "Build Fixer Agent",
+      "surface_family": "agent",
+      "source_analogs": {
+        "omx": "omx_build_fixer"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-agent",
+        "cursor-sdk-subagent"
+      ],
+      "omcu_domain_behavior": "Applies minimal non-behavioral diffs to resolve compiler/type errors",
+      "disposition": "native",
+      "implementation_issue": "#34",
+      "test_ids": [
+        "tests/agents/build-fixer.test.ts"
+      ],
+      "intentional_differences": "Restricted to touch only lines identified by compiler error spans",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-agent-code-simplifier",
+      "name": "Code Simplifier Agent",
+      "surface_family": "agent",
+      "source_analogs": {
+        "omx": "omx_code_simplifier"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-agent",
+        "cursor-sdk-subagent"
+      ],
+      "omcu_domain_behavior": "Reduces cyclomatic complexity and dead code while preserving test invariants",
+      "disposition": "native",
+      "implementation_issue": "#34",
+      "test_ids": [
+        "tests/agents/code-simplifier.test.ts"
+      ],
+      "intentional_differences": "Requires full test suite pass before and after each simplification step",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-agent-git-master",
+      "name": "Git Master Hygiene Agent",
+      "surface_family": "agent",
+      "source_analogs": {
+        "omx": "omx_git_master"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-agent",
+        "cursor-sdk-custom-tools"
+      ],
+      "omcu_domain_behavior": "Enforces imperative commit conventions, branch isolation, and atomic commits",
+      "disposition": "native",
+      "implementation_issue": "#34",
+      "test_ids": [
+        "tests/agents/git-master.test.ts"
+      ],
+      "intentional_differences": "Uses safe shell-free git tool wrappers",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-hook-context-compact",
+      "name": "Context Compaction Hook",
+      "surface_family": "hook",
+      "source_analogs": {
+        "omx": "omx_context_compact"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-hook",
+        "omcu-domain-layer"
+      ],
+      "omcu_domain_behavior": "Persists active session state to disk prior to LLM context window compaction",
+      "disposition": "thin-extension",
+      "implementation_issue": "#21",
+      "test_ids": [
+        "tests/hooks/context-compact.test.ts"
+      ],
+      "intentional_differences": "Rehydrates critical state from .omcu/ upon session continuation",
+      "license_strategy": "mit_attribution",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-workflow-worktree-orchestrate",
+      "name": "Worktree Orchestration Workflow",
+      "surface_family": "workflow",
+      "source_analogs": {
+        "omo": "omo_orchestrate"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-worktree",
+        "cursor-sdk-subagent",
+        "omcu-domain-layer"
+      ],
+      "omcu_domain_behavior": "Spawns independent agents in isolated git worktrees with separate branches",
+      "disposition": "composed",
+      "implementation_issue": "#24",
+      "test_ids": [
+        "tests/workflows/worktree-orchestrate.test.ts"
+      ],
+      "intentional_differences": "Clean-room independent specification using git worktree CLI directly",
+      "license_strategy": "clean_room_spec",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-workflow-consensus-review",
+      "name": "Consensus Review Workflow",
+      "surface_family": "workflow",
+      "source_analogs": {
+        "omo": "omo_consensus_review"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-permissions-auto-review",
+        "cursor-sdk-subagent"
+      ],
+      "omcu_domain_behavior": "Forks two independent reviewer subagents; requires identical approval verdict",
+      "disposition": "composed",
+      "implementation_issue": "#34",
+      "test_ids": [
+        "tests/workflows/consensus-review.test.ts"
+      ],
+      "intentional_differences": "Clean-room independent specification with zero copied OMO prompts",
+      "license_strategy": "clean_room_spec",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-workflow-context-router",
+      "name": "Context Window Utilization Router",
+      "surface_family": "workflow",
+      "source_analogs": {
+        "omo": "omo_context_router"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-router",
+        "omcu-domain-layer"
+      ],
+      "omcu_domain_behavior": "Monitors prompt token length and dynamically selects fast vs reasoning models",
+      "disposition": "native",
+      "implementation_issue": "#29",
+      "test_ids": [
+        "tests/workflows/context-router.test.ts"
+      ],
+      "intentional_differences": "Clean-room independent specification mapped to Cursor router API",
+      "license_strategy": "clean_room_spec",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-tool-worktree-runner",
+      "name": "Git Worktree Runner Tool",
+      "surface_family": "tool",
+      "source_analogs": {
+        "omo": "omo_worktree_runner"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-worktree",
+        "cursor-sdk-custom-tools"
+      ],
+      "omcu_domain_behavior": "Safely creates, manages, and prunes git worktrees for isolated subagents",
+      "disposition": "native",
+      "implementation_issue": "#24",
+      "test_ids": [
+        "tests/tools/worktree-runner.test.ts"
+      ],
+      "intentional_differences": "Clean-room independent TypeScript implementation with git locks",
+      "license_strategy": "clean_room_spec",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-agent-lead",
+      "name": "Lead Orchestrator Agent Persona",
+      "surface_family": "agent",
+      "source_analogs": {
+        "omo": "omo_lead"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-agent",
+        "cursor-sdk-subagent"
+      ],
+      "omcu_domain_behavior": "Coordinates subagents running in separate worktrees and merges results",
+      "disposition": "native",
+      "implementation_issue": "#24",
+      "test_ids": [
+        "tests/agents/lead.test.ts"
+      ],
+      "intentional_differences": "Clean-room independent persona specification",
+      "license_strategy": "clean_room_spec",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-agent-worker",
+      "name": "Worktree Worker Agent Persona",
+      "surface_family": "agent",
+      "source_analogs": {
+        "omo": "omo_worker"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-agent",
+        "cursor-sdk-subagent"
+      ],
+      "omcu_domain_behavior": "Executes coding tasks confined strictly to assigned worktree directory",
+      "disposition": "native",
+      "implementation_issue": "#24",
+      "test_ids": [
+        "tests/agents/worker.test.ts"
+      ],
+      "intentional_differences": "Clean-room independent persona specification",
+      "license_strategy": "clean_room_spec",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-agent-inspector",
+      "name": "Inspector Review Agent Persona",
+      "surface_family": "agent",
+      "source_analogs": {
+        "omo": "omo_inspector"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-agent",
+        "cursor-sdk-subagent"
+      ],
+      "omcu_domain_behavior": "Performs isolated read-only audit of completed worktree branches",
+      "disposition": "native",
+      "implementation_issue": "#34",
+      "test_ids": [
+        "tests/agents/inspector.test.ts"
+      ],
+      "intentional_differences": "Clean-room independent persona specification",
+      "license_strategy": "clean_room_spec",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-hook-pre-step-gate",
+      "name": "Pre-Step Safety Gate Hook",
+      "surface_family": "hook",
+      "source_analogs": {
+        "omo": "omo_pre_step_gate"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-hook",
+        "cursor-permissions-auto-review"
+      ],
+      "omcu_domain_behavior": "Evaluates proposed filesystem edits against destructive command blacklist",
+      "disposition": "native",
+      "implementation_issue": "#19",
+      "test_ids": [
+        "tests/hooks/pre-step-gate.test.ts"
+      ],
+      "intentional_differences": "Clean-room independent hook implementation",
+      "license_strategy": "clean_room_spec",
+      "status": "pass"
+    },
+    {
+      "canonical_id": "omcu-hook-post-step-audit",
+      "name": "Post-Step Audit Hook",
+      "surface_family": "hook",
+      "source_analogs": {
+        "omo": "omo_post_step_audit"
+      },
+      "selected_cursor_mechanisms": [
+        "cursor-plugin-hook",
+        "omcu-domain-layer"
+      ],
+      "omcu_domain_behavior": "Validates that step edits did not introduce syntax errors or broken tests",
+      "disposition": "thin-extension",
+      "implementation_issue": "#19",
+      "test_ids": [
+        "tests/hooks/post-step-audit.test.ts"
+      ],
+      "intentional_differences": "Clean-room independent hook implementation",
+      "license_strategy": "clean_room_spec",
+      "status": "pass"
+    }
+  ]
+}
