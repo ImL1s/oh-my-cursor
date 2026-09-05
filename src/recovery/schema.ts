@@ -5,6 +5,7 @@ export const RECOVERY_LINE_LIMIT = 900;
 export const MAX_SOURCE_BYTES = 128 * 1024 * 1024; // 128 MiB
 export const MAX_TAIL_BYTES = 16 * 1024 * 1024; // 16 MiB
 export const MAX_LINE_BYTES = 1024 * 1024; // 1 MiB per line limit
+export const MAX_SNAPSHOT_BYTES = 48 * 1024 * 1024; // 48 MiB
 export const RECOVERY_SCHEMA_VERSION = 2;
 
 export type RecoveryWarningCode =

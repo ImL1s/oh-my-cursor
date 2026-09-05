@@ -7,6 +7,7 @@ import { redact, redactText } from '../runtime/redaction.js';
 import { withinStateRoot, type StateRoot } from '../runtime/state-root.js';
 import {
   MAX_LINE_BYTES,
+  MAX_SNAPSHOT_BYTES,
   MAX_SOURCE_BYTES,
   MAX_TAIL_BYTES,
   RECOVERY_LINE_LIMIT,
@@ -24,6 +25,7 @@ import {
 
 export {
   MAX_LINE_BYTES,
+  MAX_SNAPSHOT_BYTES,
   MAX_SOURCE_BYTES,
   MAX_TAIL_BYTES,
   RECOVERY_LINE_LIMIT,
@@ -619,7 +621,7 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
       return existing;
     }
 
-    atomicWriteJson(metadata, snapshot);
+    atomicWriteJson(metadata, snapshot, { maxBytes: MAX_SNAPSHOT_BYTES });
     fs.chmodSync(metadata, 0o400);
     return snapshot;
   } finally {
@@ -639,6 +641,11 @@ export function readRecovery(root: StateRoot, recoveryId: string): RecoverySnaps
     privateDirectory(directory);
     immutableFile(metadata);
     immutableFile(copy);
+
+    const metadataStat = fs.lstatSync(metadata);
+    if (metadataStat.size <= 0 || metadataStat.size > MAX_SNAPSHOT_BYTES) {
+      throw new Error('E_RECOVERY_INVALID');
+    }
 
     const snapshot = validateRecovery(JSON.parse(fs.readFileSync(metadata, 'utf8')) as unknown, id, copy);
     const copied = fs.readFileSync(copy);

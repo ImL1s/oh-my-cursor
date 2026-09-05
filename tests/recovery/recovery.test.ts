@@ -890,6 +890,34 @@ describe('Recovery streaming and truthful chain validation (#21)', () => {
     const rawRecord = (snapshot.records[0] as { raw: string }).raw;
     expect(Buffer.byteLength(rawRecord, 'utf8')).toBeLessThanOrEqual(MAX_LINE_BYTES);
   });
+
+  it('persists and reads recovery snapshot when retained tail exceeds default 8 MiB atomic write limit', () => {
+    const cwd = workspace();
+    const root = projectStateRoot(cwd);
+    const transcript = path.join(cwd, 'large-tail-snapshot.jsonl');
+
+    // 80 records, each ~120 KiB (~9.6 MiB total), fitting inside 16 MiB MAX_TAIL_BYTES
+    // but exceeding the default 8 MiB atomic write limit.
+    const fd = fs.openSync(transcript, 'w');
+    const recordPayload = 'x'.repeat(120 * 1024);
+    for (let i = 0; i < 80; i++) {
+      fs.writeSync(fd, `${JSON.stringify({ id: `item-${i}`, payload: recordPayload, type: 'message' })}\n`);
+    }
+    fs.closeSync(fd);
+
+    const snapshot = recoverCursorSession(root, {
+      transcriptPath: transcript,
+      recoveryId: 'large-tail-snap',
+      now: fixedNow,
+    });
+
+    expect(snapshot.source_lines).toBe(80);
+    expect(snapshot.copied_lines).toBe(80);
+
+    const loaded = readRecovery(root, 'large-tail-snap');
+    expect(loaded.copied_lines).toBe(80);
+    expect(loaded.source_bytes).toBeGreaterThan(9 * 1024 * 1024);
+  });
 });
 
 
