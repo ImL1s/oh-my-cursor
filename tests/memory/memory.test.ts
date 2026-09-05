@@ -460,4 +460,38 @@ describe('ProjectMemoryStore transactional, conflict-aware, and schema-validated
     // External file remained intact
     expect(fs.readFileSync(externalTargetFile, 'utf8')).toContain('original external payload');
   });
+
+  it('breaks equal-score search ties chronologically rather than lexicographically with timezone offsets', async () => {
+    const root = projectStateRoot(tempDir);
+    const store = new ProjectMemoryStore(root, now);
+
+    // rec-offset: 2026-09-10T00:00:00-10:00 = 2026-09-10T10:00:00.000Z (newer)
+    // rec-utc: 2026-09-10T05:00:00Z (older)
+    // Lexicographically: "2026-09-10T00:00:00-10:00" < "2026-09-10T05:00:00Z"
+    // Chronologically: rec-offset is 5 hours newer than rec-utc!
+    await store.import({
+      schema_version: 1,
+      memories: [
+        {
+          schema_version: 1,
+          id: 'rec-offset',
+          text: 'common search term target',
+          metadata: {},
+          updated_at: '2026-09-10T00:00:00-10:00',
+        },
+        {
+          schema_version: 1,
+          id: 'rec-utc',
+          text: 'common search term target',
+          metadata: {},
+          updated_at: '2026-09-10T05:00:00.000Z',
+        },
+      ],
+    });
+
+    const results = store.search('target');
+    expect(results).toHaveLength(2);
+    expect(results[0]?.id).toBe('rec-offset');
+    expect(results[1]?.id).toBe('rec-utc');
+  });
 });

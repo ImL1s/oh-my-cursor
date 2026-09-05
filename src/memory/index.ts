@@ -195,7 +195,10 @@ export class ProjectMemoryStore {
       .filter(({ score }) => score > 0)
       .sort(
         (a, b) =>
-          b.score - a.score || b.record.updated_at.localeCompare(a.record.updated_at),
+          b.score - a.score ||
+          Date.parse(b.record.updated_at) - Date.parse(a.record.updated_at) ||
+          b.record.updated_at.localeCompare(a.record.updated_at) ||
+          a.record.id.localeCompare(b.record.id),
       )
       .slice(0, limit)
       .map(({ record }) => record);
@@ -229,7 +232,7 @@ export class ProjectMemoryStore {
       const text = cleanMemoryText(itemObj.text);
       const metadata = cleanMemoryMetadata(itemObj.metadata);
       const updatedAt = validIsoDate(itemObj.updated_at)
-        ? (itemObj.updated_at as string)
+        ? new Date(itemObj.updated_at as string).toISOString()
         : this.now().toISOString();
 
       validatedIncoming.push({
