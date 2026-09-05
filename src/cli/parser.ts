@@ -283,6 +283,54 @@ export const COMMAND_SCHEMAS: Readonly<Record<string, CommandSchema>> = Object.f
       },
     },
   },
+  hooks: {
+    stateAccess: 'none',
+    requireAction: true,
+    actions: {
+      list: {
+        options: [
+          { name: '--event', kind: 'string' },
+          { name: '--json', kind: 'flag' },
+        ],
+      },
+      show: {
+        options: [
+          { name: '--json', kind: 'flag' },
+        ],
+        positionals: [
+          { name: 'id', required: true, minLength: 1 },
+        ],
+      },
+      doctor: {
+        options: [
+          { name: '--live', kind: 'flag' },
+          { name: '--json', kind: 'flag' },
+        ],
+      },
+      trace: {
+        options: [
+          { name: '--run', kind: 'string' },
+          { name: '--json', kind: 'flag' },
+        ],
+      },
+      test: {
+        options: [
+          { name: '--fixture', kind: 'string' },
+          { name: '--json', kind: 'flag' },
+        ],
+        positionals: [
+          { name: 'event', required: true, minLength: 1 },
+        ],
+      },
+      generate: {
+        options: [
+          { name: '--check', kind: 'flag' },
+          { name: '--target', kind: 'string', enum: ['plugin', 'project'] },
+          { name: '--json', kind: 'flag' },
+        ],
+      },
+    },
+  },
   capabilities: {
     stateAccess: 'none',
     requireAction: true,

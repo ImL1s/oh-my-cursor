@@ -94,6 +94,10 @@
       "types": "./dist/src/routing/index.d.ts",
       "import": "./dist/src/routing/index.js"
     },
+    "./hooks": {
+      "types": "./dist/src/hooks/index.d.ts",
+      "import": "./dist/src/hooks/index.js"
+    },
     "./package.json": "./package.json"
   },
   "bin": {
