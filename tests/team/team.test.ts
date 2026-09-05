@@ -177,6 +177,40 @@ describe('experimental tmux team supervisor', () => {
     await supervisor.stop('team-partial-cleanup');
   });
 
+  it('preserves the partial manifest when startup cleanup fails so stop can locate survivors', async () => {
+    const state = fixture();
+    const manifestStore = new TeamManifestStore(projectStateRoot(state.workspace));
+    const runnerWithCleanupFailure = async (executable: string, argv: readonly string[]) => {
+      // Fail on worker two start
+      if (argv[0] === 'new-window') {
+        return { code: 1, stdout: '', stderr: 'window creation failed' };
+      }
+      // Fail during rollback cleanup kill-session
+      if (argv[0] === 'kill-session') {
+        return { code: 1, stdout: '', stderr: 'kill-session failed' };
+      }
+      return state.runner(executable, argv);
+    };
+    const supervisor = new ExperimentalTmuxTeamSupervisor(
+      manifestStore,
+      runnerWithCleanupFailure,
+      undefined,
+      (pgid) => state.aliveGroups.delete(pgid),
+      async () => undefined,
+      null,
+      state.identityObserver,
+      state.groupProbe,
+    );
+
+    // Initial start fails, and cleanupFailedStart also fails
+    await expect(supervisor.start('team-rollback-incomplete', workers(state.workspace))).rejects.toThrow('E_TEAM_START_ROLLBACK_FAILED');
+    // Manifest must be preserved when cleanup fails, so that stop can locate surviving workers
+    expect(manifestStore.exists('team-rollback-incomplete')).toBe(true);
+    const partialManifest = manifestStore.read('team-rollback-incomplete');
+    expect(partialManifest.workers).toHaveLength(1);
+    expect(partialManifest.workers[0]?.id).toBe('one');
+  });
+
   it('converges on retry when the final stopped manifest write fails after successful kill', async () => {
     const state = fixture();
     const backing = new TeamManifestStore(projectStateRoot(state.workspace));

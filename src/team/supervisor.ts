@@ -94,8 +94,13 @@ export class ExperimentalTmuxTeamSupervisor {
       if (coordinationInitialized && this.coordinationRoot !== null) {
         try { removeTeamState(this.coordinationRoot, teamId); } catch { /* best-effort rollback */ }
       }
-      try { this.manifests.remove?.(teamId); } catch { /* best-effort rollback */ }
-      if (sessionStarted) await this.cleanupFailedStart(session, workerManifests, workers[0]?.cwd ?? process.cwd(), error);
+      if (sessionStarted) {
+        await this.cleanupFailedStart(session, workerManifests, workers[0]?.cwd ?? process.cwd(), error, () => {
+          this.manifests.remove?.(teamId);
+        });
+      } else {
+        try { this.manifests.remove?.(teamId); } catch { /* best-effort rollback */ }
+      }
       throw error;
     }
   }
@@ -228,7 +233,13 @@ export class ExperimentalTmuxTeamSupervisor {
     if (alive.length > 0) throw new Error(`E_TEAM_STOP_INCOMPLETE:groups_alive:${alive.join(',')}`);
   }
 
-  private async cleanupFailedStart(session: string, workers: readonly TeamWorkerManifest[], cwd: string, original: unknown): Promise<never> {
+  private async cleanupFailedStart(
+    session: string,
+    workers: readonly TeamWorkerManifest[],
+    cwd: string,
+    original: unknown,
+    onSuccess?: () => void,
+  ): Promise<never> {
     const kill = await this.runner('tmux', ['kill-session', '-t', session], cwd);
     try {
       if (workers.length > 0) await this.terminateGroups(workers);
@@ -238,6 +249,7 @@ export class ExperimentalTmuxTeamSupervisor {
     if (kill.code !== 0) throw new Error(`E_TEAM_START_ROLLBACK_FAILED:${String(original)}:${kill.stderr}`);
     const stillExists = await this.runner('tmux', ['has-session', '-t', session], cwd);
     if (stillExists.code === 0) throw new Error(`E_TEAM_START_ROLLBACK_FAILED:${String(original)}:session_alive`);
+    try { onSuccess?.(); } catch { /* best-effort */ }
     throw original;
   }
 }
