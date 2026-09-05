@@ -269,6 +269,78 @@ describe('Parity Contract Matrix & Clean-Room Provenance Lock (Issue #25)', () =
       expect(result.errors.some((e) => e.includes('Disposition count mismatch for \'native\''))).toBe(true);
     });
 
+    it('detects missing disposition key in contract lock', () => {
+      const locks = loadParityLocks(REPO_ROOT);
+      const clonedDispositions = { ...locks.contract.disposition_counts };
+      delete (clonedDispositions as Record<string, unknown>).native;
+
+      const clonedLocks: ParityLocks = {
+        ...locks,
+        contract: {
+          ...locks.contract,
+          disposition_counts: clonedDispositions
+        }
+      };
+
+      const result = validateParityLocks(clonedLocks);
+      expect(result.valid).toBe(false);
+      expect(result.errors.some((e) => e.includes('Disposition count missing in lock for \'native\''))).toBe(true);
+    });
+
+    it('detects missing status key in contract lock', () => {
+      const locks = loadParityLocks(REPO_ROOT);
+      const clonedStatuses = { ...locks.contract.status_counts };
+      delete (clonedStatuses as Record<string, unknown>).pass;
+
+      const clonedLocks: ParityLocks = {
+        ...locks,
+        contract: {
+          ...locks.contract,
+          status_counts: clonedStatuses
+        }
+      };
+
+      const result = validateParityLocks(clonedLocks);
+      expect(result.valid).toBe(false);
+      expect(result.errors.some((e) => e.includes('Status count missing in lock for \'pass\''))).toBe(true);
+    });
+
+    it('detects status count mismatch in contract lock', () => {
+      const locks = loadParityLocks(REPO_ROOT);
+      const clonedLocks: ParityLocks = {
+        ...locks,
+        contract: {
+          ...locks.contract,
+          status_counts: {
+            ...locks.contract.status_counts,
+            pass: 1
+          }
+        }
+      };
+
+      const result = validateParityLocks(clonedLocks);
+      expect(result.valid).toBe(false);
+      expect(result.errors.some((e) => e.includes('Status count mismatch for \'pass\''))).toBe(true);
+    });
+
+    it('detects unknown disposition key in contract lock', () => {
+      const locks = loadParityLocks(REPO_ROOT);
+      const clonedLocks: ParityLocks = {
+        ...locks,
+        contract: {
+          ...locks.contract,
+          disposition_counts: {
+            ...locks.contract.disposition_counts,
+            extra_unknown_disp: 5
+          } as unknown as ParityLocks['contract']['disposition_counts']
+        }
+      };
+
+      const result = validateParityLocks(clonedLocks);
+      expect(result.valid).toBe(false);
+      expect(result.errors.some((e) => e.includes('Unknown contract disposition: \'extra_unknown_disp\''))).toBe(true);
+    });
+
     it('detects malformed SDK package integrity digest', () => {
       const locks = loadParityLocks(REPO_ROOT);
       const clonedLocksPrefix: ParityLocks = {

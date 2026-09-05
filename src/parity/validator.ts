@@ -8,8 +8,28 @@ import type {
   CursorPluginsLock,
   CursorCookbookLock,
   CursorHostCapabilitiesLock,
-  OmcuContractLock
+  OmcuContractLock,
+  ContractDisposition,
+  ContractStatus
 } from './types.js';
+
+export const ALL_CONTRACT_DISPOSITIONS: readonly ContractDisposition[] = [
+  'native',
+  'composed',
+  'thin-extension',
+  'fallback',
+  'unsupported'
+];
+
+export const ALL_CONTRACT_STATUSES: readonly ContractStatus[] = [
+  'pass',
+  'partial',
+  'blocked',
+  'unsupported',
+  'not_run',
+  'drifted',
+  'license_review_required'
+];
 
 export const REQUIRED_PARITY_DOCS = [
   'summary.md',
@@ -173,15 +193,47 @@ export function validateParityLocks(locks: ParityLocks): ParityValidationResult 
     calculatedStatuses[contract.status] = (calculatedStatuses[contract.status] ?? 0) + 1;
   }
 
-  for (const [disp, count] of Object.entries(locks.contract.disposition_counts)) {
-    if ((calculatedDispositions[disp] ?? 0) !== count) {
-      errors.push(`Disposition count mismatch for '${disp}': lock has ${count}, calculated ${calculatedDispositions[disp] ?? 0}`);
+  // Validate all disposition categories in both directions
+  const dispositionKeysInLock = Object.keys(locks.contract.disposition_counts ?? {});
+  const allDispositionKeys = new Set<string>([
+    ...ALL_CONTRACT_DISPOSITIONS,
+    ...dispositionKeysInLock,
+    ...Object.keys(calculatedDispositions)
+  ]);
+
+  for (const disp of allDispositionKeys) {
+    if (!ALL_CONTRACT_DISPOSITIONS.includes(disp as ContractDisposition)) {
+      errors.push(`Unknown contract disposition: '${disp}'`);
+      continue;
+    }
+    const lockCount = (locks.contract.disposition_counts as Record<string, number | undefined>)?.[disp];
+    const calculatedCount = calculatedDispositions[disp] ?? 0;
+    if (lockCount === undefined) {
+      errors.push(`Disposition count missing in lock for '${disp}': calculated ${calculatedCount}`);
+    } else if (lockCount !== calculatedCount) {
+      errors.push(`Disposition count mismatch for '${disp}': lock has ${lockCount}, calculated ${calculatedCount}`);
     }
   }
 
-  for (const [status, count] of Object.entries(locks.contract.status_counts)) {
-    if ((calculatedStatuses[status] ?? 0) !== count) {
-      errors.push(`Status count mismatch for '${status}': lock has ${count}, calculated ${calculatedStatuses[status] ?? 0}`);
+  // Validate all status categories in both directions
+  const statusKeysInLock = Object.keys(locks.contract.status_counts ?? {});
+  const allStatusKeys = new Set<string>([
+    ...ALL_CONTRACT_STATUSES,
+    ...statusKeysInLock,
+    ...Object.keys(calculatedStatuses)
+  ]);
+
+  for (const status of allStatusKeys) {
+    if (!ALL_CONTRACT_STATUSES.includes(status as ContractStatus)) {
+      errors.push(`Unknown contract status: '${status}'`);
+      continue;
+    }
+    const lockCount = (locks.contract.status_counts as Record<string, number | undefined>)?.[status];
+    const calculatedCount = calculatedStatuses[status] ?? 0;
+    if (lockCount === undefined) {
+      errors.push(`Status count missing in lock for '${status}': calculated ${calculatedCount}`);
+    } else if (lockCount !== calculatedCount) {
+      errors.push(`Status count mismatch for '${status}': lock has ${lockCount}, calculated ${calculatedCount}`);
     }
   }
 
