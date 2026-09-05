@@ -619,4 +619,62 @@ describe('Recovery streaming and truthful chain validation (#21)', () => {
     fs.chmodSync(metadataPath, 0o400);
     expect(() => readRecovery(root, 'line-byte-check')).toThrow('E_RECOVERY_INVALID');
   });
+
+  it('keeps valid non-object JSON out of the malformed path and reports broken chain', () => {
+    const cwd = workspace();
+    const root = projectStateRoot(cwd);
+    const transcript = path.join(cwd, 'non-object.jsonl');
+
+    // Total 1000 lines: prefix has valid non-object JSON string containing "ghost"
+    const lines: string[] = [];
+    for (let i = 1; i <= 99; i++) {
+      lines.push(JSON.stringify({ id: `p-${i}`, role: 'assistant' }));
+    }
+    // Line 100: valid JSON primitive string "ghost"
+    lines.push(JSON.stringify('ghost'));
+    for (let i = 101; i <= 999; i++) {
+      lines.push(JSON.stringify({ id: `p-${i}`, role: 'assistant' }));
+    }
+    // Line 1000 in tail: references parent_id "ghost"
+    lines.push(JSON.stringify({ id: 'tail-child', parent_id: 'ghost', role: 'user' }));
+    fs.writeFileSync(transcript, `${lines.join('\n')}\n`);
+
+    const snapshot = recoverCursorSession(root, {
+      transcriptPath: transcript,
+      recoveryId: 'non-object-ghost',
+      now: fixedNow,
+    });
+
+    // "ghost" was in valid non-object JSON, not an object record with id "ghost", so it must be W_BROKEN_CHAIN
+    const broken = snapshot.warnings.filter((w) => w.code === 'W_BROKEN_CHAIN');
+    expect(broken).toHaveLength(1);
+    expect(broken[0]!.detail).toContain('ghost');
+
+    const unverified = snapshot.warnings.filter((w) => w.code === 'W_CHAIN_UNVERIFIED');
+    expect(unverified).toHaveLength(0);
+  });
+
+  it('bounds remainder while streaming oversized records across chunks', () => {
+    const cwd = workspace();
+    const root = projectStateRoot(cwd);
+    const transcript = path.join(cwd, 'stream-oversized.jsonl');
+
+    // Write 2 lines: line 1 is 1.5 MiB (larger than MAX_LINE_BYTES), line 2 is normal
+    const fd = fs.openSync(transcript, 'w');
+    const chunk = 'a'.repeat(64 * 1024);
+    for (let i = 0; i < 24; i++) {
+      fs.writeSync(fd, chunk);
+    }
+    fs.writeSync(fd, '\n{"id":"normal-line"}\n');
+    fs.closeSync(fd);
+
+    const snapshot = recoverCursorSession(root, {
+      transcriptPath: transcript,
+      recoveryId: 'stream-oversized',
+      now: fixedNow,
+    });
+
+    expect(snapshot.source_lines).toBe(2);
+    expect(snapshot.copied_lines).toBe(2);
+  });
 });

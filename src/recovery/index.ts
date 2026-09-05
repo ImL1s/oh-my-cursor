@@ -100,6 +100,16 @@ class LineRingBuffer {
   }
 }
 
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function buildCandidatesRegex(candidates: Set<string>): RegExp | null {
+  const list = Array.from(candidates).filter((c) => c.length > 0);
+  if (list.length === 0) return null;
+  return new RegExp(list.map(escapeRegex).join('|'));
+}
+
 function extractIdFromLine(line: string): { validId: string | null; malformed: boolean } {
   try {
     const parsed = JSON.parse(line) as unknown;
@@ -108,7 +118,7 @@ function extractIdFromLine(line: string): { validId: string | null; malformed: b
       const id = [record.id, record.uuid, record.message_id].find((v): v is string => typeof v === 'string');
       return { validId: id ?? null, malformed: false };
     }
-    return { validId: null, malformed: true };
+    return { validId: null, malformed: false };
   } catch {
     return { validId: null, malformed: true };
   }
@@ -142,6 +152,7 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
     const chunkBuffer = Buffer.alloc(64 * 1024);
     const decoder = new StringDecoder('utf8');
     let remainder = '';
+    let discardingOversized = false;
 
     while (true) {
       const bytesRead = fs.readSync(fd, chunkBuffer, 0, chunkBuffer.length, null);
@@ -153,7 +164,20 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
       }
 
       hasher.update(chunkBuffer.subarray(0, bytesRead));
-      const chunkText = decoder.write(chunkBuffer.subarray(0, bytesRead));
+      let chunkText = decoder.write(chunkBuffer.subarray(0, bytesRead));
+
+      if (discardingOversized) {
+        const nl = chunkText.indexOf('\n');
+        if (nl === -1) {
+          continue;
+        }
+        discardingOversized = false;
+        sourceLines++;
+        ringBuffer.push(remainder, false);
+        remainder = '';
+        chunkText = chunkText.slice(nl + 1);
+      }
+
       remainder += chunkText;
 
       let newlineIndex: number;
@@ -165,11 +189,42 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
         if (lineStr.length > MAX_LINE_BYTES) lineStr = lineStr.slice(0, MAX_LINE_BYTES);
         ringBuffer.push(lineStr, false);
       }
+
+      if (remainder.length > MAX_LINE_BYTES) {
+        remainder = remainder.slice(0, MAX_LINE_BYTES);
+        discardingOversized = true;
+      }
     }
 
-    const finalRest = remainder + decoder.end();
-    if (finalRest.length > 0) {
-      let lineStr = finalRest;
+    const finalChunk = decoder.end();
+    let textToProcess = finalChunk;
+    if (discardingOversized) {
+      const nl = textToProcess.indexOf('\n');
+      if (nl !== -1) {
+        discardingOversized = false;
+        sourceLines++;
+        ringBuffer.push(remainder, false);
+        remainder = '';
+        textToProcess = textToProcess.slice(nl + 1);
+      }
+    }
+
+    remainder += textToProcess;
+    let newlineIndex: number;
+    while ((newlineIndex = remainder.indexOf('\n')) !== -1) {
+      let lineStr = remainder.slice(0, newlineIndex);
+      if (lineStr.endsWith('\r')) lineStr = lineStr.slice(0, -1);
+      remainder = remainder.slice(newlineIndex + 1);
+      sourceLines++;
+      if (lineStr.length > MAX_LINE_BYTES) lineStr = lineStr.slice(0, MAX_LINE_BYTES);
+      ringBuffer.push(lineStr, false);
+    }
+
+    if (discardingOversized) {
+      sourceLines++;
+      ringBuffer.push(remainder, true);
+    } else if (remainder.length > 0) {
+      let lineStr = remainder;
       if (lineStr.endsWith('\r')) lineStr = lineStr.slice(0, -1);
       sourceLines++;
       if (lineStr.length > MAX_LINE_BYTES) lineStr = lineStr.slice(0, MAX_LINE_BYTES);
@@ -257,7 +312,7 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
     // Truthful parent chain analysis
     const missingTailParents = new Set<string>();
     for (const ref of parentRefs) {
-      if (!tailIds.has(ref.parent)) {
+      if (ref.parent.length > 0 && !tailIds.has(ref.parent)) {
         missingTailParents.add(ref.parent);
       }
     }
@@ -274,12 +329,53 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
         let prefixRemainder = '';
         let prefixLinesRead = 0;
         const prefixDecoder = new StringDecoder('utf8');
+        let prefixDiscardingOversized = false;
+        let prefixOversizedLine = '';
+
+        const candidatesNeedingMalformedCheck = new Set<string>(missingTailParents);
+        let searchRegex = buildCandidatesRegex(candidatesNeedingMalformedCheck);
+
+        const checkPrefixLine = (lineStr: string): boolean => {
+          const { validId, malformed } = extractIdFromLine(lineStr);
+          if (validId !== null && missingTailParents.has(validId)) {
+            foundInPrefix.add(validId);
+            if (candidatesNeedingMalformedCheck.delete(validId)) {
+              searchRegex = buildCandidatesRegex(candidatesNeedingMalformedCheck);
+            }
+            if (foundInPrefix.size === missingTailParents.size) return true;
+          } else if (malformed && searchRegex !== null) {
+            if (searchRegex.test(lineStr)) {
+              for (const parent of candidatesNeedingMalformedCheck) {
+                if (lineStr.includes(parent)) {
+                  unverifiedInPrefix.add(parent);
+                  candidatesNeedingMalformedCheck.delete(parent);
+                }
+              }
+              searchRegex = buildCandidatesRegex(candidatesNeedingMalformedCheck);
+            }
+          }
+          return false;
+        };
 
         while (prefixLinesRead < prefixLinesCount && foundInPrefix.size < missingTailParents.size) {
           const bytesRead = fs.readSync(fd, prefixBuf, 0, prefixBuf.length, prefixOffset);
           if (bytesRead === 0) break;
           prefixOffset += bytesRead;
-          prefixRemainder += prefixDecoder.write(prefixBuf.subarray(0, bytesRead));
+
+          let chunkText = prefixDecoder.write(prefixBuf.subarray(0, bytesRead));
+          if (prefixDiscardingOversized) {
+            const nl = chunkText.indexOf('\n');
+            if (nl === -1) continue;
+            prefixDiscardingOversized = false;
+            prefixLinesRead++;
+            const lineStr = prefixOversizedLine;
+            prefixOversizedLine = '';
+            chunkText = chunkText.slice(nl + 1);
+            if (checkPrefixLine(lineStr)) break;
+            if (prefixLinesRead >= prefixLinesCount) break;
+          }
+
+          prefixRemainder += chunkText;
 
           let newlineIndex: number;
           while ((newlineIndex = prefixRemainder.indexOf('\n')) !== -1) {
@@ -288,21 +384,35 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
             prefixRemainder = prefixRemainder.slice(newlineIndex + 1);
             prefixLinesRead++;
 
-            const { validId, malformed } = extractIdFromLine(lineStr);
-            if (validId !== null && missingTailParents.has(validId)) {
-              foundInPrefix.add(validId);
-              if (foundInPrefix.size === missingTailParents.size) break;
-            } else if (malformed) {
-              for (const parent of missingTailParents) {
-                if (!foundInPrefix.has(parent) && lineStr.includes(parent)) {
-                  unverifiedInPrefix.add(parent);
-                }
-              }
-            }
+            if (lineStr.length > MAX_LINE_BYTES) lineStr = lineStr.slice(0, MAX_LINE_BYTES);
+            if (checkPrefixLine(lineStr)) break;
             if (prefixLinesRead >= prefixLinesCount) break;
           }
+
+          if (prefixRemainder.length > MAX_LINE_BYTES) {
+            prefixOversizedLine = prefixRemainder.slice(0, MAX_LINE_BYTES);
+            prefixRemainder = '';
+            prefixDiscardingOversized = true;
+          }
         }
-      } catch {
+
+        // Verify stable source identity after prefix scan
+        const prefixAfterStat = fs.fstatSync(fd);
+        const prefixAfterLstat = fs.lstatSync(source);
+        if (
+          prefixAfterStat.dev !== beforeStat.dev ||
+          prefixAfterStat.ino !== beforeStat.ino ||
+          prefixAfterStat.size !== beforeStat.size ||
+          prefixAfterStat.mtimeMs !== beforeStat.mtimeMs ||
+          prefixAfterLstat.dev !== beforeStat.dev ||
+          prefixAfterLstat.ino !== beforeStat.ino
+        ) {
+          throw new Error('E_RECOVERY_SOURCE_CHANGED');
+        }
+      } catch (error) {
+        if (error instanceof Error && error.message === 'E_RECOVERY_SOURCE_CHANGED') {
+          throw error;
+        }
         chainScanError = true;
       }
     }
