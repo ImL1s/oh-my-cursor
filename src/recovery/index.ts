@@ -68,34 +68,54 @@ function privateDirectory(directory: string): void {
 }
 
 class LineRingBuffer {
-  private readonly buffer: Array<{ raw: string; unterminated: boolean; bytes: number }>;
+  private readonly buffer: Array<{ raw: string; unterminated: boolean; bytes: number; spilled: boolean }>;
   private head = 0;
   private count = 0;
   private _totalBytes = 0;
+  private _inMemoryBytes = 0;
 
-  constructor(public readonly capacity: number) {
+  constructor(public readonly capacity: number, public readonly maxBytes: number = MAX_TAIL_BYTES) {
     this.buffer = new Array(capacity);
   }
 
   push(raw: string, unterminated: boolean): void {
     const bytes = Buffer.byteLength(raw);
-    const index = (this.head + this.count) % this.capacity;
-    if (this.count < this.capacity) {
-      this.buffer[index] = { raw, unterminated, bytes };
-      this.count++;
-      this._totalBytes += bytes;
-    } else {
-      this._totalBytes -= this.buffer[this.head]!.bytes;
-      this.buffer[this.head] = { raw, unterminated, bytes };
+
+    if (this.count === this.capacity) {
+      const oldest = this.buffer[this.head]!;
+      this._totalBytes -= oldest.bytes;
+      if (!oldest.spilled) {
+        this._inMemoryBytes -= oldest.bytes;
+      }
       this.head = (this.head + 1) % this.capacity;
-      this._totalBytes += bytes;
+      this.count--;
+    }
+
+    const index = (this.head + this.count) % this.capacity;
+    this.buffer[index] = { raw, unterminated, bytes, spilled: false };
+    this.count++;
+    this._totalBytes += bytes;
+    this._inMemoryBytes += bytes;
+
+    // Bound in-memory storage: spill oldest provisional records if heap footprint exceeds maxBytes
+    if (this._inMemoryBytes > this.maxBytes) {
+      for (let i = 0; i < this.count && this._inMemoryBytes > this.maxBytes; i++) {
+        const slot = (this.head + i) % this.capacity;
+        const entry = this.buffer[slot]!;
+        if (!entry.spilled) {
+          entry.raw = '';
+          entry.spilled = true;
+          this._inMemoryBytes -= entry.bytes;
+        }
+      }
     }
   }
 
   toArray(): Array<{ raw: string; unterminated: boolean }> {
     const res: Array<{ raw: string; unterminated: boolean }> = [];
     for (let i = 0; i < this.count; i++) {
-      res.push(this.buffer[(this.head + i) % this.capacity]!);
+      const entry = this.buffer[(this.head + i) % this.capacity]!;
+      res.push({ raw: entry.raw, unterminated: entry.unterminated });
     }
     return res;
   }
@@ -107,14 +127,47 @@ class LineRingBuffer {
   get totalBytes(): number {
     return this._totalBytes;
   }
+
+  get inMemoryBytes(): number {
+    return this._inMemoryBytes;
+  }
+
+  get hasSpilled(): boolean {
+    for (let i = 0; i < this.count; i++) {
+      if (this.buffer[(this.head + i) % this.capacity]!.spilled) return true;
+    }
+    return false;
+  }
 }
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function candidateRepresentations(id: string): string[] {
+  const set = new Set<string>();
+  if (id.length > 0) set.add(id);
+  try {
+    const encoded = JSON.stringify(id).slice(1, -1);
+    if (encoded.length > 0) set.add(encoded);
+  } catch {
+    // ignore
+  }
+  return Array.from(set);
+}
+
+function lineMatchesParent(lineStr: string, parent: string): boolean {
+  if (lineStr.includes(parent)) return true;
+  try {
+    const encoded = JSON.stringify(parent).slice(1, -1);
+    return lineStr.includes(encoded);
+  } catch {
+    return false;
+  }
+}
+
 function buildCandidatesRegex(candidates: Set<string>): RegExp | null {
-  const list = Array.from(candidates).filter((c) => c.length > 0);
+  const list = Array.from(candidates).flatMap(candidateRepresentations).filter((c) => c.length > 0);
   if (list.length === 0) return null;
   return new RegExp(list.map(escapeRegex).join('|'));
 }
@@ -255,7 +308,7 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
       throw new Error('E_RECOVERY_SOURCE_CHANGED');
     }
 
-    if (ringBuffer.totalBytes > MAX_TAIL_BYTES) {
+    if (ringBuffer.totalBytes > MAX_TAIL_BYTES || ringBuffer.hasSpilled) {
       throw new Error('E_RECOVERY_TAIL_TOO_LARGE');
     }
 
@@ -340,7 +393,7 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
         if (searchRegex === null) break;
         if (searchRegex.test(malformedLine)) {
           for (const parent of candidateTailParents) {
-            if (malformedLine.includes(parent)) {
+            if (lineMatchesParent(malformedLine, parent)) {
               unverifiedInTail.add(parent);
               candidateTailParents.delete(parent);
             }
@@ -379,7 +432,7 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
           } else if (malformed && searchRegex !== null) {
             if (searchRegex.test(lineStr)) {
               for (const parent of candidatesNeedingMalformedCheck) {
-                if (lineStr.includes(parent)) {
+                if (lineMatchesParent(lineStr, parent)) {
                   unverifiedInPrefix.add(parent);
                   candidatesNeedingMalformedCheck.delete(parent);
                 }

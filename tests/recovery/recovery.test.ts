@@ -753,4 +753,36 @@ describe('Recovery streaming and truthful chain validation (#21)', () => {
     expect(snapshot.copied_lines).toBe(900);
     expect(snapshot.truncated).toBe(true);
   });
+
+  it('matches parent IDs containing escape characters in malformed records as unverified', () => {
+    const cwd = workspace();
+    const root = projectStateRoot(cwd);
+    const transcript = path.join(cwd, 'escaped-parent.jsonl');
+
+    // Child references a parent with special chars (newline and quote)
+    const parentId = 'p"special\nid';
+    // Malformed line in tail containing the serialized parent ID
+    const malformedTailLine = `{"broken-json": true, "raw_text": "references ${JSON.stringify(parentId).slice(1, -1)} somewhere"`;
+    const childRecord = JSON.stringify({
+      id: 'c1',
+      parent_id: parentId,
+      type: 'message',
+    });
+
+    fs.writeFileSync(transcript, `${malformedTailLine}\n${childRecord}\n`);
+
+    const snapshot = recoverCursorSession(root, {
+      transcriptPath: transcript,
+      recoveryId: 'escaped-parent-tail',
+      now: fixedNow,
+    });
+
+    const unverified = snapshot.warnings.filter((w) => w.code === 'W_CHAIN_UNVERIFIED');
+    expect(unverified).toHaveLength(1);
+    expect(unverified[0]!.detail).toContain(parentId);
+
+    const broken = snapshot.warnings.filter((w) => w.code === 'W_BROKEN_CHAIN');
+    expect(broken).toHaveLength(0);
+  });
 });
+
