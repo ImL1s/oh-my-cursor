@@ -20,6 +20,13 @@ import {
   uninstallMcpServer,
   type McpStatusResult,
 } from '../mcp/lifecycle.js';
+import {
+  inspectPluginStatus,
+  runPluginDoctor,
+  listComponentsReport,
+} from '../plugin/index.js';
+import { explainAlias } from '../catalog/index.js';
+import { discoverCursorComponents } from '../capabilities/discovery.js';
 import type { CursorAgentAdapter } from '../host/cursor-agent.js';
 import { externalStateRoot, flagValue, optionValue, printJson, type CliContext } from './shared.js';
 
@@ -233,6 +240,53 @@ export async function handleLifecycle(context: CliContext): Promise<number | nul
     });
     printJson(context.io, result);
     return 0;
+  }
+  if (command === 'plugin') {
+    if (action === 'status') {
+      const result = await inspectPluginStatus({
+        packageRoot: context.packageRoot,
+        projectRoot: context.cwd,
+        homeDir: context.homeDir,
+        stateRoot,
+        runner,
+      });
+      printJson(context.io, result);
+      return result.ok ? 0 : 1;
+    }
+    if (action === 'doctor') {
+      const live = flagValue(context, '--live');
+      const result = await runPluginDoctor({
+        packageRoot: context.packageRoot,
+        projectRoot: context.cwd,
+        homeDir: context.homeDir,
+        stateRoot,
+        runner,
+      }, live);
+      printJson(context.io, result);
+      return result.ok ? 0 : 1;
+    }
+  }
+  if (command === 'components') {
+    if (action === 'list') {
+      const resolved = flagValue(context, '--resolved');
+      const result = listComponentsReport(context.packageRoot, resolved);
+      printJson(context.io, result);
+      return result.ok ? 0 : 1;
+    }
+  }
+  if (command === 'aliases') {
+    if (action === 'explain') {
+      const name = context.parsed.positionals[0] ?? '';
+      const result = explainAlias(name, context.packageRoot);
+      printJson(context.io, result);
+      return result.found ? 0 : 1;
+    }
+  }
+  if (command === 'capabilities' && action === 'cursor-components') {
+    const live = flagValue(context, '--live');
+    const result = await discoverCursorComponents(context.adapter, context.packageRoot, context.cwd, live);
+    printJson(context.io, result);
+    return result.ok ? 0 : 1;
   }
   if (command === 'native-status' || (command === 'capabilities' && action === 'native-status')) {
     const result = await context.adapter.run({ argv: ['status'], cwd: context.cwd, interactive: false });

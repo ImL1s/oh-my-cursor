@@ -189,12 +189,64 @@ export const COMMAND_SCHEMAS: Readonly<Record<string, CommandSchema>> = Object.f
       { name: '--purge-project-state', kind: 'flag' },
     ],
   },
+  plugin: {
+    stateAccess: 'none',
+    requireAction: true,
+    actions: {
+      status: {
+        options: [
+          { name: '--json', kind: 'flag' },
+          { name: '--state-root', kind: 'string' },
+        ],
+      },
+      doctor: {
+        options: [
+          { name: '--live', kind: 'flag' },
+          { name: '--json', kind: 'flag' },
+          { name: '--state-root', kind: 'string' },
+        ],
+      },
+    },
+  },
+  components: {
+    stateAccess: 'none',
+    requireAction: true,
+    actions: {
+      list: {
+        options: [
+          { name: '--resolved', kind: 'flag' },
+          { name: '--json', kind: 'flag' },
+          { name: '--state-root', kind: 'string' },
+        ],
+      },
+    },
+  },
+  aliases: {
+    stateAccess: 'none',
+    requireAction: true,
+    actions: {
+      explain: {
+        options: [
+          { name: '--json', kind: 'flag' },
+        ],
+        positionals: [
+          { name: 'name', required: true, minLength: 1 },
+        ],
+      },
+    },
+  },
   capabilities: {
     stateAccess: 'none',
     requireAction: true,
     actions: {
       discover: {},
       'native-status': {},
+      'cursor-components': {
+        options: [
+          { name: '--live', kind: 'flag' },
+          { name: '--json', kind: 'flag' },
+        ],
+      },
     },
   },
   'native-status': { stateAccess: 'none' },

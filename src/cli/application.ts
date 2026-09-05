@@ -43,7 +43,10 @@ Lifecycle / orchestration:
   omcu setup|update [--init-project-state]           lifecycle (project state is opt-in)
   omcu rollback --receipt <id|path> [--dry-run]      transactional operator rollback
   omcu doctor [--repair-owner|--repair-journals]|uninstall  observational doctor; explicit owner/journal repair
-  omcu capabilities discover|native-status          pinned host probes
+  omcu plugin status|doctor [--live]                native Cursor plugin status & live provenance doctor
+  omcu components list [--resolved]                 catalog component resolution inventory
+  omcu aliases explain <name>                       compatibility alias lookup and collision scan
+  omcu capabilities discover|native-status|cursor-components pinned host & native component probes
   omcu state create|status|transition|verify|event   CLI-authoritative state
   omcu cancel --id <run-id>                          CLI-authoritative cancellation
   omcu session create|list|resume|continue           Cursor-native sessions
