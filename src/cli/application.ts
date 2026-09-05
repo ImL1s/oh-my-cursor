@@ -10,6 +10,8 @@ import { openProjectStateRoot, openWritableProjectStateRoot, projectStateRoot } 
 import { handleLifecycle } from './lifecycle.js';
 import { handleLocalServices } from './local-services.js';
 import { handleOrchestration } from './orchestration.js';
+import { handleModelsCommand } from './models.js';
+import { handleAskCommand, handleProvidersCommand } from './ask.js';
 import { HostLaunchUsageError, runHostLaunch, shouldHostLaunch } from './host-launch.js';
 import { COMMAND_SCHEMAS, parseCli, renderCommandHelp, type ParsedCommand } from './parser.js';
 import { printJson, type CliContext, type CliIo } from './shared.js';
@@ -69,7 +71,11 @@ Lifecycle / orchestration:
   omcu persist start|status|done|stop ...            opt-in boulder-never-stops loop (hooks)
   omcu team start|run|status|collect|stop ...        experimental local tmux; not native
   omcu team api <op> --input '<json>'                OMX-shaped mailbox/tasks (P0)
-  omcu review|qa|accept|integrate|ask ...             Cursor-backed role prompts
+  omcu models list [--runtime local|cloud]          Cursor model discovery & account catalog
+  omcu providers status [<provider>]                external compatibility provider readiness
+  omcu ask <provider> --prompt <text> [--model …]   single-provider query (typed artifact)
+  omcu ask --compare <p1,p2> --prompt <text>        multi-provider compare & advisory consensus
+  omcu review|qa|accept|integrate ...               Cursor-backed role prompts
 
 Truth markers:
   Host launch / --madmax is not a mode FSM and never stamps verified.
@@ -213,7 +219,14 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
       printJson(io, result); return result.verified ? 0 : 1;
     }
 
-    const handlers = [handleLifecycle, handleLocalServices, handleOrchestration] as const;
+    const handlers = [
+      handleModelsCommand,
+      handleProvidersCommand,
+      handleAskCommand,
+      handleLifecycle,
+      handleLocalServices,
+      handleOrchestration,
+    ] as const;
     for (const handler of handlers) {
       const code = await handler(context);
       if (code !== null) return code;

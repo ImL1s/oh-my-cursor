@@ -400,11 +400,12 @@ export async function handleLifecycle(context: CliContext): Promise<number | nul
   if (command === 'route') {
     if (action === 'explain') {
       const agent = optionValue<string>(context, '--agent') ?? '';
+      const category = optionValue<string>(context, '--category');
       const profile = optionValue<string>(context, '--profile');
       const model = optionValue<string>(context, '--model');
       const runtime = optionValue<string>(context, '--runtime') as 'local' | 'cloud' | undefined;
       try {
-        const explanation = explainAgentRoute(agent, { profile, model, runtime });
+        const explanation = explainAgentRoute(agent, { profile, model, runtime, category });
         printJson(context.io, {
           ok: true,
           explanation,
