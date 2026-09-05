@@ -6,6 +6,7 @@ export class AntigravityProviderAdapter extends BaseCliProviderAdapter {
   readonly displayName = 'Antigravity CLI (agy)';
   readonly isCanonical = false;
   readonly defaultBinary = 'antigravity';
+  override readonly candidateBinaries: readonly string[] = ['antigravity', 'agy'];
   readonly envAllowlist: readonly string[] = [
     'ANTIGRAVITY_API_KEY',
     'GEMINI_API_KEY',
@@ -22,23 +23,6 @@ export class AntigravityProviderAdapter extends BaseCliProviderAdapter {
     }
     args.push(prompt);
     return args;
-  }
-
-  override async probe(cwd?: string, runner?: CustomProcessRunner): Promise<ProviderReadiness> {
-    const primary = findBinaryInPath('antigravity');
-    const alias = findBinaryInPath('agy');
-    const binary = primary ?? alias;
-
-    if (!binary) {
-      return {
-        provider: this.id,
-        available: false,
-        reason: "Neither 'antigravity' nor 'agy' found in PATH",
-        supportedModels: this.supportedModels,
-      };
-    }
-
-    return super.probe(cwd, runner);
   }
 
   protected override checkAuthStatus(

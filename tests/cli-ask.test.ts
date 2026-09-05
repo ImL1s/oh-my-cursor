@@ -78,6 +78,27 @@ describe('CLI models, routing explain, providers status, and ask (Issue #31)', (
     }
   });
 
+  it('explains routing with explicit external provider', async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-cli-route-provider-'));
+    const h = harness(cwd);
+    try {
+      const code = await runCli(
+        ['route', 'explain', '--agent', 'architect', '--provider', 'codex'],
+        h.dependencies,
+        h.io
+      );
+      expect(code).toBe(0);
+
+      const parsed = JSON.parse(h.stdout.join(''));
+      expect(parsed.ok).toBe(true);
+      expect(parsed.explanation.selectedProvider).toBe('codex');
+      expect(parsed.explanation.selectedRuntime).toBe('external');
+      expect(parsed.explanation.resolutionStep).toBe('external_provider');
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('checks providers status and individual provider inspection', async () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-cli-providers-'));
     const h = harness(cwd);

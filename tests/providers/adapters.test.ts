@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   getProviderAdapter,
@@ -165,5 +168,121 @@ describe('External Compatibility Adapters (Issue #31)', () => {
     const result = await execPromise;
     expect(result.exitCode).toBe(1);
     expect(result.error).toContain('E_ABORTED');
+  });
+
+  it('resolves binary candidates when primary name is absent and only alias exists in PATH', async () => {
+    // Test that candidateBinaries resolution works for adapters with aliases
+    const agyAdapter = getProviderAdapter('antigravity');
+    expect(agyAdapter.candidateBinaries).toContain('agy');
+
+    const grokAdapter = getProviderAdapter('grok');
+    expect(grokAdapter.candidateBinaries).toContain('xai');
+
+    const omoAdapter = getProviderAdapter('opencode');
+    expect(omoAdapter.candidateBinaries).toContain('omo');
+
+    const cursorAdapter = getProviderAdapter('cursor');
+    expect(cursorAdapter.candidateBinaries).toContain('cursor');
+
+    // End-to-end test: only 'agy' exists in PATH, 'antigravity' is absent
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-alias-test-'));
+    try {
+      const dummyAgy = path.join(tempDir, 'agy');
+      fs.writeFileSync(dummyAgy, '#!/bin/sh\necho 1.0.0\n', { mode: 0o755 });
+
+      const origPath = process.env.PATH;
+      process.env.PATH = tempDir;
+      try {
+        const found = agyAdapter.resolveBinaryPath();
+        expect(found).toBe(dummyAgy);
+
+        const mockRunner: CustomProcessRunner = async (executable) => {
+          expect(executable).toBe(dummyAgy);
+          return {
+            code: 0,
+            stdout: '1.0.0',
+            stderr: '',
+          };
+        };
+        const readiness = await agyAdapter.probe(undefined, mockRunner);
+        expect(readiness.available).toBe(true);
+        expect(readiness.binaryPath).toBe(dummyAgy);
+      } finally {
+        process.env.PATH = origPath;
+      }
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('detects authentication from CURSOR_AUTH_PATH and CLAUDE_CONFIG_DIR', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-auth-test-'));
+    const dummyCursorBin = path.join(tempDir, 'cursor');
+    fs.writeFileSync(dummyCursorBin, '#!/bin/sh\necho 1.0.0\n', { mode: 0o755 });
+    const dummyClaudeBin = path.join(tempDir, 'claude');
+    fs.writeFileSync(dummyClaudeBin, '#!/bin/sh\necho 1.0.0\n', { mode: 0o755 });
+
+    const dummyAuthFile = path.join(tempDir, 'auth.json');
+    fs.writeFileSync(dummyAuthFile, JSON.stringify({ token: 'test-cursor-token' }));
+
+    const dummyClaudeDir = path.join(tempDir, 'claude-config-dir');
+    fs.mkdirSync(dummyClaudeDir, { recursive: true });
+    fs.writeFileSync(path.join(dummyClaudeDir, 'config.json'), JSON.stringify({ key: 'test' }));
+
+    const origEnv = process.env;
+    try {
+      process.env = {
+        ...origEnv,
+        PATH: `${tempDir}:${origEnv.PATH ?? ''}`,
+        CURSOR_API_KEY: '',
+        CURSOR_AUTH_PATH: dummyAuthFile,
+        ANTHROPIC_API_KEY: '',
+        CLAUDE_API_KEY: '',
+        CLAUDE_CONFIG_DIR: dummyClaudeDir,
+      };
+
+      const mockRunner: CustomProcessRunner = async () => ({
+        code: 0,
+        stdout: '1.0.0',
+        stderr: '',
+      });
+
+      const cursor = getProviderAdapter('cursor');
+      const cursorReadiness = await cursor.probe(undefined, mockRunner);
+      expect(cursorReadiness.authStatus).toBe('authenticated');
+
+      const claude = getProviderAdapter('claude');
+      const claudeReadiness = await claude.probe(undefined, mockRunner);
+      expect(claudeReadiness.authStatus).toBe('authenticated');
+    } finally {
+      process.env = origEnv;
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('permits caller-supplied options.env for custom providers while blocking dangerous loader variables', async () => {
+    let capturedEnv: NodeJS.ProcessEnv | undefined;
+    const mockRunner: CustomProcessRunner = async (_exe, _args, options) => {
+      capturedEnv = options.env;
+      return { code: 0, stdout: 'custom output', stderr: '' };
+    };
+
+    const custom = getProviderAdapter('custom');
+    await custom.execute({
+      prompt: 'custom prompt',
+      runner: mockRunner,
+      customBinary: '/usr/local/bin/custom-ai',
+      env: {
+        CUSTOM_AUTH_HEADER: 'Bearer token-12345',
+        LD_PRELOAD: '/malicious/lib.so',
+        NODE_OPTIONS: '--inspect=0.0.0.0',
+      },
+    });
+
+    expect(capturedEnv).toBeDefined();
+    expect(capturedEnv?.CUSTOM_AUTH_HEADER).toBe('Bearer token-12345');
+    // Dangerous loader variables must be strictly blocked
+    expect(capturedEnv?.LD_PRELOAD).toBeUndefined();
+    expect(capturedEnv?.NODE_OPTIONS).toBeUndefined();
   });
 });

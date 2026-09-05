@@ -54,6 +54,17 @@ export function findBinaryInPath(binary: string): string | null {
   return null;
 }
 
+export const BLOCKED_INJECTED_ENV: ReadonlySet<string> = new Set([
+  'LD_PRELOAD',
+  'LD_LIBRARY_PATH',
+  'DYLD_INSERT_LIBRARIES',
+  'DYLD_LIBRARY_PATH',
+  'NODE_OPTIONS',
+  'PYTHONPATH',
+]);
+
+const SAFE_ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
 export function filterAllowlistedEnv(
   ambient: NodeJS.ProcessEnv,
   allowlist: readonly string[],
@@ -70,7 +81,7 @@ export function filterAllowlistedEnv(
 
   if (extra) {
     for (const [key, value] of Object.entries(extra)) {
-      if (fullAllowlist.has(key)) {
+      if (!BLOCKED_INJECTED_ENV.has(key) && SAFE_ENV_NAME_PATTERN.test(key)) {
         result[key] = value;
       }
     }
@@ -164,12 +175,25 @@ export abstract class BaseCliProviderAdapter implements ProviderAdapter {
   abstract readonly displayName: string;
   abstract readonly isCanonical: boolean;
   abstract readonly defaultBinary: string;
+  readonly candidateBinaries: readonly string[] = [];
   abstract readonly envAllowlist: readonly string[];
   abstract readonly supportedModels: readonly string[];
 
   readonly dangerousFlags: readonly string[] = COMMON_DANGEROUS_FLAGS;
 
   abstract buildExecutionArgs(prompt: string, model?: string): readonly string[];
+
+  resolveBinaryPath(customBinary?: string): string | null {
+    if (customBinary) {
+      return customBinary;
+    }
+    const candidates = this.candidateBinaries.length > 0 ? this.candidateBinaries : [this.defaultBinary];
+    for (const bin of candidates) {
+      const found = findBinaryInPath(bin);
+      if (found) return found;
+    }
+    return null;
+  }
 
   protected checkAuthStatus(
     _env: NodeJS.ProcessEnv,
@@ -179,12 +203,14 @@ export abstract class BaseCliProviderAdapter implements ProviderAdapter {
   }
 
   async probe(cwd?: string, runner: CustomProcessRunner = defaultProcessRunner): Promise<ProviderReadiness> {
-    const binary = findBinaryInPath(this.defaultBinary);
+    const binary = this.resolveBinaryPath();
     if (!binary) {
+      const candidates = this.candidateBinaries.length > 0 ? this.candidateBinaries : [this.defaultBinary];
+      const binaryName = candidates.length > 1 ? candidates.map((b) => `'${b}'`).join(' or ') : `'${this.defaultBinary}'`;
       return {
         provider: this.id,
         available: false,
-        reason: `Binary '${this.defaultBinary}' not found in PATH`,
+        reason: `Binary ${binaryName} not found in PATH`,
         supportedModels: this.supportedModels,
       };
     }
@@ -221,9 +247,20 @@ export abstract class BaseCliProviderAdapter implements ProviderAdapter {
   async execute(options: ProviderExecutionOptions): Promise<ProviderExecutionResult> {
     const startTime = Date.now();
     const runner = options.runner ?? defaultProcessRunner;
-    const binary = options.customBinary ?? findBinaryInPath(this.defaultBinary);
+
+    // Safety checks first
+    if (options.customArgs) {
+      validateSafeArgs(options.customArgs, this.dangerousFlags);
+    }
+
+    const effectiveArgs = options.customArgs ?? this.buildExecutionArgs(options.prompt, options.model);
+    validateSafeArgs(effectiveArgs, this.dangerousFlags);
+
+    const binary = this.resolveBinaryPath(options.customBinary);
 
     if (!binary) {
+      const candidates = this.candidateBinaries.length > 0 ? this.candidateBinaries : [this.defaultBinary];
+      const binaryName = options.customBinary ? `'${options.customBinary}'` : candidates.map((b) => `'${b}'`).join(' or ');
       return {
         provider: this.id,
         model: options.model ?? this.supportedModels[0] ?? 'default',
@@ -231,17 +268,9 @@ export abstract class BaseCliProviderAdapter implements ProviderAdapter {
         exitCode: 1,
         text: '',
         durationMs: Date.now() - startTime,
-        error: `E_PROVIDER_BINARY_NOT_FOUND: '${this.defaultBinary}' is not installed or not in PATH.`,
+        error: `E_PROVIDER_BINARY_NOT_FOUND: ${binaryName} is not installed or not in PATH.`,
       };
     }
-
-    // Safety checks
-    if (options.customArgs) {
-      validateSafeArgs(options.customArgs, this.dangerousFlags);
-    }
-
-    const effectiveArgs = options.customArgs ?? this.buildExecutionArgs(options.prompt, options.model);
-    validateSafeArgs(effectiveArgs, this.dangerousFlags);
 
     const safeEnv = filterAllowlistedEnv(process.env, this.envAllowlist, options.env);
 

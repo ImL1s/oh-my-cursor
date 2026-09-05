@@ -15,6 +15,7 @@ export class CursorProviderAdapter extends BaseCliProviderAdapter {
   readonly displayName = 'Cursor (Canonical)';
   readonly isCanonical = true;
   readonly defaultBinary = 'cursor-agent';
+  override readonly candidateBinaries: readonly string[] = ['cursor-agent', 'cursor'];
   readonly envAllowlist: readonly string[] = [
     'CURSOR_API_KEY',
     'CURSOR_AUTH_PATH',
@@ -47,6 +48,7 @@ export class CursorProviderAdapter extends BaseCliProviderAdapter {
     _binaryPath: string
   ): 'authenticated' | 'unauthenticated' | 'unknown' {
     if (env.CURSOR_API_KEY) return 'authenticated';
+    if (env.CURSOR_AUTH_PATH && fs.existsSync(env.CURSOR_AUTH_PATH)) return 'authenticated';
     const authPaths = [
       path.join(os.homedir(), '.cursor', 'sdk', 'auth.json'),
       path.join(os.homedir(), '.cursor', 'auth.json'),

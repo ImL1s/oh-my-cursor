@@ -6,6 +6,7 @@ export class GeminiProviderAdapter extends BaseCliProviderAdapter {
   readonly displayName = 'Gemini CLI';
   readonly isCanonical = false;
   readonly defaultBinary = 'gemini';
+  override readonly candidateBinaries: readonly string[] = ['gemini'];
   readonly envAllowlist: readonly string[] = [
     'GEMINI_API_KEY',
     'GOOGLE_API_KEY',

@@ -278,6 +278,7 @@ export const COMMAND_SCHEMAS: Readonly<Record<string, CommandSchema>> = Object.f
           { name: '--category', kind: 'string' },
           { name: '--profile', kind: 'string' },
           { name: '--model', kind: 'string' },
+          { name: '--provider', kind: 'string' },
           { name: '--runtime', kind: 'string', enum: ['local', 'cloud'] },
           { name: '--json', kind: 'flag' },
         ],
