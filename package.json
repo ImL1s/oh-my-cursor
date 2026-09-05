@@ -101,7 +101,7 @@
   ],
   "scripts": {
     "build": "node ./scripts/clean.mjs && tsc -p tsconfig.json",
-    "test": "vitest run --maxWorkers=2",
+    "test": "vitest run --pool=forks --maxWorkers=2",
     "test:watch": "vitest",
     "test:cli": "vitest run tests/cli.test.ts tests/cli-integration.test.ts",
     "smoke": "node ./scripts/smoke.mjs",

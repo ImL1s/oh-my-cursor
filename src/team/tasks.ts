@@ -1213,11 +1213,25 @@ export async function renewTaskClaim(
       }
     }
 
+    const currentHeartbeat = current.claim.heartbeat_sequence ?? 0;
+    let nextHeartbeat: number;
+    if (options.heartbeatSequence !== undefined) {
+      if (!Number.isSafeInteger(options.heartbeatSequence) || options.heartbeatSequence <= currentHeartbeat) {
+        return { ok: false, error: 'claim_conflict' as const };
+      }
+      nextHeartbeat = options.heartbeatSequence;
+    } else {
+      nextHeartbeat = currentHeartbeat + 1;
+      if (!Number.isSafeInteger(nextHeartbeat)) {
+        throw new Error('E_TEAM_TASK_HEARTBEAT_OVERFLOW');
+      }
+    }
+
     const updatedClaim: TeamTaskClaim = {
       ...current.claim,
       renewed_at: now().toISOString(),
       leased_until: newLeasedUntil.toISOString(),
-      heartbeat_sequence: options.heartbeatSequence ?? ((current.claim.heartbeat_sequence ?? 0) + 1),
+      heartbeat_sequence: nextHeartbeat,
     };
 
     const updated: TeamTask = {

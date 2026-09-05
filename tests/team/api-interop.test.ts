@@ -463,6 +463,28 @@ describe('team api interop (P0)', { timeout: 20_000 }, () => {
     const taskRenewed = renewed.data.task as { claim: { heartbeat_sequence?: number } };
     expect(taskRenewed.claim.heartbeat_sequence).toBe(1);
 
+    // Reject unsafe heartbeat_sequence (e.g. 1e100)
+    const unsafeHeartbeat = await executeTeamApiOperation('renew-task-claim', {
+      team_name: teamName,
+      task_id: taskId,
+      worker: 'one',
+      claim_token: claimToken,
+      generation: 1,
+      heartbeat_sequence: 1e100,
+    }, root);
+    expect(unsafeHeartbeat.ok).toBe(false);
+
+    // Reject non-monotonic heartbeat_sequence (<= current sequence)
+    const nonMonotonic = await executeTeamApiOperation('renew-task-claim', {
+      team_name: teamName,
+      task_id: taskId,
+      worker: 'one',
+      claim_token: claimToken,
+      generation: 1,
+      heartbeat_sequence: 1,
+    }, root);
+    expect(nonMonotonic.ok).toBe(false);
+
     // Reclaim with force without supervisor authority fails
     const unauthorizedReclaim = await executeTeamApiOperation('reclaim-task', {
       team_name: teamName,

@@ -443,6 +443,32 @@ describe('team tasks lifecycle & generation fencing', { timeout: 20_000 }, () =>
       expect(renew2.task.claim?.heartbeat_sequence).toBe(2);
     });
 
+    it('rejects unsafe or non-monotonic heartbeat sequence options during renewal', async () => {
+      const { root, teamName } = workspace();
+      const task = await createTask(root, teamName, { subject: 'HB test', description: 'desc' });
+      const claim = await claimTask(root, teamName, task.id, 'worker-1');
+      expect(claim.ok).toBe(true);
+      if (!claim.ok) return;
+
+      // Reject unsafe heartbeatSequence (1e100)
+      const unsafeRenew = await renewTaskClaim(root, teamName, task.id, 'worker-1', claim.claimToken, {
+        heartbeatSequence: 1e100,
+      });
+      expect(unsafeRenew.ok).toBe(false);
+
+      // Normal renew advances to 1
+      const renew1 = await renewTaskClaim(root, teamName, task.id, 'worker-1', claim.claimToken, {
+        heartbeatSequence: 1,
+      });
+      expect(renew1.ok).toBe(true);
+
+      // Reject non-monotonic sequence (<= 1)
+      const nonMonotonic = await renewTaskClaim(root, teamName, task.id, 'worker-1', claim.claimToken, {
+        heartbeatSequence: 1,
+      });
+      expect(nonMonotonic.ok).toBe(false);
+    });
+
     it('sustains tasks past default 15m lease without eviction', async () => {
       const { root, teamName } = workspace();
       const task = await createTask(root, teamName, {

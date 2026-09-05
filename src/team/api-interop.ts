@@ -66,7 +66,7 @@ Never stamps verified. native_cursor_team remains false.
 `;
 
 function isFiniteInteger(value: unknown): value is number {
-  return typeof value === 'number' && Number.isInteger(value) && Number.isFinite(value);
+  return typeof value === 'number' && Number.isSafeInteger(value);
 }
 
 function resolveLongLivedWorkerIdentity(
