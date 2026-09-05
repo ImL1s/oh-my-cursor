@@ -1,3 +1,4 @@
+import { currentProcessIdentity } from '../runtime/process-identity.js';
 import type { StateRoot } from '../runtime/state-root.js';
 import { listMailboxMessages, markMessageDelivered, sendDirectMessage } from './mailbox.js';
 import {
@@ -5,6 +6,7 @@ import {
   createTask,
   getTeamSummary,
   listTasks,
+  MAX_TOTAL_LEASE_MS,
   reclaimTask,
   releaseTaskClaim,
   renewTaskClaim,
@@ -33,6 +35,10 @@ export const TEAM_API_OPERATIONS = [
 ] as const;
 
 export type TeamApiOperation = (typeof TEAM_API_OPERATIONS)[number];
+
+export interface TeamApiExecutionOptions {
+  readonly isSupervisor?: boolean;
+}
 
 export type TeamApiEnvelope =
   | { readonly ok: true; readonly operation: TeamApiOperation; readonly data: Record<string, unknown> }
@@ -148,6 +154,9 @@ export function validateTeamApiOperationInput(
       if (args.expected_version !== undefined && (!isFiniteInteger(args.expected_version) || args.expected_version < 1)) {
         invalidInput('expected_version must be a positive integer');
       }
+      if (args.lease_ms !== undefined && (!isFiniteInteger(args.lease_ms) || args.lease_ms < 1 || args.lease_ms > MAX_TOTAL_LEASE_MS)) {
+        invalidInput(`lease_ms must be a positive integer of at most ${MAX_TOTAL_LEASE_MS}`);
+      }
       break;
     case 'renew-task-claim':
       taskId(args);
@@ -156,8 +165,8 @@ export function validateTeamApiOperationInput(
       if (args.generation !== undefined && (!isFiniteInteger(args.generation) || args.generation < 1)) {
         invalidInput('generation must be a positive integer');
       }
-      if (args.lease_ms !== undefined && (!isFiniteInteger(args.lease_ms) || args.lease_ms < 1)) {
-        invalidInput('lease_ms must be a positive integer');
+      if (args.lease_ms !== undefined && (!isFiniteInteger(args.lease_ms) || args.lease_ms < 1 || args.lease_ms > MAX_TOTAL_LEASE_MS)) {
+        invalidInput(`lease_ms must be a positive integer of at most ${MAX_TOTAL_LEASE_MS}`);
       }
       if (args.heartbeat_sequence !== undefined && (!isFiniteInteger(args.heartbeat_sequence) || args.heartbeat_sequence < 0)) {
         invalidInput('heartbeat_sequence must be a non-negative integer');
@@ -172,8 +181,8 @@ export function validateTeamApiOperationInput(
       if (args.force !== undefined && typeof args.force !== 'boolean') {
         invalidInput('force must be a boolean');
       }
-      if (args.lease_ms !== undefined && (!isFiniteInteger(args.lease_ms) || args.lease_ms < 1)) {
-        invalidInput('lease_ms must be a positive integer');
+      if (args.lease_ms !== undefined && (!isFiniteInteger(args.lease_ms) || args.lease_ms < 1 || args.lease_ms > MAX_TOTAL_LEASE_MS)) {
+        invalidInput(`lease_ms must be a positive integer of at most ${MAX_TOTAL_LEASE_MS}`);
       }
       break;
     case 'transition-task-status': {
@@ -260,6 +269,7 @@ export async function executeTeamApiOperation(
   operationName: string,
   args: Record<string, unknown>,
   root: StateRoot,
+  options?: TeamApiExecutionOptions,
 ): Promise<TeamApiEnvelope> {
   const operation = resolveTeamApiOperation(operationName);
   if (operation === null) {
@@ -343,7 +353,12 @@ export async function executeTeamApiOperation(
         if (rawExpected !== undefined && (!isFiniteInteger(rawExpected) || rawExpected < 1)) {
           return fail(operation, 'invalid_input', 'expected_version must be a positive integer when provided');
         }
-        const result = await claimTask(root, teamName, taskId, worker, (rawExpected as number | undefined) ?? null);
+        const leaseMs = isFiniteInteger(args.lease_ms) ? (args.lease_ms as number) : undefined;
+        const result = await claimTask(root, teamName, taskId, worker, {
+          expectedVersion: (rawExpected as number | undefined) ?? null,
+          ...(leaseMs !== undefined ? { leaseMs } : {}),
+          processIdentity: currentProcessIdentity(),
+        });
         return taskOpResult(operation, result as { ok: boolean; error?: string } & Record<string, unknown>);
       }
       case 'renew-task-claim': {
@@ -373,11 +388,15 @@ export async function executeTeamApiOperation(
         }
         const reason = typeof args.reason === 'string' ? args.reason : undefined;
         const force = args.force === true;
+        if (force && !options?.isSupervisor) {
+          return fail(operation, 'unauthorized', 'Forced reclaim requires supervisor authority');
+        }
         const leaseMs = isFiniteInteger(args.lease_ms) ? (args.lease_ms as number) : undefined;
         const result = await reclaimTask(root, teamName, taskId, worker, {
           ...(reason !== undefined ? { reason } : {}),
           ...(force ? { force: true } : {}),
           ...(leaseMs !== undefined ? { leaseMs } : {}),
+          newProcessIdentity: currentProcessIdentity(),
         });
         return taskOpResult(operation, result as { ok: boolean; error?: string } & Record<string, unknown>);
       }

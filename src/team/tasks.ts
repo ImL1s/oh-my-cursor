@@ -404,16 +404,12 @@ function appendTaskJournalEvent(
   event: TeamTaskJournalEvent,
   now: () => Date,
 ): void {
-  try {
-    const journal = taskJournal(root, teamName, taskId, now);
-    journal.append({
-      kind: event.kind,
-      payload: event,
-      at: now().toISOString(),
-    });
-  } catch {
-    // Journal append is best-effort when not under fatal journal corruption
-  }
+  const journal = taskJournal(root, teamName, taskId, now);
+  journal.append({
+    kind: event.kind,
+    payload: event,
+    at: now().toISOString(),
+  });
 }
 
 export function rebuildTaskFromJournal(root: StateRoot, teamName: string, taskId: string): TeamTask | null {
@@ -532,7 +528,7 @@ function checkDependencyCycle(
   }
 }
 
-function unblockDependentTasks(root: StateRoot, teamName: string, completedTaskId: string, now: () => Date): void {
+async function unblockDependentTasks(root: StateRoot, teamName: string, completedTaskId: string, now: () => Date): Promise<void> {
   const dir = teamTasksDir(root, teamName);
   if (!fs.existsSync(dir)) return;
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -541,7 +537,7 @@ function unblockDependentTasks(root: StateRoot, teamName: string, completedTaskI
     if (!match) continue;
     const otherId = match[1]!;
     if (otherId === completedTaskId) continue;
-    withDirectoryLock(taskFilePath(root, teamName, otherId), () => {
+    await withDirectoryLock(taskFilePath(root, teamName, otherId), () => {
       const other = readTaskUnlocked(root, teamName, otherId);
       if (other && other.status === 'blocked' && other.blocked_by && other.blocked_by.includes(completedTaskId)) {
         const stillIncomplete = other.blocked_by.filter((depId) => {
@@ -564,6 +560,47 @@ function unblockDependentTasks(root: StateRoot, teamName: string, completedTaskI
         }
       }
     });
+  }
+}
+
+async function reblockDependentTasks(root: StateRoot, teamName: string, reopenedTaskId: string, now: () => Date): Promise<void> {
+  const dir = teamTasksDir(root, teamName);
+  if (!fs.existsSync(dir)) return;
+
+  const toCheck = new Set<string>([reopenedTaskId]);
+  while (toCheck.size > 0) {
+    const currentUncompletedId = toCheck.values().next().value as string;
+    toCheck.delete(currentUncompletedId);
+
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      const match = /^task-(\d+)\.json$/.exec(entry.name);
+      if (!match) continue;
+      const otherId = match[1]!;
+      if (otherId === currentUncompletedId) continue;
+
+      await withDirectoryLock(taskFilePath(root, teamName, otherId), () => {
+        const other = readTaskUnlocked(root, teamName, otherId);
+        if (other && (other.status === 'pending' || other.status === 'in_progress') && other.blocked_by && other.blocked_by.includes(currentUncompletedId)) {
+          const priorStatus = other.status;
+          const { owner: _o, claim: _c, ...rest } = other;
+          const reblocked: TeamTask = {
+            ...rest,
+            status: 'blocked',
+            version: other.version + 1,
+          };
+          writeTaskUnlocked(root, teamName, reblocked);
+          appendTaskJournalEvent(root, teamName, otherId, {
+            kind: 'transitioned',
+            task: reblocked,
+            from: priorStatus,
+            to: 'blocked',
+          }, now);
+          toCheck.add(otherId);
+        }
+      });
+    }
   }
 }
 
@@ -885,7 +922,7 @@ export async function claimTask(
     const newGeneration = Math.max(working.last_claim_generation ?? 0, working.claim?.generation ?? 0) + 1;
     const claimToken = crypto.randomUUID();
     const tokenSha256 = crypto.createHash('sha256').update(claimToken).digest('hex');
-    const leaseMs = actualOptions.leaseMs ?? CLAIM_LEASE_MS;
+    const leaseMs = Math.min(Math.max(1, actualOptions.leaseMs ?? CLAIM_LEASE_MS), MAX_TOTAL_LEASE_MS);
     const leasedUntil = new Date(nowFn().getTime() + leaseMs).toISOString();
 
     const claim: TeamTaskClaim = {
@@ -1033,7 +1070,7 @@ export async function reclaimTask(
           }
           liveness = classifyWorkerClaimLiveness(current.claim.worker_process_identity, options.processRuntime);
         }
-        if (liveness.status === 'active') {
+        if (liveness.status === 'active' && !options.force) {
           return {
             ok: false,
             error: 'worker_alive' as const,
@@ -1043,7 +1080,7 @@ export async function reclaimTask(
           };
         }
       }
-      if (liveness.status === 'ambiguous') {
+      if (liveness.status === 'ambiguous' && !options.force) {
         return {
           ok: false,
           error: 'reconciliation_required' as const,
@@ -1058,7 +1095,7 @@ export async function reclaimTask(
     const newGeneration = Math.max(current.last_claim_generation ?? 0, priorGeneration) + 1;
     const claimToken = crypto.randomUUID();
     const tokenSha256 = crypto.createHash('sha256').update(claimToken).digest('hex');
-    const leaseMs = options.leaseMs ?? CLAIM_LEASE_MS;
+    const leaseMs = Math.min(Math.max(1, options.leaseMs ?? CLAIM_LEASE_MS), MAX_TOTAL_LEASE_MS);
 
     const claim: TeamTaskClaim = {
       owner: worker,
@@ -1118,7 +1155,7 @@ export async function transitionTaskStatus(
     return { ok: false, error: 'invalid_transition' };
   }
 
-  return withDirectoryLock(taskFilePath(root, teamName, id), () => {
+  const result = await withDirectoryLock(taskFilePath(root, teamName, id), (): TransitionTaskResult => {
     const current = readTaskUnlocked(root, teamName, id);
     if (current === null) return { ok: false, error: 'task_not_found' as const };
     if (TERMINAL.has(current.status)) return { ok: false, error: 'already_terminal' as const };
@@ -1138,6 +1175,14 @@ export async function transitionTaskStatus(
       return { ok: false, error: 'claim_conflict' as const };
     }
     if (leaseExpired(current.claim, nowFn())) return { ok: false, error: 'lease_expired' as const };
+    if (to === 'completed' && current.blocked_by && current.blocked_by.length > 0) {
+      for (const depId of current.blocked_by) {
+        const dep = readTaskUnlocked(root, teamName, depId);
+        if (dep === null || dep.status !== 'completed') {
+          return { ok: false, error: 'invalid_transition' as const };
+        }
+      }
+    }
 
     const updated: TeamTask = {
       id: current.id,
@@ -1149,7 +1194,7 @@ export async function transitionTaskStatus(
       ...(current.last_claim_generation !== undefined ? { last_claim_generation: current.last_claim_generation } : {}),
       ...requestMetadata(current),
       owner: current.owner,
-      completed_at: nowFn().toISOString(),
+      ...(TERMINAL.has(to) ? { completed_at: nowFn().toISOString() } : {}),
       ...(current.blocked_by !== undefined ? { blocked_by: current.blocked_by } : {}),
       ...(to === 'completed' && terminalData.result !== undefined ? { result: terminalData.result } : {}),
       ...(to === 'failed' && terminalData.error !== undefined ? { error: terminalData.error } : {}),
@@ -1161,11 +1206,13 @@ export async function transitionTaskStatus(
       from,
       to,
     }, nowFn);
-    if (to === 'completed') {
-      unblockDependentTasks(root, teamName, current.id, nowFn);
-    }
     return { ok: true as const, task: updated };
   });
+
+  if (result.ok && to === 'completed') {
+    await unblockDependentTasks(root, teamName, id, nowFn);
+  }
+  return result;
 }
 
 export async function releaseTaskClaim(
@@ -1237,7 +1284,7 @@ export async function reopenTask(
   now: () => Date = options.now ?? (() => new Date()),
 ): Promise<ReopenTaskResult> {
   const id = assertTaskId(taskId);
-  return withDirectoryLock(taskFilePath(root, teamName, id), () => {
+  const result = await withDirectoryLock(taskFilePath(root, teamName, id), (): ReopenTaskResult => {
     const current = readTaskUnlocked(root, teamName, id);
     if (current === null) return { ok: false, error: 'task_not_found' as const };
     if (!TERMINAL.has(current.status)) return { ok: false, error: 'not_terminal' as const };
@@ -1272,6 +1319,11 @@ export async function reopenTask(
     }, now);
     return { ok: true as const, task: updated };
   });
+
+  if (result.ok) {
+    await reblockDependentTasks(root, teamName, id, now);
+  }
+  return result;
 }
 
 export async function getTeamSummary(root: StateRoot, teamName: string): Promise<TeamSummary | null> {

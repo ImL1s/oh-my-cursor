@@ -1057,6 +1057,111 @@ describe('team tasks lifecycle & generation fencing', { timeout: 20_000 }, () =>
       expect(claimAgain.task.last_claim_generation).toBe(2);
     });
 
+    it('reconciles and re-blocks active dependent tasks when a prerequisite is reopened', async () => {
+      const { root, teamName } = workspace();
+      const task1 = await createTask(root, teamName, { subject: 'Step 1', description: 'Prerequisite' });
+      const task2 = await createTask(root, teamName, { subject: 'Step 2', description: 'Dependent', blocked_by: [task1.id] });
+
+      // Worker 1 finishes task1 -> task2 unblocks to pending
+      const c1 = await claimTask(root, teamName, task1.id, 'worker-1');
+      expect(c1.ok).toBe(true);
+      if (!c1.ok) return;
+      const f1 = await transitionTaskStatus(root, teamName, task1.id, 'in_progress', 'completed', c1.claimToken);
+      expect(f1.ok).toBe(true);
+
+      const tasksAfter1 = await listTasks(root, teamName);
+      const t2After1 = tasksAfter1.find((t) => t.id === task2.id);
+      expect(t2After1?.status).toBe('pending');
+
+      // Worker 2 claims task2 -> in_progress
+      const c2 = await claimTask(root, teamName, task2.id, 'worker-2');
+      expect(c2.ok).toBe(true);
+      if (!c2.ok) return;
+      expect(c2.task.status).toBe('in_progress');
+
+      // Reopening task1 must reblock task2 and clear its claim
+      const reopen = await reopenTask(root, teamName, task1.id, { reason: 'flaw found in step 1' });
+      expect(reopen.ok).toBe(true);
+
+      const tasksAfterReopen = await listTasks(root, teamName);
+      const t2AfterReopen = tasksAfterReopen.find((t) => t.id === task2.id);
+      expect(t2AfterReopen?.status).toBe('blocked');
+      expect(t2AfterReopen?.owner).toBeUndefined();
+      expect(t2AfterReopen?.claim).toBeUndefined();
+
+      // Worker 2 can no longer transition task2 with old claim token
+      const tryTransition = await transitionTaskStatus(
+        root,
+        teamName,
+        task2.id,
+        'in_progress',
+        'completed',
+        c2.claimToken,
+      );
+      expect(tryTransition.ok).toBe(false);
+      if (tryTransition.ok) return;
+      expect(tryTransition.error).toBe('invalid_transition');
+    });
+
+    it('prevents completing a task if any prerequisite is not completed', async () => {
+      const { root, teamName } = workspace();
+      const task1 = await createTask(root, teamName, { subject: 'Step 1', description: 'Prereq' });
+      const task2 = await createTask(root, teamName, { subject: 'Step 2', description: 'Dep', blocked_by: [task1.id] });
+
+      const c1 = await claimTask(root, teamName, task1.id, 'worker-1');
+      expect(c1.ok).toBe(true);
+      if (!c1.ok) return;
+      await transitionTaskStatus(root, teamName, task1.id, 'in_progress', 'completed', c1.claimToken);
+
+      const c2 = await claimTask(root, teamName, task2.id, 'worker-2');
+      expect(c2.ok).toBe(true);
+      if (!c2.ok) return;
+
+      // Now reopen task1
+      await reopenTask(root, teamName, task1.id);
+
+      // Even if task2 status were somehow still checked, completing it is blocked
+      const finish2 = await transitionTaskStatus(
+        root,
+        teamName,
+        task2.id,
+        'in_progress',
+        'completed',
+        c2.claimToken,
+      );
+      expect(finish2.ok).toBe(false);
+      if (finish2.ok) return;
+      expect(finish2.error).toBe('invalid_transition');
+    });
+
+    it('caps initial leaseMs to MAX_TOTAL_LEASE_MS on claimTask and reclaimTask', async () => {
+      const { root, teamName } = workspace();
+      const task = await createTask(root, teamName, { subject: 'Lease Cap', description: 'Bound check' });
+
+      const now = new Date('2026-09-05T12:00:00.000Z');
+      const hugeLease = 100 * 24 * 60 * 60 * 1000; // 100 days
+
+      // claimTask caps to 24h
+      const claim = await claimTask(root, teamName, task.id, 'worker-1', {
+        leaseMs: hugeLease,
+        now: () => now,
+      });
+      expect(claim.ok).toBe(true);
+      if (!claim.ok) return;
+      const expected24h = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
+      expect(claim.task.claim?.leased_until).toBe(expected24h);
+
+      // reclaimTask caps to 24h
+      const reclaim = await reclaimTask(root, teamName, task.id, 'worker-2', {
+        force: true,
+        leaseMs: hugeLease,
+        now: () => now,
+      });
+      expect(reclaim.ok).toBe(true);
+      if (!reclaim.ok) return;
+      expect(reclaim.task.claim?.leased_until).toBe(expected24h);
+    });
+
     it('computes accurate team summary counts', async () => {
       const { root, teamName } = workspace();
       const t1 = await createTask(root, teamName, { subject: 'P1', description: 'desc' });

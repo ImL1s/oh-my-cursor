@@ -426,14 +426,27 @@ describe('team api interop (P0)', () => {
     const taskRenewed = renewed.data.task as { claim: { heartbeat_sequence?: number } };
     expect(taskRenewed.claim.heartbeat_sequence).toBe(1);
 
-    // Reclaim with force
-    const reclaimed = await executeTeamApiOperation('reclaim-task', {
+    // Reclaim with force without supervisor authority fails
+    const unauthorizedReclaim = await executeTeamApiOperation('reclaim-task', {
       team_name: teamName,
       task_id: taskId,
       worker: 'two',
       force: true,
       reason: 'handover to worker two',
     }, root);
+    expect(unauthorizedReclaim.ok).toBe(false);
+    if (!unauthorizedReclaim.ok) {
+      expect(unauthorizedReclaim.error.code).toBe('unauthorized');
+    }
+
+    // Reclaim with force under supervisor authority succeeds
+    const reclaimed = await executeTeamApiOperation('reclaim-task', {
+      team_name: teamName,
+      task_id: taskId,
+      worker: 'two',
+      force: true,
+      reason: 'handover to worker two',
+    }, root, { isSupervisor: true });
     expect(reclaimed.ok).toBe(true);
     if (!reclaimed.ok) return;
     expect(reclaimed.data.previousGeneration).toBe(1);
@@ -476,5 +489,60 @@ describe('team api interop (P0)', () => {
     const taskReopened = reopened.data.task as { status: string; last_claim_generation?: number };
     expect(taskReopened.status).toBe('pending');
     expect(taskReopened.last_claim_generation).toBe(2);
+  });
+
+  it('rejects claim-task, renew-task-claim, and reclaim-task when lease_ms exceeds MAX_TOTAL_LEASE_MS', async () => {
+    const { root, teamName } = workspace();
+
+    const created = await executeTeamApiOperation('create-task', {
+      team_name: teamName,
+      subject: 'Lease API Cap',
+      description: 'Check cap',
+    }, root);
+    expect(created.ok).toBe(true);
+
+    const excessiveLease = 25 * 60 * 60 * 1000; // 25 hours > 24 hours
+
+    // claim-task rejects
+    const badClaim = await executeTeamApiOperation('claim-task', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'one',
+      lease_ms: excessiveLease,
+    }, root);
+    expect(badClaim.ok).toBe(false);
+    if (!badClaim.ok) expect(badClaim.error.code).toBe('invalid_input');
+
+    // claim normal
+    const claimed = await executeTeamApiOperation('claim-task', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'one',
+      lease_ms: 60000,
+    }, root);
+    expect(claimed.ok).toBe(true);
+    if (!claimed.ok) return;
+    const token = (claimed.data as { claimToken: string }).claimToken;
+
+    // renew-task-claim rejects
+    const badRenew = await executeTeamApiOperation('renew-task-claim', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'one',
+      claim_token: token,
+      lease_ms: excessiveLease,
+    }, root);
+    expect(badRenew.ok).toBe(false);
+    if (!badRenew.ok) expect(badRenew.error.code).toBe('invalid_input');
+
+    // reclaim-task rejects
+    const badReclaim = await executeTeamApiOperation('reclaim-task', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'one',
+      lease_ms: excessiveLease,
+    }, root);
+    expect(badReclaim.ok).toBe(false);
+    if (!badReclaim.ok) expect(badReclaim.error.code).toBe('invalid_input');
   });
 });
