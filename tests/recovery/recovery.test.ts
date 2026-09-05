@@ -402,6 +402,25 @@ describe('Recovery streaming and truthful chain validation (#21)', () => {
     const summary = recoverySummary(read);
     expect(summary.schema_version).toBe(1);
     expect(summary.retained_range.count).toBe(1);
+
+    // Re-accessing existing v1 snapshot via recoverCursorSession returns v1 object without cast
+    const sourceFile = path.join(cwd, 'fake.jsonl');
+    fs.writeFileSync(sourceFile, copyContent);
+    const v1SnapshotFixed: RecoverySnapshotV1 = {
+      ...v1Snapshot,
+      source_sha256: crypto.createHash('sha256').update(copyContent).digest('hex'),
+    };
+    fs.chmodSync(metadataPath, 0o600);
+    fs.writeFileSync(metadataPath, JSON.stringify(v1SnapshotFixed));
+    fs.chmodSync(metadataPath, 0o400);
+
+    const reloaded = recoverCursorSession(root, {
+      transcriptPath: sourceFile,
+      recoveryId: 'v1-test',
+      now: fixedNow,
+    });
+    expect(reloaded.schema_version).toBe(1);
+    expect(reloaded).toEqual(v1SnapshotFixed);
   });
 
   it('rejects mutation of existing immutable snapshots with conflict', () => {

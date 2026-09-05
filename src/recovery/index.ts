@@ -117,7 +117,7 @@ function extractIdFromLine(line: string): string | undefined {
 }
 
 /** Copies only the bounded tail of an explicitly supplied JSONL file into immutable project state. */
-export function recoverCursorSession(root: StateRoot, options: RecoveryOptions): RecoverySnapshotV2 {
+export function recoverCursorSession(root: StateRoot, options: RecoveryOptions): RecoverySnapshot {
   const source = explicitSource(options);
 
   // Validate path and open file descriptor
@@ -382,7 +382,7 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
       ) {
         throw new Error('E_RECOVERY_IMMUTABLE_CONFLICT');
       }
-      return existing as RecoverySnapshotV2;
+      return existing;
     }
 
     atomicWriteJson(metadata, snapshot);
