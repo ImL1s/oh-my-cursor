@@ -164,7 +164,8 @@ export interface RouteExplanation {
   readonly agent: string;
   readonly profile: string;
   readonly selectedModel: string;
-  readonly selectedRuntime: 'local' | 'cloud';
+  readonly selectedRuntime: 'local' | 'cloud' | 'external';
+  readonly selectedProvider?: string | undefined;
   readonly routingTier: RoutingClass;
   readonly reasoningEffort?: ReasoningEffort | undefined;
   readonly resolutionStep: RouteResolutionStep;
@@ -172,4 +173,6 @@ export interface RouteExplanation {
   readonly history: readonly string[];
   readonly routerCompatibility: boolean;
   readonly availableModels: readonly string[];
+  readonly category?: string | undefined;
+  readonly fallbackReason?: string | undefined;
 }

@@ -275,10 +275,39 @@ export const COMMAND_SCHEMAS: Readonly<Record<string, CommandSchema>> = Object.f
       explain: {
         options: [
           { name: '--agent', kind: 'string', required: true },
+          { name: '--category', kind: 'string' },
           { name: '--profile', kind: 'string' },
           { name: '--model', kind: 'string' },
           { name: '--runtime', kind: 'string', enum: ['local', 'cloud'] },
           { name: '--json', kind: 'flag' },
+        ],
+      },
+    },
+  },
+  models: {
+    stateAccess: 'none',
+    requireAction: true,
+    actions: {
+      list: {
+        options: [
+          { name: '--runtime', kind: 'string', enum: ['local', 'cloud'] },
+          { name: '--json', kind: 'flag' },
+          { name: '--refresh', kind: 'flag' },
+          { name: '--state-root', kind: 'string' },
+        ],
+      },
+    },
+  },
+  providers: {
+    stateAccess: 'none',
+    requireAction: true,
+    actions: {
+      status: {
+        options: [
+          { name: '--json', kind: 'flag' },
+        ],
+        positionals: [
+          { name: 'provider' },
         ],
       },
     },
@@ -751,9 +780,19 @@ export const COMMAND_SCHEMAS: Readonly<Record<string, CommandSchema>> = Object.f
   },
   ask: {
     stateAccess: 'none',
-    options: [{ name: '--objective', kind: 'string', pattern: NON_BLANK_PATTERN }, { name: '--prompt', kind: 'string', pattern: NON_BLANK_PATTERN }, { name: '--format', kind: 'string', enum: ['json', 'stream-json'], default: 'json' }],
-    positionals: [{ name: 'objective', pattern: NON_BLANK_PATTERN }],
-    exactlyOneOf: [['--objective', '--prompt', 'objective']],
+    options: [
+      { name: '--objective', kind: 'string', pattern: NON_BLANK_PATTERN },
+      { name: '--prompt', kind: 'string', pattern: NON_BLANK_PATTERN },
+      { name: '--compare', kind: 'string', pattern: NON_BLANK_PATTERN },
+      { name: '--model', kind: 'string', pattern: NON_BLANK_PATTERN },
+      { name: '--timeout', kind: 'integer', min: 1 },
+      { name: '--json', kind: 'flag' },
+      { name: '--format', kind: 'string', enum: ['json', 'stream-json', 'text'], default: 'json' },
+    ],
+    positionals: [
+      { name: 'provider', pattern: NON_BLANK_PATTERN },
+      { name: 'objective', pattern: NON_BLANK_PATTERN },
+    ],
   },
 });
 
