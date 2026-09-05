@@ -205,7 +205,13 @@ export class ProjectMemoryStore {
     return { schema_version: 1, memories: this.list() };
   }
 
-  planImport(bundle: unknown, options: MemoryImportOptions = {}): MemoryImportPlan {
+  private computeImportPlan(
+    bundle: unknown,
+    options: MemoryImportOptions = {},
+  ): {
+    readonly plan: MemoryImportPlan;
+    readonly resolvedRecords: Map<string, ProjectMemory>;
+  } {
     const validatedBundle = validateRawImportBundle(bundle);
     const conflictPolicy: MemoryConflictPolicy = options.conflict ?? 'reject';
 
@@ -342,7 +348,7 @@ export class ProjectMemoryStore {
       }
     }
 
-    return {
+    const plan: MemoryImportPlan = {
       schema_version: 1,
       conflict_policy: conflictPolicy,
       total_incoming: validatedIncoming.length,
@@ -352,13 +358,25 @@ export class ProjectMemoryStore {
       conflicts,
       items,
     };
+
+    return {
+      plan,
+      resolvedRecords: seenInBundle,
+    };
+  }
+
+  planImport(
+    bundle: unknown,
+    options: MemoryImportOptions = {},
+  ): MemoryImportPlan {
+    return this.computeImportPlan(bundle, options).plan;
   }
 
   async import(
     bundle: unknown,
     options: MemoryImportOptions = {},
   ): Promise<MemoryImportReceipt> {
-    const plan = this.planImport(bundle, options);
+    const { plan, resolvedRecords } = this.computeImportPlan(bundle, options);
 
     if (plan.conflicts.length > 0) {
       const conflictIds = plan.conflicts.map((c) => c.id).join(', ');
@@ -380,27 +398,13 @@ export class ProjectMemoryStore {
       return receipt;
     }
 
-    // Build the resolved map of records to commit
-    const validatedBundle = validateRawImportBundle(bundle);
-    const resolvedRecords = new Map<string, ProjectMemory>();
-    for (const rawItem of validatedBundle.memories) {
-      const itemObj = rawItem as Record<string, unknown>;
-      const id = safeMemoryId(itemObj.id);
-      if (!plan.to_create.includes(id) && !plan.to_replace.includes(id)) {
-        continue;
+    // Only commit records that were selected to create or replace
+    const recordsToCommit = new Map<string, ProjectMemory>();
+    for (const id of [...plan.to_create, ...plan.to_replace]) {
+      const record = resolvedRecords.get(id);
+      if (record !== undefined) {
+        recordsToCommit.set(id, record);
       }
-      const text = cleanMemoryText(itemObj.text);
-      const metadata = cleanMemoryMetadata(itemObj.metadata);
-      const updatedAt = validIsoDate(itemObj.updated_at)
-        ? (itemObj.updated_at as string)
-        : this.now().toISOString();
-      resolvedRecords.set(id, {
-        schema_version: 1,
-        id,
-        text,
-        metadata,
-        updated_at: updatedAt,
-      });
     }
 
     return this.withIndexLock(() => {
@@ -417,7 +421,7 @@ export class ProjectMemoryStore {
       try {
         // Stage all incoming writes
         const stagedFiles: { readonly stagingPath: string; readonly targetPath: string }[] = [];
-        for (const record of resolvedRecords.values()) {
+        for (const record of recordsToCommit.values()) {
           const stagingPath = path.join(stagingDir, `${record.id}.json`);
           const targetPath = this.file(record.id);
           this.writeJson(stagingPath, record);

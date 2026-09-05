@@ -145,6 +145,66 @@ describe('ProjectMemoryStore transactional, conflict-aware, and schema-validated
     expect(store.show('rec-a').text).toBe('newest text v3');
   });
 
+  it('correctly commits the selected duplicate when bundle contains internal duplicate IDs', async () => {
+    const root = projectStateRoot(tempDir);
+    const store = new ProjectMemoryStore(root, now);
+
+    // Case 1: newer-wins where the NEWER record appears FIRST, and OLDER appears SECOND in bundle.
+    // The newer record must NOT be overwritten by the later older record.
+    await store.import(
+      {
+        schema_version: 1,
+        memories: [
+          {
+            schema_version: 1,
+            id: 'internal-dup',
+            text: 'newer text v1',
+            metadata: {},
+            updated_at: '2026-06-01T00:00:00.000Z',
+          },
+          {
+            schema_version: 1,
+            id: 'internal-dup',
+            text: 'older text v2',
+            metadata: {},
+            updated_at: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      },
+      { conflict: 'newer-wins' },
+    );
+
+    expect(store.show('internal-dup').text).toBe('newer text v1');
+    expect(store.show('internal-dup').updated_at).toBe('2026-06-01T00:00:00.000Z');
+
+    // Case 2: skip where the FIRST record appears, and a SECOND record appears with different content.
+    // Under skip, the first record must be kept and the second skipped, not overwriting the first.
+    await store.import(
+      {
+        schema_version: 1,
+        memories: [
+          {
+            schema_version: 1,
+            id: 'internal-skip-dup',
+            text: 'first text',
+            metadata: {},
+            updated_at: '2026-01-01T00:00:00.000Z',
+          },
+          {
+            schema_version: 1,
+            id: 'internal-skip-dup',
+            text: 'second text (should be skipped)',
+            metadata: {},
+            updated_at: '2026-02-01T00:00:00.000Z',
+          },
+        ],
+      },
+      { conflict: 'skip' },
+    );
+
+    expect(store.show('internal-skip-dup').text).toBe('first text');
+  });
+
   it('provides dry-run planning without writing any files', async () => {
     const root = projectStateRoot(tempDir);
     const store = new ProjectMemoryStore(root, now);
