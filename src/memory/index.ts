@@ -11,6 +11,7 @@ import {
   MAX_SEARCH_QUERY_LENGTH,
   safeMemoryId,
   validateConflictPolicy,
+  validateMemoryIndex,
   validateMemoryRecord,
   validateRawImportBundle,
   validIsoDate,
@@ -532,6 +533,7 @@ export class ProjectMemoryStore {
       let totalRecords = 0;
       let validRecords = 0;
       const validRecordIds: string[] = [];
+      const validRecordsMap = new Map<string, { readonly updated_at: string; readonly byte_size: number }>();
 
       if (fs.existsSync(recordsDir)) {
         const entries = fs.readdirSync(recordsDir).sort();
@@ -547,10 +549,15 @@ export class ProjectMemoryStore {
               throw new Error('Filename does not end with .json');
             }
             recordId = entry.slice(0, -'.json'.length);
-            readMemoryRecordFile(filePath, recordId);
+            const record = readMemoryRecordFile(filePath, recordId);
+            const byteSize = fs.statSync(filePath).size;
             isValid = true;
             validRecords++;
             validRecordIds.push(recordId);
+            validRecordsMap.set(recordId, {
+              updated_at: record.updated_at,
+              byte_size: byteSize,
+            });
           } catch (err) {
             const reason = (err as Error).message;
             let quarantinedTo: string | undefined;
@@ -599,28 +606,61 @@ export class ProjectMemoryStore {
           } else if (indexStat.size > MAX_INDEX_FILE_BYTES) {
             indexIssue = `Index file exceeds maximum allowed size (${indexStat.size} bytes > ${MAX_INDEX_FILE_BYTES} bytes)`;
           } else {
-            const rawIndex = JSON.parse(fs.readFileSync(indexFile, 'utf8'));
-            if (
-              rawIndex === null ||
-              typeof rawIndex !== 'object' ||
-              rawIndex.schema_version !== 1 ||
-              !Array.isArray(rawIndex.ids) ||
-              !rawIndex.ids.every((id: unknown) => typeof id === 'string')
-            ) {
-              indexIssue = 'Index file is malformed';
-            } else {
-              const indexIds = [...(rawIndex.ids as string[])].sort();
-              const sortedValidIds = [...validRecordIds].sort();
-              if (
-                indexIds.length !== sortedValidIds.length ||
-                indexIds.some((id, idx) => id !== sortedValidIds[idx])
-              ) {
-                indexIssue = `Index IDs [${indexIds.join(', ')}] do not match scanned records [${sortedValidIds.join(', ')}]`;
+            let rawIndex: unknown;
+            try {
+              rawIndex = JSON.parse(fs.readFileSync(indexFile, 'utf8'));
+            } catch (err) {
+              indexIssue = `Index file is unreadable: ${(err as Error).message}`;
+            }
+
+            if (rawIndex !== undefined) {
+              let memoryIndex: MemoryIndex | undefined;
+              try {
+                memoryIndex = validateMemoryIndex(rawIndex);
+              } catch (err) {
+                indexIssue = `Index file is malformed: ${(err as Error).message}`;
+              }
+
+              if (memoryIndex !== undefined) {
+                const indexIds = [...memoryIndex.ids].sort();
+                const sortedValidIds = [...validRecordIds].sort();
+                if (
+                  indexIds.length !== sortedValidIds.length ||
+                  indexIds.some((id, idx) => id !== sortedValidIds[idx])
+                ) {
+                  indexIssue = `Index IDs [${indexIds.join(', ')}] do not match scanned records [${sortedValidIds.join(', ')}]`;
+                } else if (memoryIndex.entries !== undefined) {
+                  if (memoryIndex.entries.length !== validRecordIds.length) {
+                    indexIssue = `Index entries count (${memoryIndex.entries.length}) does not match scanned records count (${validRecordIds.length})`;
+                  } else {
+                    const seenEntryIds = new Set<string>();
+                    for (const entry of memoryIndex.entries) {
+                      if (seenEntryIds.has(entry.id)) {
+                        indexIssue = `Index entries contain duplicate ID "${entry.id}"`;
+                        break;
+                      }
+                      seenEntryIds.add(entry.id);
+                      const validRecord = validRecordsMap.get(entry.id);
+                      if (!validRecord) {
+                        indexIssue = `Index entry ID "${entry.id}" does not correspond to a valid scanned record`;
+                        break;
+                      }
+                      if (entry.updated_at !== validRecord.updated_at) {
+                        indexIssue = `Index entry "${entry.id}" updated_at (${entry.updated_at}) does not match record (${validRecord.updated_at})`;
+                        break;
+                      }
+                      if (entry.byte_size !== validRecord.byte_size) {
+                        indexIssue = `Index entry "${entry.id}" byte_size (${entry.byte_size}) does not match record file size (${validRecord.byte_size})`;
+                        break;
+                      }
+                    }
+                  }
+                }
               }
             }
           }
         } catch (err) {
-          indexIssue = `Index file is unreadable: ${(err as Error).message}`;
+          indexIssue = `Index file check failed: ${(err as Error).message}`;
         }
       }
 

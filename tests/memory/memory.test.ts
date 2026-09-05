@@ -653,6 +653,80 @@ describe('ProjectMemoryStore transactional, conflict-aware, and schema-validated
     expect((await store.doctor()).ok).toBe(true);
   });
 
+  it('validates complete MemoryIndex schema including rescanned_at and entries correspondence in doctor', async () => {
+    const root = projectStateRoot(tempDir);
+    const store = new ProjectMemoryStore(root, now);
+
+    await store.put('valid record 1', {}, 'rec-1');
+    await store.put('valid record 2', {}, 'rec-2');
+    const indexFile = path.join(root.path, 'memory', 'index.json');
+
+    // 1. Malformed rescanned_at
+    fs.writeFileSync(
+      indexFile,
+      JSON.stringify({
+        schema_version: 1,
+        ids: ['rec-1', 'rec-2'],
+        rescanned_at: 'not-a-valid-date',
+      }),
+    );
+    const reportBadDate = await store.doctor();
+    expect(reportBadDate.ok).toBe(false);
+    expect(reportBadDate.corrupt_records).toEqual([
+      expect.objectContaining({
+        file: 'index.json',
+        reason: expect.stringContaining('Index file is malformed'),
+      }),
+    ]);
+    await store.doctor({ repair: true });
+    expect((await store.doctor()).ok).toBe(true);
+
+    // 2. Malformed entries field (e.g. entries: "broken")
+    fs.writeFileSync(
+      indexFile,
+      JSON.stringify({
+        schema_version: 1,
+        ids: ['rec-1', 'rec-2'],
+        rescanned_at: new Date().toISOString(),
+        entries: 'broken',
+      }),
+    );
+    const reportBadEntries = await store.doctor();
+    expect(reportBadEntries.ok).toBe(false);
+    expect(reportBadEntries.corrupt_records).toEqual([
+      expect.objectContaining({
+        file: 'index.json',
+        reason: expect.stringContaining('Index file is malformed'),
+      }),
+    ]);
+    await store.doctor({ repair: true });
+    expect((await store.doctor()).ok).toBe(true);
+
+    // 3. Stale entries updated_at mismatch
+    fs.writeFileSync(
+      indexFile,
+      JSON.stringify({
+        schema_version: 1,
+        ids: ['rec-1', 'rec-2'],
+        rescanned_at: new Date().toISOString(),
+        entries: [
+          { id: 'rec-1', updated_at: '2020-01-01T00:00:00.000Z', byte_size: 100 },
+          { id: 'rec-2', updated_at: '2020-01-01T00:00:00.000Z', byte_size: 100 },
+        ],
+      }),
+    );
+    const reportStaleEntries = await store.doctor();
+    expect(reportStaleEntries.ok).toBe(false);
+    expect(reportStaleEntries.corrupt_records).toEqual([
+      expect.objectContaining({
+        file: 'index.json',
+        reason: expect.stringContaining('does not match record'),
+      }),
+    ]);
+    await store.doctor({ repair: true });
+    expect((await store.doctor()).ok).toBe(true);
+  }, 10_000);
+
   it('bounds quarantine filenames for corrupt entries near NAME_MAX without ENAMETOOLONG', async () => {
     const root = projectStateRoot(tempDir);
     const store = new ProjectMemoryStore(root, now);

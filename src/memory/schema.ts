@@ -105,6 +105,55 @@ export function validIsoDate(value: unknown): boolean {
   return Number.isFinite(time);
 }
 
+export function validateMemoryIndex(raw: unknown): MemoryIndex {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('Index must be an object');
+  }
+  const obj = raw as Record<string, unknown>;
+  if (obj.schema_version !== 1) {
+    throw new Error('Index schema_version must be 1');
+  }
+  if (!Array.isArray(obj.ids) || !obj.ids.every((id: unknown) => typeof id === 'string')) {
+    throw new Error('Index ids must be an array of strings');
+  }
+  if (typeof obj.rescanned_at !== 'string' || !validIsoDate(obj.rescanned_at)) {
+    throw new Error('Index rescanned_at must be a valid ISO date string');
+  }
+  let validatedEntries: MemoryIndexEntry[] | undefined;
+  if (obj.entries !== undefined) {
+    if (!Array.isArray(obj.entries)) {
+      throw new Error('Index entries must be an array when present');
+    }
+    validatedEntries = obj.entries.map((entry, idx) => {
+      if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+        throw new Error(`Index entry at index ${idx} must be an object`);
+      }
+      const e = entry as Record<string, unknown>;
+      if (typeof e.id !== 'string') {
+        throw new Error(`Index entry at index ${idx} id must be a string`);
+      }
+      if (typeof e.updated_at !== 'string' || !validIsoDate(e.updated_at)) {
+        throw new Error(`Index entry at index ${idx} updated_at must be a valid ISO date string`);
+      }
+      if (typeof e.byte_size !== 'number' || !Number.isFinite(e.byte_size) || e.byte_size < 0) {
+        throw new Error(`Index entry at index ${idx} byte_size must be a non-negative finite number`);
+      }
+      return {
+        id: e.id,
+        updated_at: e.updated_at,
+        byte_size: e.byte_size,
+      };
+    });
+  }
+
+  return {
+    schema_version: 1,
+    ids: obj.ids as string[],
+    rescanned_at: obj.rescanned_at,
+    ...(validatedEntries !== undefined ? { entries: validatedEntries } : {}),
+  };
+}
+
 export function cleanMemoryText(value: unknown): string {
   if (typeof value !== 'string' || value.trim() === '' || Buffer.byteLength(value) > MAX_RECORD_TEXT_BYTES) {
     throw new Error('E_MEMORY_TEXT_INVALID');
