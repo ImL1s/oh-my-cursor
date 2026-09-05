@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { atomicWriteJson, withDirectoryLockSync } from '../runtime/atomic.js';
+import { atomicWriteJson, secureFilePath, withDirectoryLockSync } from '../runtime/atomic.js';
 import { withinStateRoot, type StateRoot } from '../runtime/state-root.js';
 import {
   cleanMemoryMetadata,
@@ -409,7 +409,14 @@ export class ProjectMemoryStore {
 
     return this.withIndexLock(() => {
       const recordsDir = this.dir();
-      fs.mkdirSync(recordsDir, { recursive: true });
+      if (fs.existsSync(recordsDir)) {
+        const stat = fs.lstatSync(recordsDir);
+        if (stat.isSymbolicLink() || !stat.isDirectory()) {
+          throw new Error('E_MEMORY_PARENT_INVALID: records directory cannot be a symlink');
+        }
+      } else {
+        fs.mkdirSync(recordsDir, { recursive: true, mode: 0o700 });
+      }
 
       // Transactional commit using a temporary staging directory
       const stagingDir = path.join(
@@ -426,6 +433,14 @@ export class ProjectMemoryStore {
           const targetPath = this.file(record.id);
           this.writeJson(stagingPath, record);
           stagedFiles.push({ stagingPath, targetPath });
+        }
+
+        // Validate all target paths against symlinks before any rename occurs
+        for (const { targetPath } of stagedFiles) {
+          secureFilePath(targetPath, 'E_MEMORY');
+          if (fs.existsSync(targetPath) && fs.lstatSync(targetPath).isSymbolicLink()) {
+            throw new Error('E_MEMORY_TARGET_INVALID: target record cannot be a symlink');
+          }
         }
 
         // Atomically commit all staged files into records/

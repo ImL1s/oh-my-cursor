@@ -357,17 +357,22 @@ describe('ProjectMemoryStore transactional, conflict-aware, and schema-validated
       stderr: (msg: string) => { stderr += msg; },
     };
 
-    // 1. Dry run via CLI
-    stdout = '';
-    const dryCode = await runCli(['memory', 'import', '--file', bundleFile, '--dry-run'], {
-      cwd: tempDir,
-    }, io);
-    expect(dryCode).toBe(0);
-    const dryParsed = JSON.parse(stdout);
-    expect(dryParsed.dry_run).toBe(true);
-    expect(dryParsed.imported).toBe(2);
+    // 1. Dry run on absent workspace fails closed without creating .omcu
+    const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-memory-dry-absent-'));
+    try {
+      stdout = '';
+      stderr = '';
+      const dryAbsentCode = await runCli(['memory', 'import', '--file', bundleFile, '--dry-run'], {
+        cwd: freshDir,
+      }, io);
+      expect(dryAbsentCode).toBe(1);
+      expect(stderr).toContain('E_STATE_ROOT_ABSENT');
+      expect(fs.existsSync(path.join(freshDir, '.omcu'))).toBe(false);
+    } finally {
+      fs.rmSync(freshDir, { recursive: true, force: true });
+    }
 
-    // 2. Real import via CLI
+    // 2. Real import via CLI ensures project state and imports
     stdout = '';
     const importCode = await runCli(['memory', 'import', '--file', bundleFile, '--conflict', 'skip'], {
       cwd: tempDir,
@@ -377,7 +382,16 @@ describe('ProjectMemoryStore transactional, conflict-aware, and schema-validated
     expect(importParsed.dry_run).toBe(false);
     expect(importParsed.imported).toBe(2);
 
-    // 3. Delete via CLI
+    // 3. Dry run on existing workspace succeeds and does not mutate
+    stdout = '';
+    const dryExistingCode = await runCli(['memory', 'import', '--file', bundleFile, '--conflict', 'skip', '--dry-run'], {
+      cwd: tempDir,
+    }, io);
+    expect(dryExistingCode).toBe(0);
+    const dryExistingParsed = JSON.parse(stdout);
+    expect(dryExistingParsed.dry_run).toBe(true);
+
+    // 4. Delete via CLI
     stdout = '';
     const delCode = await runCli(
       ['memory', 'delete', '--id', 'cli-rec-1', '--expected-updated-at', '2026-09-01T00:00:00.000Z'],
@@ -387,12 +401,63 @@ describe('ProjectMemoryStore transactional, conflict-aware, and schema-validated
     expect(delCode).toBe(0);
     expect(JSON.parse(stdout)).toEqual({ deleted: true });
 
-    // 4. Doctor via CLI
+    // 5. Doctor via CLI
     stdout = '';
     const docCode = await runCli(['memory', 'doctor', '--repair'], {
       cwd: tempDir,
     }, io);
     expect(docCode).toBe(0);
     expect(JSON.parse(stdout).ok).toBe(true);
+  });
+
+  it('rejects publication when records directory or target file is a symlink', async () => {
+    const root = projectStateRoot(tempDir);
+    const store = new ProjectMemoryStore(root, now);
+
+    // 1. Symlinked records directory
+    const realRecordsDir = path.join(tempDir, 'external-records');
+    fs.mkdirSync(realRecordsDir, { recursive: true });
+    const memoryDir = path.join(root.path, 'memory');
+    fs.mkdirSync(memoryDir, { recursive: true });
+    fs.symlinkSync(realRecordsDir, path.join(memoryDir, 'records'), 'dir');
+
+    await expect(
+      store.import({
+        schema_version: 1,
+        memories: [
+          { schema_version: 1, id: 'symlink-attack', text: 'payload', metadata: {}, updated_at: '2026-09-01T00:00:00.000Z' },
+        ],
+      }),
+    ).rejects.toThrow('E_MEMORY_PARENT_INVALID');
+
+    // Clean up symlinked directory
+    fs.unlinkSync(path.join(memoryDir, 'records'));
+
+    // 2. Symlinked target file inside real records directory
+    fs.mkdirSync(path.join(memoryDir, 'records'), { recursive: true });
+    const externalTargetFile = path.join(tempDir, 'external-file.json');
+    fs.writeFileSync(
+      externalTargetFile,
+      JSON.stringify({
+        schema_version: 1,
+        id: 'target-symlink',
+        text: 'original external payload',
+        metadata: {},
+        updated_at: '2026-09-01T00:00:00.000Z',
+      }),
+    );
+    fs.symlinkSync(externalTargetFile, path.join(memoryDir, 'records', 'target-symlink.json'));
+
+    await expect(
+      store.import({
+        schema_version: 1,
+        memories: [
+          { schema_version: 1, id: 'target-symlink', text: 'overwrite-attempt', metadata: {}, updated_at: '2026-09-01T00:00:00.000Z' },
+        ],
+      }, { conflict: 'replace' }),
+    ).rejects.toThrow(/E_STATE_CORRUPT|E_MEMORY_TARGET_INVALID/);
+
+    // External file remained intact
+    expect(fs.readFileSync(externalTargetFile, 'utf8')).toContain('original external payload');
   });
 });

@@ -247,7 +247,7 @@ export const COMMAND_SCHEMAS: Readonly<Record<string, CommandSchema>> = Object.f
         options: [
           { name: '--file', kind: 'string', required: true },
           { name: '--conflict', kind: 'string', enum: ['reject', 'skip', 'replace', 'newer-wins'], default: 'reject' },
-          { name: '--dry-run', kind: 'flag' },
+          { name: '--dry-run', kind: 'flag', stateAccess: 'read-existing' },
         ],
       },
       delete: {
