@@ -201,4 +201,105 @@ describe('Cloud Orchestrator (Official Orchestrate Pattern)', () => {
     expect(cancelled.tasks[0]?.status).toBe('cancelled');
     expect(cancelRunCalledWith).toBe('run-cloud-1');
   });
+
+  it('incorporates late handoffs into verifier prompt and preserves replanning on late arrival', async () => {
+    const executedPrompts: string[] = [];
+    let verifierRunning = false;
+
+    vi.spyOn(Agent, 'create').mockImplementation(async () => {
+      let runMsg = '';
+      const fakeRun: Partial<Run> = {
+        id: `cloud-run-late-${Math.random()}`,
+        agentId: 'cloud-agent',
+        status: 'running',
+        supports: () => true,
+        unsupportedReason: () => undefined,
+        wait: async () => {
+          if (runMsg.includes('Verify the completed workers')) {
+            verifierRunning = true;
+            // Let the test inject a late handoff during verification
+            await new Promise((resolve) => setTimeout(resolve, 50));
+            return {
+              id: 'verif-run',
+              status: 'completed',
+              result: 'All checks passed.',
+            } as RunResult;
+          }
+          return {
+            id: 'worker-run',
+            status: 'completed',
+            result: 'Initial worker completed.',
+          } as RunResult;
+        },
+      };
+
+      const fakeAgent: Partial<SDKAgent> = {
+        agentId: 'cloud-agent',
+        send: vi.fn().mockImplementation(async (msg: string) => {
+          runMsg = msg;
+          executedPrompts.push(msg);
+          return fakeRun as Run;
+        }),
+        close: vi.fn(),
+      };
+
+      return fakeAgent as SDKAgent;
+    });
+
+    const plan = await orchestrator.createPlan('Goal with late handoffs', [
+      {
+        taskId: 't1',
+        title: 'Task 1',
+        role: 'omcu-worker',
+        scope: 'scope1',
+        prompt: 'Work 1',
+      },
+    ]);
+
+    // Add an existing late handoff before execute
+    const existingLateHandoff: CloudHandoff = {
+      handoffId: 'late-1',
+      fromTaskId: 'external-dep',
+      toTaskId: plan.plannerId,
+      role: 'worker',
+      summary: 'External service deployed to staging',
+      artifacts: ['service.env'],
+      createdAt: new Date().toISOString(),
+    };
+    await orchestrator.ingestLateHandoff(plan.planId, existingLateHandoff);
+
+    // Ingest another late handoff asynchronously while verifier is running
+    const executePromise = orchestrator.executePlan(plan.planId);
+
+    // Wait until verifier is running
+    while (!verifierRunning) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    const midFlightLateHandoff: CloudHandoff = {
+      handoffId: 'late-2',
+      fromTaskId: 'hotfix-worker',
+      toTaskId: plan.plannerId,
+      role: 'worker',
+      summary: 'Critical hotfix patch arrived during verification',
+      artifacts: ['patch.diff'],
+      createdAt: new Date().toISOString(),
+    };
+    await orchestrator.ingestLateHandoff(plan.planId, midFlightLateHandoff);
+
+    const finalPlan = await executePromise;
+
+    // 1. Verifier prompt should have included the existing late handoff
+    const verifierPrompt = executedPrompts.find((p) => p.includes('Verify the completed workers'))!;
+    expect(verifierPrompt).toContain('External service deployed to staging');
+
+    // 2. Because a new late handoff arrived during verification, final status must be replanning
+    expect(finalPlan.status).toBe('replanning');
+    expect(finalPlan.lateHandoffs).toHaveLength(2);
+
+    // 3. Disk record must preserve both late handoffs
+    const reloaded = orchestrator.loadPlan(plan.planId);
+    expect(reloaded?.status).toBe('replanning');
+    expect(reloaded?.lateHandoffs).toHaveLength(2);
+  });
 });

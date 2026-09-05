@@ -563,8 +563,20 @@ export const COMMAND_SCHEMAS: Readonly<Record<string, CommandSchema>> = Object.f
           { name: '--native', kind: 'flag' },
         ],
       },
-      collect: { stateAccess: 'read-existing', options: [{ name: '--id', kind: 'string', required: true, pattern: TEAM_ID_PATTERN }] },
-      stop: { stateAccess: 'write-ensure', options: [{ name: '--id', kind: 'string', required: true, pattern: TEAM_ID_PATTERN }] },
+      collect: {
+        stateAccess: 'read-existing',
+        options: [
+          { name: '--id', kind: 'string', required: true, pattern: TEAM_ID_PATTERN },
+          { name: '--native', kind: 'flag' },
+        ],
+      },
+      stop: {
+        stateAccess: 'write-ensure',
+        options: [
+          { name: '--id', kind: 'string', required: true, pattern: TEAM_ID_PATTERN },
+          { name: '--native', kind: 'flag' },
+        ],
+      },
       monitor: { stateAccess: 'read-existing', options: [{ name: '--id', kind: 'string', required: true, pattern: TEAM_ID_PATTERN }] },
       resume: { stateAccess: 'write-existing', options: [{ name: '--id', kind: 'string', required: true, pattern: TEAM_ID_PATTERN }] },
       shutdown: { stateAccess: 'write-existing', options: [{ name: '--id', kind: 'string', required: true, pattern: TEAM_ID_PATTERN }] },
@@ -638,6 +650,7 @@ export const COMMAND_SCHEMAS: Readonly<Record<string, CommandSchema>> = Object.f
           { name: '--file', kind: 'string', required: true },
           { name: '--canvas', kind: 'flag' },
           { name: '--workspace', kind: 'string' },
+          { name: '--max-concurrency', kind: 'integer', min: 1 },
         ],
       },
     },
@@ -663,7 +676,10 @@ export const COMMAND_SCHEMAS: Readonly<Record<string, CommandSchema>> = Object.f
       },
       install: {
         stateAccess: 'write-ensure',
-        options: [{ name: '--id', kind: 'string', required: true, pattern: SAFE_KEY_PATTERN }],
+        options: [
+          { name: '--id', kind: 'string', required: true, pattern: SAFE_KEY_PATTERN },
+          { name: '--allow-fallback', kind: 'flag' },
+        ],
       },
       remove: {
         stateAccess: 'write-ensure',

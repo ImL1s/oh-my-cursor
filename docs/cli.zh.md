@@ -345,8 +345,8 @@ Do not edit this block manually; it is generated from `COMMAND_SCHEMAS`.
 - `omcu team start` | options: --id:string required; --workers-json:json required; --native:flag; --runtime:string | positionals: none
 - `omcu team run` | options: --id:string required; --workers-json:json required; --native:flag; --runtime:string | positionals: none
 - `omcu team status` | options: --id:string required; --native:flag | positionals: none
-- `omcu team collect` | options: --id:string required | positionals: none
-- `omcu team stop` | options: --id:string required | positionals: none
+- `omcu team collect` | options: --id:string required; --native:flag | positionals: none
+- `omcu team stop` | options: --id:string required; --native:flag | positionals: none
 - `omcu team monitor` | options: --id:string required | positionals: none
 - `omcu team resume` | options: --id:string required | positionals: none
 - `omcu team shutdown` | options: --id:string required | positionals: none
@@ -359,11 +359,11 @@ Do not edit this block manually; it is generated from `COMMAND_SCHEMAS`.
 - `omcu task cancel` | options: --id:string | positionals: id
 - `omcu task resume` | options: --id:string | positionals: id
 - `omcu dag` | options: none | positionals: none
-- `omcu dag run` | options: --file:string required; --canvas:flag; --workspace:string | positionals: none
+- `omcu dag run` | options: --file:string required; --canvas:flag; --workspace:string; --max-concurrency:integer | positionals: none
 - `omcu automation` | options: none | positionals: none
 - `omcu automation plan` | options: --name:string required; --cron:string; --event:string; --prompt:string required; --agent:string default="omcu-worker"; --runtime:string default="local"; --id:string | positionals: none
 - `omcu automation status` | options: --id:string | positionals: none
-- `omcu automation install` | options: --id:string required | positionals: none
+- `omcu automation install` | options: --id:string required; --allow-fallback:flag | positionals: none
 - `omcu automation remove` | options: --id:string required | positionals: none
 - `omcu persist` | options: none | positionals: none
 - `omcu persist start` | options: --goal:string required; --max-loops:integer default=25; --deadline-min:integer default=120 | positionals: none

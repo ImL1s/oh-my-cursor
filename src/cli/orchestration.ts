@@ -165,12 +165,14 @@ async function handleTeam(action: string | null, context: CliContext): Promise<n
   }
 
   const id = requiredOptionValue<string>(context, '--id');
-  const isNative = flagValue(context, '--native');
+  const isNativeFlag = flagValue(context, '--native');
 
-  if (action === 'monitor' || action === 'resume' || action === 'shutdown' || isNative) {
-    const { CursorNativeTeamSupervisor } = await import('../team/native-supervisor.js');
-    const nativeSupervisor = new CursorNativeTeamSupervisor(context.root);
+  const { CursorNativeTeamSupervisor } = await import('../team/native-supervisor.js');
+  const nativeSupervisor = new CursorNativeTeamSupervisor(context.root);
+  const nativeExists = nativeSupervisor.loadManifest(id) !== null;
+  const isNative = isNativeFlag || nativeExists || action === 'monitor' || action === 'resume' || action === 'shutdown';
 
+  if (isNative) {
     if (action === 'monitor') {
       const output = await nativeSupervisor.monitor(id);
       context.io.stdout(output.endsWith('\n') ? output : `${output}\n`);
@@ -181,7 +183,7 @@ async function handleTeam(action: string | null, context: CliContext): Promise<n
       printJson(context.io, manifest);
       return 0;
     }
-    if (action === 'shutdown') {
+    if (action === 'shutdown' || action === 'stop') {
       const manifest = await nativeSupervisor.shutdown(id);
       printJson(context.io, manifest);
       return 0;
@@ -197,6 +199,11 @@ async function handleTeam(action: string | null, context: CliContext): Promise<n
     if (action === 'status') {
       const stat = await nativeSupervisor.status(id);
       printJson(context.io, stat);
+      return 0;
+    }
+    if (action === 'collect') {
+      const collection = await nativeSupervisor.collect(id);
+      printJson(context.io, collection);
       return 0;
     }
   }
@@ -299,11 +306,12 @@ async function handleDag(action: string | null, context: CliContext): Promise<nu
   if (action === 'run') {
     const file = requiredOptionValue<string>(context, '--file');
     const canvas = flagValue(context, '--canvas');
+    const maxConcurrency = optionValue<number>(context, '--max-concurrency');
     const workspace = optionValue<string>(context, '--workspace') ?? context.cwd;
     const dagDef = readJsonFile(file) as DagDefinition;
     const { DagRunner } = await import('../dag/index.js');
     const dagRunner = new DagRunner(workspace);
-    const result = await dagRunner.run(dagDef, { canvas });
+    const result = await dagRunner.run(dagDef, { canvas, maxConcurrency });
     printJson(context.io, result);
     return result.status === 'completed' ? 0 : 1;
   }
@@ -352,7 +360,8 @@ async function handleAutomation(action: string | null, context: CliContext): Pro
 
   if (action === 'install') {
     const id = requiredOptionValue<string>(context, '--id');
-    const manifest = manager.install(id);
+    const allowFallback = flagValue(context, '--allow-fallback');
+    const manifest = manager.install(id, { allowFallback });
     printJson(context.io, manifest);
     return 0;
   }

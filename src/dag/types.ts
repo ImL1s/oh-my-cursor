@@ -1,4 +1,4 @@
-import type { TaskRecord, TaskRuntime } from '../tasks/types.js';
+import type { TaskBudget, TaskRecord, TaskRuntime } from '../tasks/types.js';
 
 export interface DagTaskSpec {
   readonly id: string;
@@ -11,6 +11,7 @@ export interface DagTaskSpec {
   readonly worktree?: string | undefined;
   readonly ownedPaths?: readonly string[] | undefined;
   readonly acceptanceCriteria?: readonly string[] | undefined;
+  readonly budget?: TaskBudget | undefined;
 }
 
 export interface DagDefinition {
