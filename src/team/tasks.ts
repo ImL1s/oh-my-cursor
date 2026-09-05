@@ -753,10 +753,12 @@ async function reblockDependentTasks(
             error: _err,
             ...rest
           } = other;
+          const preserveOwner = priorStatus === 'pending' && other.claim === undefined && other.owner !== undefined;
           const reblocked: TeamTask = {
             ...rest,
             status: 'blocked',
             version: other.version + 1,
+            ...(preserveOwner ? { owner: other.owner } : {}),
           };
           const event: TeamTaskJournalEvent = (priorStatus === 'completed' || priorStatus === 'failed')
             ? {

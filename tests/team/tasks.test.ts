@@ -1207,6 +1207,52 @@ describe('team tasks lifecycle & generation fencing', { timeout: 20_000 }, () =>
       expect(tryTransition.error).toBe('invalid_transition');
     });
 
+    it('preserves assigned owner when reblocking unclaimed pending tasks upon prerequisite reopen', async () => {
+      const { root, teamName } = workspace();
+      const task1 = await createTask(root, teamName, { subject: 'Step 1', description: 'Prereq' });
+
+      const c1 = await claimTask(root, teamName, task1.id, 'worker-1');
+      expect(c1.ok).toBe(true);
+      if (!c1.ok) return;
+      await transitionTaskStatus(root, teamName, task1.id, 'in_progress', 'completed', c1.claimToken);
+
+      const task2 = await createTask(root, teamName, {
+        subject: 'Step 2',
+        description: 'Designated worker task',
+        owner: 'worker-2',
+        blocked_by: [task1.id],
+      });
+      expect(task2.status).toBe('pending');
+      expect(task2.owner).toBe('worker-2');
+      expect(task2.claim).toBeUndefined();
+
+      const reopen = await reopenTask(root, teamName, task1.id, { reason: 'need rework on step 1' });
+      expect(reopen.ok).toBe(true);
+
+      const reblockedTask2 = await readTask(root, teamName, task2.id);
+      expect(reblockedTask2?.status).toBe('blocked');
+      expect(reblockedTask2?.owner).toBe('worker-2');
+      expect(reblockedTask2?.claim).toBeUndefined();
+
+      const c1Again = await claimTask(root, teamName, task1.id, 'worker-1');
+      expect(c1Again.ok).toBe(true);
+      if (!c1Again.ok) return;
+      await transitionTaskStatus(root, teamName, task1.id, 'in_progress', 'completed', c1Again.claimToken);
+
+      const unblockedTask2 = await readTask(root, teamName, task2.id);
+      expect(unblockedTask2?.status).toBe('pending');
+      expect(unblockedTask2?.owner).toBe('worker-2');
+
+      const invalidClaim = await claimTask(root, teamName, task2.id, 'worker-1');
+      expect(invalidClaim.ok).toBe(false);
+      if (!invalidClaim.ok) {
+        expect(invalidClaim.error).toBe('claim_conflict');
+      }
+
+      const validClaim = await claimTask(root, teamName, task2.id, 'worker-2');
+      expect(validClaim.ok).toBe(true);
+    });
+
     it('prevents completing a task if any prerequisite is not completed', async () => {
       const { root, teamName } = workspace();
       const task1 = await createTask(root, teamName, { subject: 'Step 1', description: 'Prereq' });
