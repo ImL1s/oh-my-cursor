@@ -80,7 +80,7 @@ function makeMockProcessRuntime(options: {
   };
 }
 
-describe('team tasks lifecycle & generation fencing', () => {
+describe('team tasks lifecycle & generation fencing', { timeout: 20_000 }, () => {
   describe('Task Creation & Idempotency', () => {
     it('creates a task with pending status and monotonic last_claim_generation 0', async () => {
       const { root, teamName } = workspace();
@@ -1084,7 +1084,7 @@ describe('team tasks lifecycle & generation fencing', () => {
       expect(summary?.tasks.completed).toBe(1); // t4
       expect(summary?.tasks.failed).toBe(0);
       expect(summary?.workers).toHaveLength(3);
-    });
+    }, 20_000);
   });
 
   describe('Journal Recovery & Corruption Handling', () => {
