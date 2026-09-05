@@ -574,6 +574,91 @@ describe('team api interop (P0)', { timeout: 20_000 }, () => {
     expect(taskReopened.last_claim_generation).toBe(2);
   });
 
+  it('rejects reopen-task when reason exceeds MAX_TERMINAL_PAYLOAD_BYTES or task payload is too large', async () => {
+    const { root, teamName } = workspace();
+
+    const created = await executeTeamApiOperation('create-task', {
+      team_name: teamName,
+      subject: 'Reopen size cap test',
+      description: 'Check payload cap on reopen-task',
+    }, root);
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const taskId = String((created.data.task as { id: string }).id);
+
+    const claimed = await executeTeamApiOperation('claim-task', {
+      team_name: teamName,
+      task_id: taskId,
+      worker: 'one',
+    }, root);
+    expect(claimed.ok).toBe(true);
+    if (!claimed.ok) return;
+    const token = (claimed.data as { claimToken: string }).claimToken;
+
+    const complete = await executeTeamApiOperation('transition-task-status', {
+      team_name: teamName,
+      task_id: taskId,
+      from: 'in_progress',
+      to: 'completed',
+      claim_token: token,
+      result: 'finished',
+    }, root);
+    expect(complete.ok).toBe(true);
+
+    // 1. Reason exceeding MAX_TERMINAL_PAYLOAD_BYTES fails schema validation with invalid_input
+    const oversizedReason = 'r'.repeat(50 * 1024);
+    const rejected1 = await executeTeamApiOperation('reopen-task', {
+      team_name: teamName,
+      task_id: taskId,
+      reason: oversizedReason,
+    }, root, { isSupervisor: true });
+    expect(rejected1.ok).toBe(false);
+    if (!rejected1.ok) {
+      expect(rejected1.error.code).toBe('invalid_input');
+    }
+
+    // 2. Reason within MAX_TERMINAL_PAYLOAD_BYTES but combined task + reason exceeds journal record limit
+    const largeTask = await executeTeamApiOperation('create-task', {
+      team_name: teamName,
+      subject: 'Large subject',
+      description: 'd'.repeat(30 * 1024),
+    }, root);
+    expect(largeTask.ok).toBe(true);
+    if (!largeTask.ok) return;
+    const largeTaskId = String((largeTask.data.task as { id: string }).id);
+
+    const claimedLarge = await executeTeamApiOperation('claim-task', {
+      team_name: teamName,
+      task_id: largeTaskId,
+      worker: 'one',
+    }, root);
+    expect(claimedLarge.ok).toBe(true);
+    if (!claimedLarge.ok) return;
+    const largeToken = (claimedLarge.data as { claimToken: string }).claimToken;
+
+    const completeLarge = await executeTeamApiOperation('transition-task-status', {
+      team_name: teamName,
+      task_id: largeTaskId,
+      from: 'in_progress',
+      to: 'completed',
+      claim_token: largeToken,
+      result: 'finished',
+    }, root);
+    expect(completeLarge.ok).toBe(true);
+
+    const combinedOversizedReason = 'c'.repeat(36 * 1024);
+    const rejected2 = await executeTeamApiOperation('reopen-task', {
+      team_name: teamName,
+      task_id: largeTaskId,
+      reason: combinedOversizedReason,
+    }, root, { isSupervisor: true });
+    expect(rejected2.ok).toBe(false);
+    if (!rejected2.ok) {
+      expect(rejected2.error.code).toBe('invalid_input');
+      expect(rejected2.error.message).toBe('task payload exceeds maximum journal record size');
+    }
+  });
+
   it('rejects claim-task, renew-task-claim, and reclaim-task when lease_ms exceeds MAX_TOTAL_LEASE_MS', async () => {
     const { root, teamName } = workspace();
 

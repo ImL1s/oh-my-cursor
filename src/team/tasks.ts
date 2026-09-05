@@ -198,7 +198,7 @@ export type ReopenTaskResult =
   | { readonly ok: true; readonly task: TeamTask }
   | {
       readonly ok: false;
-      readonly error: 'task_not_found' | 'not_terminal';
+      readonly error: 'task_not_found' | 'not_terminal' | 'payload_too_large';
     };
 
 export interface TeamSummary {
@@ -634,6 +634,11 @@ async function commitTaskWithJournal(
       );
       const isClaimOp = event.kind === 'claimed' || event.kind === 'reclaimed';
       const { owner: _prevOwner, claim: _prevClaim, ...baseTask } = previousTask;
+      const preservedOwner = (previousTask.request_owner !== undefined && previousTask.request_owner !== null)
+        ? previousTask.request_owner
+        : (previousTask.status === 'pending' && previousTask.claim === undefined && previousTask.owner !== undefined
+          ? previousTask.owner
+          : undefined);
       const reconciledTask: TeamTask = {
         ...baseTask,
         version: task.version + 1,
@@ -641,6 +646,7 @@ async function commitTaskWithJournal(
         ...(isClaimOp
           ? {
               status: previousTask.status === 'in_progress' ? 'pending' : previousTask.status,
+              ...(preservedOwner !== undefined ? { owner: preservedOwner } : {}),
             }
           : {
               ...(previousTask.owner !== undefined ? { owner: previousTask.owner } : {}),
@@ -1298,6 +1304,7 @@ export async function claimTask(
         version: working.version + 1,
         ...(working.last_claim_generation !== undefined ? { last_claim_generation: working.last_claim_generation } : {}),
         ...requestMetadata(working),
+        ...(working.request_owner !== undefined && working.request_owner !== null ? { owner: working.request_owner } : {}),
         ...(working.blocked_by !== undefined ? { blocked_by: working.blocked_by } : {}),
       };
     }
@@ -1803,6 +1810,9 @@ export async function reopenTask(
     const result = await withDirectoryLock(taskFilePath(root, teamName, id), async (): Promise<ReopenTaskResult> => {
       const current = readTaskUnlocked(root, teamName, id);
       if (current === null) return { ok: false, error: 'task_not_found' as const };
+      if (options.reason !== undefined && (typeof options.reason !== 'string' || Buffer.byteLength(options.reason, 'utf8') > MAX_TERMINAL_PAYLOAD_BYTES)) {
+        return { ok: false, error: 'payload_too_large' as const };
+      }
 
       if (!TERMINAL.has(current.status)) {
         const isRecoverableCascade = hasReopenCascadeIntent(root, teamName, id) || hasUnreconciledDependents(root, teamName, id);
@@ -1840,17 +1850,33 @@ export async function reopenTask(
         ...(current.blocked_by !== undefined ? { blocked_by: current.blocked_by } : {}),
       };
 
+      const event: TeamTaskJournalEvent = {
+        kind: 'reopened',
+        task: updated,
+        ...(options.reason !== undefined ? { reason: options.reason } : {}),
+      };
+      const probeRecord = {
+        schema_version: 1,
+        stream_id: `team/${teamName}/task/${id}`,
+        sequence: Number.MAX_SAFE_INTEGER,
+        kind: event.kind,
+        payload: event,
+        at: now().toISOString(),
+        previous_digest: '0'.repeat(64),
+        digest: '0'.repeat(64),
+      };
+      const probeLine = `${JSON.stringify(probeRecord)}\n`;
+      if (Buffer.byteLength(probeLine, 'utf8') > MAX_TASK_JOURNAL_RECORD_BYTES) {
+        return { ok: false, error: 'payload_too_large' as const };
+      }
+
       recordReopenCascadeIntent(root, teamName, id, options, now);
 
       await commitTaskWithJournal(
         root,
         teamName,
         updated.id,
-        {
-          kind: 'reopened',
-          task: updated,
-          ...(options.reason !== undefined ? { reason: options.reason } : {}),
-        },
+        event,
         updated,
         current,
         now,

@@ -16,7 +16,7 @@ import {
   reopenTask,
   transitionTaskStatus,
 } from '../../src/team/tasks.js';
-import { initializeTeamState, teamTasksDir, teamTaskJournalDir } from '../../src/team/state-root.js';
+import { initializeTeamState, teamTasksDir, teamTaskJournalDir, teamTaskCascadeIntentPath } from '../../src/team/state-root.js';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -526,6 +526,108 @@ describe('Team Tasks Journal Recovery and Reconciliation', () => {
 
       const retryAgain = await reopenTask(root, teamName, task1.id);
       expect(retryAgain.ok).toBe(true);
-    });
+    }, 15_000);
+
+    it('preserves assigned owner in failed-claim compensation', async () => {
+      const { root, teamName } = workspace();
+      const task = await createTask(root, teamName, {
+        subject: 'Assigned Task',
+        description: 'Will fail snapshot write during claim',
+        owner: 'worker-1',
+        request_id: 'req-assigned-comp-1',
+      });
+
+      expect(task.owner).toBe('worker-1');
+      expect(task.request_owner).toBe('worker-1');
+
+      // Attempt claim by worker-1, inject snapshot write failure
+      await expect(
+        claimTask(root, teamName, task.id, 'worker-1', null, () => new Date(), {
+          taskWriteOptions: {
+            faultInjector: (point) => {
+              if (point === 'write') throw new Error('E_SIMULATED_WRITE_FAILURE');
+            },
+          },
+        }),
+      ).rejects.toThrow('E_SIMULATED_WRITE_FAILURE');
+
+      // The compensation logic reconciled task back to pending and preserved assigned owner
+      const reconciled = await readTask(root, teamName, task.id);
+      expect(reconciled).not.toBeNull();
+      expect(reconciled?.status).toBe('pending');
+      expect(reconciled?.claim).toBeUndefined();
+      expect(reconciled?.owner).toBe('worker-1');
+      expect(reconciled?.request_owner).toBe('worker-1');
+
+      // worker-2 cannot claim it because owner is preserved as worker-1
+      const claimW2 = await claimTask(root, teamName, task.id, 'worker-2');
+      expect(claimW2.ok).toBe(false);
+      if (claimW2.ok) return;
+      expect(claimW2.error).toBe('claim_conflict');
+
+      // worker-1 can successfully claim it
+      const claimW1 = await claimTask(root, teamName, task.id, 'worker-1');
+      expect(claimW1.ok).toBe(true);
+    }, 15_000);
+
+    it('rejects oversized reopen reason before creating cascade intent', async () => {
+      const { root, teamName } = workspace();
+      const task = await createTask(root, teamName, {
+        subject: 'Reopen size limit test',
+        description: 'Large task test',
+      });
+
+      const claim = await claimTask(root, teamName, task.id, 'worker-1');
+      expect(claim.ok).toBe(true);
+      if (!claim.ok) return;
+
+      const comp = await transitionTaskStatus(
+        root,
+        teamName,
+        task.id,
+        'in_progress',
+        'completed',
+        claim.claimToken,
+        { result: 'done' },
+      );
+      expect(comp.ok).toBe(true);
+
+      const intentPath = teamTaskCascadeIntentPath(root, teamName, task.id);
+
+      // 1. Reason exceeding MAX_TERMINAL_PAYLOAD_BYTES (48 KiB)
+      const oversizedReason = 'r'.repeat(50 * 1024);
+      const res1 = await reopenTask(root, teamName, task.id, { reason: oversizedReason });
+      expect(res1.ok).toBe(false);
+      if (res1.ok) return;
+      expect(res1.error).toBe('payload_too_large');
+      expect(fs.existsSync(intentPath)).toBe(false);
+
+      // 2. Reason within MAX_TERMINAL_PAYLOAD_BYTES (40 KiB) but journal record exceeds 64 KiB
+      const largeTask = await createTask(root, teamName, {
+        subject: 'Large task subject',
+        description: 'd'.repeat(30 * 1024),
+      });
+      const claim2 = await claimTask(root, teamName, largeTask.id, 'worker-1');
+      expect(claim2.ok).toBe(true);
+      if (!claim2.ok) return;
+      const comp2 = await transitionTaskStatus(
+        root,
+        teamName,
+        largeTask.id,
+        'in_progress',
+        'completed',
+        claim2.claimToken,
+        { result: 'done' },
+      );
+      expect(comp2.ok).toBe(true);
+
+      const intentPath2 = teamTaskCascadeIntentPath(root, teamName, largeTask.id);
+      const combinedOversizedReason = 'c'.repeat(36 * 1024);
+      const res2 = await reopenTask(root, teamName, largeTask.id, { reason: combinedOversizedReason });
+      expect(res2.ok).toBe(false);
+      if (res2.ok) return;
+      expect(res2.error).toBe('payload_too_large');
+      expect(fs.existsSync(intentPath2)).toBe(false);
+    }, 15_000);
   });
 });

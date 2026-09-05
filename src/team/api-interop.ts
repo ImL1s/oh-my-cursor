@@ -382,8 +382,8 @@ export function validateTeamApiOperationInput(
       break;
     case 'reopen-task':
       taskId(args);
-      if (args.reason !== undefined && typeof args.reason !== 'string') {
-        invalidInput('reason must be a string');
+      if (args.reason !== undefined && (typeof args.reason !== 'string' || Buffer.byteLength(args.reason, 'utf8') > MAX_TERMINAL_PAYLOAD_BYTES)) {
+        invalidInput(`reason must be a string of at most ${MAX_TERMINAL_PAYLOAD_BYTES} bytes`);
       }
       break;
     case 'write-worker-inbox':
@@ -662,6 +662,9 @@ export async function executeTeamApiOperation(
         const result = await reopenTask(root, teamName, taskId, {
           ...(reason !== undefined ? { reason } : {}),
         });
+        if (!result.ok && result.error === 'payload_too_large') {
+          return fail(operation, 'invalid_input', 'task payload exceeds maximum journal record size');
+        }
         return taskOpResult(operation, result as { ok: boolean; error?: string } & Record<string, unknown>);
       }
       case 'get-summary': {
