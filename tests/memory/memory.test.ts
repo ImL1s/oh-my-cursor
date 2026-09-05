@@ -559,4 +559,70 @@ describe('ProjectMemoryStore transactional, conflict-aware, and schema-validated
     expect(results[0]?.id).toBe('rec-offset');
     expect(results[1]?.id).toBe('rec-utc');
   });
+
+  it('reports missing or inconsistent memory index in doctor and repairs cleanly', async () => {
+    const root = projectStateRoot(tempDir);
+    const store = new ProjectMemoryStore(root, now);
+
+    await store.put('valid record 1', {}, 'rec-1');
+    await store.put('valid record 2', {}, 'rec-2');
+
+    const indexFile = path.join(root.path, 'memory', 'index.json');
+    expect(fs.existsSync(indexFile)).toBe(true);
+
+    // 1. Missing index file
+    fs.unlinkSync(indexFile);
+    const reportMissing = await store.doctor();
+    expect(reportMissing.ok).toBe(false);
+    expect(reportMissing.corrupt_records).toEqual([
+      expect.objectContaining({ file: 'index.json', reason: 'Index file is missing' }),
+    ]);
+    expect(reportMissing.index_rebuilt).toBe(false);
+
+    // Repair missing index
+    const repairMissing = await store.doctor({ repair: true });
+    expect(repairMissing.index_rebuilt).toBe(true);
+    expect(fs.existsSync(indexFile)).toBe(true);
+    expect((await store.doctor()).ok).toBe(true);
+
+    // 2. Inconsistent index IDs (e.g. index only lists rec-1 but disk has rec-1 and rec-2)
+    fs.writeFileSync(
+      indexFile,
+      JSON.stringify({
+        schema_version: 1,
+        ids: ['rec-1'],
+        rescanned_at: new Date().toISOString(),
+      }),
+    );
+    const reportMismatched = await store.doctor();
+    expect(reportMismatched.ok).toBe(false);
+    expect(reportMismatched.corrupt_records).toEqual([
+      expect.objectContaining({
+        file: 'index.json',
+        reason: expect.stringContaining('Index IDs [rec-1] do not match scanned records [rec-1, rec-2]'),
+      }),
+    ]);
+
+    // Repair mismatched index
+    const repairMismatched = await store.doctor({ repair: true });
+    expect(repairMismatched.index_rebuilt).toBe(true);
+    expect((await store.doctor()).ok).toBe(true);
+
+    // 3. Malformed index file
+    fs.writeFileSync(indexFile, 'not-valid-json\n');
+    const reportMalformed = await store.doctor();
+    expect(reportMalformed.ok).toBe(false);
+    expect(reportMalformed.corrupt_records).toEqual([
+      expect.objectContaining({
+        file: 'index.json',
+        reason: expect.stringContaining('Index file is unreadable'),
+      }),
+    ]);
+
+    // Repair malformed index (must quarantine corrupt index.json)
+    const repairMalformed = await store.doctor({ repair: true });
+    expect(repairMalformed.index_rebuilt).toBe(true);
+    expect(repairMalformed.corrupt_records[0]?.quarantined_to).toBeDefined();
+    expect((await store.doctor()).ok).toBe(true);
+  });
 });

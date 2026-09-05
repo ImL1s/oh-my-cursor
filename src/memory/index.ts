@@ -499,6 +499,7 @@ export class ProjectMemoryStore {
 
       let totalRecords = 0;
       let validRecords = 0;
+      const validRecordIds: string[] = [];
 
       if (fs.existsSync(recordsDir)) {
         const entries = fs.readdirSync(recordsDir).sort();
@@ -517,6 +518,7 @@ export class ProjectMemoryStore {
             readMemoryRecordFile(filePath, recordId);
             isValid = true;
             validRecords++;
+            validRecordIds.push(recordId);
           } catch (err) {
             const reason = (err as Error).message;
             let quarantinedTo: string | undefined;
@@ -540,14 +542,61 @@ export class ProjectMemoryStore {
         }
       }
 
-      let indexRebuilt = false;
       const indexFile = this.indexFile();
+      let indexIssue: string | undefined;
 
-      if (options.repair === true || corruptRecords.length > 0 || !fs.existsSync(indexFile)) {
-        if (options.repair === true) {
-          this.rescanUnlocked();
-          indexRebuilt = true;
+      if (!fs.existsSync(indexFile)) {
+        if (validRecordIds.length > 0) {
+          indexIssue = 'Index file is missing';
         }
+      } else {
+        try {
+          const rawIndex = JSON.parse(fs.readFileSync(indexFile, 'utf8'));
+          if (
+            rawIndex === null ||
+            typeof rawIndex !== 'object' ||
+            rawIndex.schema_version !== 1 ||
+            !Array.isArray(rawIndex.ids) ||
+            !rawIndex.ids.every((id: unknown) => typeof id === 'string')
+          ) {
+            indexIssue = 'Index file is malformed';
+          } else {
+            const indexIds = [...(rawIndex.ids as string[])].sort();
+            const sortedValidIds = [...validRecordIds].sort();
+            if (
+              indexIds.length !== sortedValidIds.length ||
+              indexIds.some((id, idx) => id !== sortedValidIds[idx])
+            ) {
+              indexIssue = `Index IDs [${indexIds.join(', ')}] do not match scanned records [${sortedValidIds.join(', ')}]`;
+            }
+          }
+        } catch (err) {
+          indexIssue = `Index file is unreadable: ${(err as Error).message}`;
+        }
+      }
+
+      if (indexIssue !== undefined) {
+        let quarantinedTo: string | undefined;
+        if (options.repair === true && fs.existsSync(indexFile)) {
+          const qDir = this.quarantineDir();
+          fs.mkdirSync(qDir, { recursive: true, mode: 0o700 });
+          const nonce = crypto.randomBytes(6).toString('hex');
+          const qFile = path.join(qDir, `index.json.corrupt-${Date.now()}-${nonce}`);
+          fs.renameSync(indexFile, qFile);
+          quarantinedTo = qFile;
+        }
+
+        corruptRecords.push({
+          file: 'index.json',
+          reason: indexIssue,
+          quarantined_to: quarantinedTo,
+        });
+      }
+
+      let indexRebuilt = false;
+      if (options.repair === true && (corruptRecords.length > 0 || !fs.existsSync(indexFile))) {
+        this.rescanUnlocked();
+        indexRebuilt = true;
       }
 
       return {
