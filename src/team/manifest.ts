@@ -8,6 +8,7 @@ export interface TeamManifestRepository {
   write(manifest: TeamManifest): void;
   read(teamId: string): TeamManifest;
   exists(teamId: string): boolean;
+  remove?(teamId: string): void;
 }
 
 export class TeamManifestStore implements TeamManifestRepository {
@@ -29,6 +30,20 @@ export class TeamManifestStore implements TeamManifestRepository {
     }
   }
   exists(teamId: string): boolean { return fs.existsSync(this.file(teamId)); }
+  remove(teamId: string): void {
+    const file = this.file(teamId);
+    try {
+      if (fs.existsSync(file)) {
+        fs.unlinkSync(file);
+      }
+      const dir = path.dirname(file);
+      if (fs.existsSync(dir) && fs.readdirSync(dir).length === 0) {
+        fs.rmdirSync(dir);
+      }
+    } catch {
+      // best-effort removal
+    }
+  }
 }
 
 function normalizeManifest(raw: Record<string, unknown>): TeamManifest {

@@ -143,6 +143,40 @@ describe('experimental tmux team supervisor', () => {
     expect(killed).toEqual([4000]);
   });
 
+  it('removes partial manifest when multi-worker startup fails and allows retry without E_TEAM_EXISTS', async () => {
+    const state = fixture();
+    const manifestStore = new TeamManifestStore(projectStateRoot(state.workspace));
+    let failOnWorkerTwo = true;
+    const runnerWithFlakyWorker = async (executable: string, argv: readonly string[]) => {
+      if (failOnWorkerTwo && argv[0] === 'new-window') {
+        return { code: 1, stdout: '', stderr: 'window creation failed' };
+      }
+      return state.runner(executable, argv);
+    };
+    const supervisor = new ExperimentalTmuxTeamSupervisor(
+      manifestStore,
+      runnerWithFlakyWorker,
+      undefined,
+      (pgid) => state.aliveGroups.delete(pgid),
+      async () => undefined,
+      null,
+      state.identityObserver,
+      state.groupProbe,
+    );
+
+    // Initial start fails on second worker
+    await expect(supervisor.start('team-partial-cleanup', workers(state.workspace))).rejects.toThrow('E_TEAM_TMUX_START');
+    // Manifest must be removed during rollback, not left behind as a partial manifest
+    expect(manifestStore.exists('team-partial-cleanup')).toBe(false);
+
+    // Retry after fixing the issue should succeed without E_TEAM_EXISTS
+    failOnWorkerTwo = false;
+    const manifest = await supervisor.start('team-partial-cleanup', workers(state.workspace));
+    expect(manifest.workers).toHaveLength(2);
+    expect(manifestStore.exists('team-partial-cleanup')).toBe(true);
+    await supervisor.stop('team-partial-cleanup');
+  });
+
   it('converges on retry when the final stopped manifest write fails after successful kill', async () => {
     const state = fixture();
     const backing = new TeamManifestStore(projectStateRoot(state.workspace));

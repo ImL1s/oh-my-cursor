@@ -94,6 +94,7 @@ export class ExperimentalTmuxTeamSupervisor {
       if (coordinationInitialized && this.coordinationRoot !== null) {
         try { removeTeamState(this.coordinationRoot, teamId); } catch { /* best-effort rollback */ }
       }
+      try { this.manifests.remove?.(teamId); } catch { /* best-effort rollback */ }
       if (sessionStarted) await this.cleanupFailedStart(session, workerManifests, workers[0]?.cwd ?? process.cwd(), error);
       throw error;
     }
