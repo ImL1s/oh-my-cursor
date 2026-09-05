@@ -168,14 +168,19 @@ export class ProjectMemoryStore {
     const cleanedText = cleanMemoryText(text);
     const cleanedMetadata = cleanMemoryMetadata(metadata);
 
+    const record: ProjectMemory = {
+      schema_version: 1,
+      id: safeId,
+      text: cleanedText,
+      metadata: cleanedMetadata,
+      updated_at: this.now().toISOString(),
+    };
+    const onDiskCandidate = `${JSON.stringify(record, null, 2)}\n`;
+    if (Buffer.byteLength(onDiskCandidate, 'utf8') > MAX_RECORD_FILE_BYTES) {
+      throw new Error('E_MEMORY_METADATA_INVALID');
+    }
+
     return this.withIndexLock(() => {
-      const record: ProjectMemory = {
-        schema_version: 1,
-        id: safeId,
-        text: cleanedText,
-        metadata: cleanedMetadata,
-        updated_at: this.now().toISOString(),
-      };
       this.writeJson(this.file(safeId), record);
       this.rescanUnlocked();
       return record;
@@ -268,13 +273,19 @@ export class ProjectMemoryStore {
         ? (itemObj.updated_at as string)
         : this.now().toISOString();
 
-      validatedIncoming.push({
+      const incomingRecord: ProjectMemory = {
         schema_version: 1,
         id,
         text,
         metadata,
         updated_at: updatedAt,
-      });
+      };
+      const onDisk = `${JSON.stringify(incomingRecord, null, 2)}\n`;
+      if (Buffer.byteLength(onDisk, 'utf8') > MAX_RECORD_FILE_BYTES) {
+        throw new Error('E_MEMORY_RECORD_INVALID');
+      }
+
+      validatedIncoming.push(incomingRecord);
     }
 
     // 2. Read local records to discover conflicts
@@ -490,6 +501,10 @@ export class ProjectMemoryStore {
           const stagingPath = path.join(stagingDir, `${record.id}.json`);
           const targetPath = this.file(record.id);
           this.writeJson(stagingPath, record);
+          const stat = fs.statSync(stagingPath);
+          if (stat.size > MAX_RECORD_FILE_BYTES) {
+            throw new Error('E_MEMORY_RECORD_INVALID: staged record exceeds size limit');
+          }
           stagedFiles.push({ stagingPath, targetPath });
         }
 

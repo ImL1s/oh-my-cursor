@@ -178,6 +178,13 @@ export function cleanMemoryMetadata(value: unknown): unknown {
     if (redactedSerialized !== undefined && Buffer.byteLength(redactedSerialized) > MAX_RECORD_METADATA_BYTES) {
       throw new Error('E_MEMORY_METADATA_INVALID');
     }
+    const formatted = JSON.stringify(redacted, null, 2);
+    if (
+      formatted !== undefined &&
+      Buffer.byteLength(formatted) > MAX_RECORD_FILE_BYTES - MAX_RECORD_TEXT_BYTES - 2048
+    ) {
+      throw new Error('E_MEMORY_METADATA_INVALID');
+    }
     return redacted;
   } catch (error) {
     if ((error as Error).message === 'E_MEMORY_METADATA_INVALID') throw error;
@@ -217,13 +224,20 @@ export function validateMemoryRecord(parsed: unknown, expectedId?: string): Proj
     throw new Error('E_MEMORY_RECORD_INVALID');
   }
 
-  return {
+  const record: ProjectMemory = {
     schema_version: 1,
     id,
     text: obj.text,
     metadata: obj.metadata,
     updated_at: obj.updated_at as string,
   };
+
+  const onDiskJson = `${JSON.stringify(record, null, 2)}\n`;
+  if (Buffer.byteLength(onDiskJson, 'utf8') > MAX_RECORD_FILE_BYTES) {
+    throw new Error('E_MEMORY_RECORD_INVALID');
+  }
+
+  return record;
 }
 
 export function validateRawImportBundle(bundle: unknown): {

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { beforeEach, afterEach, describe, expect, it } from 'vitest';
-import { ProjectMemoryStore } from '../../src/memory/index.js';
+import { ProjectMemoryStore, validateMemoryRecord } from '../../src/memory/index.js';
 import { projectStateRoot } from '../../src/runtime/state-root.js';
 import { atomicWriteJson } from '../../src/runtime/atomic.js';
 import { runCli } from '../../src/cli/application.js';
@@ -873,4 +873,56 @@ describe('ProjectMemoryStore transactional, conflict-aware, and schema-validated
     expect(fs.existsSync(oversizedRecordPath)).toBe(false);
     expect((await store.doctor()).ok).toBe(true);
   }, 10_000);
+
+  it('rejects metadata that expands beyond MAX_RECORD_FILE_BYTES when formatted with two-space indentation in put and import', async () => {
+    const root = projectStateRoot(tempDir);
+    const store = new ProjectMemoryStore(root, now);
+
+    const nestedLeaves: any[] = [];
+    for (let i = 0; i < 100; i++) {
+      const inner: any[] = [];
+      for (let j = 0; j < 48; j++) {
+        inner.push([[[[[j]]]]]);
+      }
+      nestedLeaves.push(inner);
+    }
+    const compactBytes = Buffer.byteLength(JSON.stringify(nestedLeaves));
+    const formattedBytes = Buffer.byteLength(JSON.stringify(nestedLeaves, null, 2));
+    expect(compactBytes).toBeLessThan(64 * 1024);
+    expect(formattedBytes).toBeGreaterThan(512 * 1024);
+
+    // put() should reject with E_MEMORY_METADATA_INVALID
+    await expect(store.put('valid text', nestedLeaves, 'expanding-json')).rejects.toThrow(
+      'E_MEMORY_METADATA_INVALID',
+    );
+    expect(store.list()).toEqual([]);
+
+    // import() should reject with E_MEMORY_METADATA_INVALID
+    await expect(
+      store.import({
+        schema_version: 1,
+        memories: [
+          {
+            schema_version: 1,
+            id: 'expanding-import',
+            text: 'valid text',
+            metadata: nestedLeaves,
+            updated_at: new Date().toISOString(),
+          },
+        ],
+      }),
+    ).rejects.toThrow('E_MEMORY_METADATA_INVALID');
+    expect(store.list()).toEqual([]);
+
+    // validateMemoryRecord directly rejects with E_MEMORY_RECORD_INVALID
+    expect(() =>
+      validateMemoryRecord({
+        schema_version: 1,
+        id: 'expanding-record',
+        text: 'valid text',
+        metadata: nestedLeaves,
+        updated_at: new Date().toISOString(),
+      }),
+    ).toThrow('E_MEMORY_RECORD_INVALID');
+  });
 });
