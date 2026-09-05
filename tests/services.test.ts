@@ -134,17 +134,19 @@ describe('Cursor service layer', () => {
     expect(store.show('release').metadata).toEqual({ apiKey: '<redacted>' });
     const bundle = store.export();
     const other = new ProjectMemoryStore(projectStateRoot(workspace()), now);
-    expect(await other.import(bundle)).toBe(1);
+    const receipt = await other.import(bundle);
+    expect(receipt.imported).toBe(1);
     expect(other.rescan()).toEqual(['release']);
   });
 
-  it('imports a validated memory batch under one index rescan with last duplicate winning', async () => {
+  it('imports a validated memory batch under one index rescan with last duplicate winning when conflict policy is replace', async () => {
     const store = new ProjectMemoryStore(projectStateRoot(workspace()), now);
     const internal = store as unknown as { rescanUnlocked: () => readonly string[] };
     const originalRescan = internal.rescanUnlocked.bind(store);
     let rescans = 0;
     internal.rescanUnlocked = () => { rescans += 1; return originalRescan(); };
 
+    // Default policy reject rejects duplicates
     await expect(store.import({
       schema_version: 1,
       memories: [
@@ -152,7 +154,18 @@ describe('Cursor service layer', () => {
         { schema_version: 1, id: 'unique', text: 'value', metadata: {}, updated_at: 'ignored' },
         { schema_version: 1, id: 'duplicate', text: 'new', metadata: {}, updated_at: 'ignored' },
       ],
-    })).resolves.toBe(3);
+    })).rejects.toThrow('E_MEMORY_CONFLICT');
+
+    // Conflict policy replace succeeds with last duplicate winning
+    const receipt = await store.import({
+      schema_version: 1,
+      memories: [
+        { schema_version: 1, id: 'duplicate', text: 'old', metadata: {}, updated_at: 'ignored' },
+        { schema_version: 1, id: 'unique', text: 'value', metadata: {}, updated_at: 'ignored' },
+        { schema_version: 1, id: 'duplicate', text: 'new', metadata: {}, updated_at: 'ignored' },
+      ],
+    }, { conflict: 'replace' });
+    expect(receipt.imported).toBe(2);
     expect(rescans).toBe(1);
     expect(store.show('duplicate').text).toBe('new');
     expect(store.list().map(({ id }) => id)).toEqual(['duplicate', 'unique']);
@@ -168,7 +181,7 @@ describe('Cursor service layer', () => {
     expect(empty.list()).toEqual([]);
   });
 
-  it('rebuilds the memory index after a later record write fails during import', async () => {
+  it('rolls back all staged writes when a record write fails during transactional import', async () => {
     const root = projectStateRoot(workspace());
     const store = new ProjectMemoryStore(root, now, (file, value) => {
       if (file.endsWith(`${path.sep}b.json`)) throw new Error('E_INJECTED_RECORD_WRITE');
@@ -181,10 +194,9 @@ describe('Cursor service layer', () => {
         { schema_version: 1, id: 'b', text: 'fails', metadata: {}, updated_at: 'ignored' },
       ],
     })).rejects.toThrow('E_INJECTED_RECORD_WRITE');
-    const index = JSON.parse(fs.readFileSync(path.join(root.path, 'memory', 'index.json'), 'utf8')) as { ids: string[] };
-    expect(index.ids).toEqual(['a']);
-    expect(store.show('a').text).toBe('committed');
+    expect(fs.existsSync(path.join(root.path, 'memory', 'records', 'a.json'))).toBe(false);
     expect(fs.existsSync(path.join(root.path, 'memory', 'records', 'b.json'))).toBe(false);
+    expect(store.list()).toEqual([]);
   });
 
   it('serializes shared memory index updates across processes without losing records', async () => {

@@ -118,7 +118,21 @@ async function handleMemory(action: string | null, context: CliContext): Promise
   else if (action === 'show') printJson(context.io, store.show(requiredOptionValue<string>(context, '--id')));
   else if (action === 'search') printJson(context.io, store.search(requiredOptionValue<string>(context, '--query'), requiredOptionValue<number>(context, '--limit')));
   else if (action === 'export') printJson(context.io, store.export());
-  else if (action === 'import') printJson(context.io, { imported: await store.import(readJsonFile(requiredOptionValue<string>(context, '--file'))) });
+  else if (action === 'import') {
+    const file = requiredOptionValue<string>(context, '--file');
+    const dryRun = flagValue(context, '--dry-run');
+    const conflict = optionValue<string>(context, '--conflict') as any;
+    printJson(context.io, await store.import(readJsonFile(file), { dryRun, conflict }));
+  }
+  else if (action === 'delete') {
+    const id = requiredOptionValue<string>(context, '--id');
+    const expectedUpdatedAt = optionValue<string>(context, '--expected-updated-at');
+    printJson(context.io, { deleted: await store.delete(id, { expectedUpdatedAt }) });
+  }
+  else if (action === 'doctor') {
+    const repair = flagValue(context, '--repair');
+    printJson(context.io, await store.doctor({ repair }));
+  }
   else if (action === 'rescan') printJson(context.io, { ids: store.rescan() });
   else throw new Error('E_MEMORY_ACTION_INVALID');
   return 0;

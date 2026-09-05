@@ -1,32 +1,85 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { atomicWriteJson, withDirectoryLockSync } from '../runtime/atomic.js';
-import { redact } from '../runtime/redaction.js';
+import { atomicWriteJson, secureFilePath, withDirectoryLockSync } from '../runtime/atomic.js';
 import { withinStateRoot, type StateRoot } from '../runtime/state-root.js';
+import {
+  cleanMemoryMetadata,
+  cleanMemoryText,
+  MAX_INDEX_FILE_BYTES,
+  MAX_RECORD_FILE_BYTES,
+  MAX_SEARCH_QUERY_LENGTH,
+  safeMemoryId,
+  validateConflictPolicy,
+  validateMemoryIndex,
+  validateMemoryRecord,
+  validateRawImportBundle,
+  validIsoDate,
+  type MemoryConflictPolicy,
+  type MemoryDoctorReport,
+  type MemoryExport,
+  type MemoryImportOptions,
+  type MemoryImportPlan,
+  type MemoryImportPlanItem,
+  type MemoryImportReceipt,
+  type MemoryIndex,
+  type MemoryIndexEntry,
+  type ProjectMemory,
+} from './schema.js';
 
-export interface ProjectMemory { readonly schema_version: 1; readonly id: string; readonly text: string; readonly metadata: unknown; readonly updated_at: string }
-export interface MemoryExport { readonly schema_version: 1; readonly memories: readonly ProjectMemory[] }
-function safe(value: string): string { if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value)) throw new Error('E_MEMORY_ID_INVALID'); return value; }
-function cleanText(value: string): string { if (value.trim() === '' || Buffer.byteLength(value) > 64 * 1024) throw new Error('E_MEMORY_TEXT_INVALID'); return String(redact(value, { maxStringLength: 64 * 1024 })); }
+export * from './schema.js';
+
 const LOCK_TIMEOUT_MS = 5_000;
 
-function readMemoryRecord(file: string, expectedId: string): ProjectMemory {
+function readMemoryRecordFile(file: string, expectedId: string): ProjectMemory {
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<ProjectMemory> | null;
-    if (parsed === null || typeof parsed !== 'object'
-      || parsed.schema_version !== 1
-      || typeof parsed.id !== 'string' || parsed.id !== expectedId || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(parsed.id)
-      || typeof parsed.text !== 'string' || parsed.text.trim() === '' || Buffer.byteLength(parsed.text) > 64 * 1024
-      || !Object.prototype.hasOwnProperty.call(parsed, 'metadata')
-      || typeof parsed.updated_at !== 'string' || !Number.isFinite(Date.parse(parsed.updated_at))) {
-      throw new Error('E_MEMORY_RECORD_INVALID');
+    const stat = fs.lstatSync(file);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw new Error('E_STATE_CORRUPT');
     }
-    return parsed as ProjectMemory;
+    if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) {
+      throw new Error('E_STATE_CORRUPT');
+    }
+    if (stat.size > MAX_RECORD_FILE_BYTES) {
+      throw new Error('E_STATE_CORRUPT');
+    }
+    const raw = fs.readFileSync(file, 'utf8');
+    const parsed = JSON.parse(raw) as unknown;
+    return validateMemoryRecord(parsed, expectedId);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('E_STATE_ABSENT', { cause: error });
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error('E_STATE_ABSENT', { cause: error });
+    }
+    if ((error as Error).message === 'E_STATE_CORRUPT') {
+      throw error;
+    }
     throw new Error('E_STATE_CORRUPT', { cause: error });
   }
+}
+
+function safeQuarantineFilename(originalName: string, nonce: string, timestamp: number): string {
+  const suffix = `.corrupt-${timestamp}-${nonce}`;
+  const suffixBytes = Buffer.byteLength(suffix, 'utf8');
+  const maxTotalBytes = 200;
+  const maxBaseBytes = maxTotalBytes - suffixBytes;
+
+  if (Buffer.byteLength(originalName, 'utf8') <= maxBaseBytes) {
+    return `${originalName}${suffix}`;
+  }
+
+  const hash = crypto.createHash('sha256').update(originalName).digest('hex').slice(0, 16);
+  const hashSuffix = `-${hash}`;
+  const hashSuffixBytes = Buffer.byteLength(hashSuffix, 'utf8');
+  const allowedPrefixBytes = maxBaseBytes - hashSuffixBytes;
+
+  const buf = Buffer.from(originalName, 'utf8');
+  let prefix = buf.subarray(0, allowedPrefixBytes).toString('utf8');
+  while (Buffer.byteLength(prefix, 'utf8') > allowedPrefixBytes || prefix.endsWith('\uFFFD')) {
+    prefix = prefix.slice(0, -1);
+  }
+
+  const base = `${prefix}${hashSuffix}`;
+  return `${base}${suffix}`;
 }
 
 export class ProjectMemoryStore {
@@ -35,91 +88,643 @@ export class ProjectMemoryStore {
     private readonly now: () => Date = () => new Date(),
     private readonly writeJson: (file: string, value: unknown) => unknown = atomicWriteJson,
   ) {}
-  private dir(): string { return withinStateRoot(this.root, 'memory', 'records'); }
-  private file(id: string): string { return path.join(this.dir(), `${safe(id)}.json`); }
-  private indexFile(): string { return withinStateRoot(this.root, 'memory', 'index.json'); }
+
+  private dir(): string {
+    return withinStateRoot(this.root, 'memory', 'records');
+  }
+
+  private file(id: string): string {
+    return path.join(this.dir(), `${safeMemoryId(id)}.json`);
+  }
+
+  private indexFile(): string {
+    return withinStateRoot(this.root, 'memory', 'index.json');
+  }
+
+  private quarantineDir(): string {
+    return withinStateRoot(this.root, 'memory', 'quarantine');
+  }
+
   private withIndexLock<T>(action: () => T): T {
     return withDirectoryLockSync(this.indexFile(), action, LOCK_TIMEOUT_MS, {
       errorPrefix: 'E_MEMORY_LOCK',
     });
   }
+
   private rescanUnlocked(): readonly string[] {
-    const ids = this.list().map(({ id }) => id);
-    this.writeJson(this.indexFile(), { schema_version: 1, ids, rescanned_at: this.now().toISOString() });
+    const records = this.listUnlocked();
+    const ids = records.map(({ id }) => id);
+    const entries: MemoryIndexEntry[] = records.map((record) => {
+      const recordFile = this.file(record.id);
+      let byteSize = 0;
+      try {
+        byteSize = fs.statSync(recordFile).size;
+      } catch {}
+      return {
+        id: record.id,
+        updated_at: record.updated_at,
+        byte_size: byteSize,
+      };
+    });
+
+    const indexData: MemoryIndex = {
+      schema_version: 1,
+      ids,
+      entries,
+      rescanned_at: this.now().toISOString(),
+    };
+    this.writeJson(this.indexFile(), indexData);
     return ids;
   }
-  private prepareRecord(text: string, metadata: unknown, id: string): ProjectMemory {
-    return {
+
+  private listUnlocked(): ProjectMemory[] {
+    const recordsDir = this.dir();
+    if (!fs.existsSync(recordsDir)) return [];
+    return fs
+      .readdirSync(recordsDir)
+      .filter((name) => name.endsWith('.json') && !name.startsWith('.'))
+      .sort()
+      .map((name) => {
+        const id = name.slice(0, -'.json'.length);
+        return readMemoryRecordFile(path.join(recordsDir, name), id);
+      });
+  }
+
+  show(id: string): ProjectMemory {
+    const safeId = safeMemoryId(id);
+    return readMemoryRecordFile(this.file(safeId), safeId);
+  }
+
+  list(): ProjectMemory[] {
+    return this.listUnlocked();
+  }
+
+  async put(
+    text: string,
+    metadata: unknown = {},
+    id: string = crypto.randomUUID(),
+  ): Promise<ProjectMemory> {
+    const safeId = safeMemoryId(id);
+    const cleanedText = cleanMemoryText(text);
+    const cleanedMetadata = cleanMemoryMetadata(metadata);
+
+    const record: ProjectMemory = {
       schema_version: 1,
-      id: safe(id),
-      text: cleanText(text),
-      metadata: redact(metadata),
+      id: safeId,
+      text: cleanedText,
+      metadata: cleanedMetadata,
       updated_at: this.now().toISOString(),
     };
-  }
-  private putUnlocked(record: ProjectMemory): void {
-    this.writeJson(this.file(record.id), record);
-  }
-  show(id: string): ProjectMemory { return readMemoryRecord(this.file(id), safe(id)); }
-  list(): ProjectMemory[] {
-    if (!fs.existsSync(this.dir())) return [];
-    return fs.readdirSync(this.dir()).filter((name) => name.endsWith('.json')).sort().map((name) => {
-      const id = name.slice(0, -'.json'.length);
-      return readMemoryRecord(path.join(this.dir(), name), id);
-    });
-  }
-  async put(text: string, metadata: unknown = {}, id: string = crypto.randomUUID()): Promise<ProjectMemory> {
-    const file = this.file(id);
-    return this.withIndexLock(() => {
-      const record = this.prepareRecord(text, metadata, id);
-      this.writeJson(file, record); this.rescanUnlocked(); return record;
-    });
-  }
-  async delete(id: string): Promise<boolean> {
-    return this.withIndexLock(() => {
-      const file = this.file(id);
-      const existed = fs.existsSync(file);
-      if (existed) fs.unlinkSync(file);
-      this.rescanUnlocked();
-      return existed;
-    });
-  }
-  search(query: string, limit = 20): ProjectMemory[] {
-    if (query.trim() === '' || [...query].length > 4096 || !Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('E_MEMORY_SEARCH_INVALID');
-    const terms = query.toLocaleLowerCase().split(/\s+/).filter(Boolean);
-    return this.list().map((record) => ({ record, score: terms.reduce((sum, term) => sum + (record.text.toLocaleLowerCase().includes(term) ? 1 : 0), 0) }))
-      .filter(({ score }) => score > 0).sort((a, b) => b.score - a.score || b.record.updated_at.localeCompare(a.record.updated_at)).slice(0, limit).map(({ record }) => record);
-  }
-  export(): MemoryExport { return { schema_version: 1, memories: this.list() }; }
-  async import(bundle: unknown): Promise<number> {
-    if (bundle === null || typeof bundle !== 'object' || (bundle as Partial<MemoryExport>).schema_version !== 1 || !Array.isArray((bundle as Partial<MemoryExport>).memories)) throw new Error('E_MEMORY_IMPORT_INVALID');
-    const memories = (bundle as MemoryExport).memories;
-    if (memories.length > 1000 || Buffer.byteLength(JSON.stringify(bundle)) > 8 * 1024 * 1024) throw new Error('E_MEMORY_IMPORT_TOO_LARGE');
-    const prepared = new Map<string, ProjectMemory>();
-    for (const item of memories) {
-      if (item.schema_version !== 1 || typeof item.id !== 'string' || typeof item.text !== 'string') throw new Error('E_MEMORY_IMPORT_INVALID');
-      const record = this.prepareRecord(item.text, item.metadata, item.id);
-      // Preserve the prior last-duplicate-wins behavior without redundant writes.
-      prepared.delete(record.id);
-      prepared.set(record.id, record);
+    const onDiskCandidate = `${JSON.stringify(record, null, 2)}\n`;
+    if (Buffer.byteLength(onDiskCandidate, 'utf8') > MAX_RECORD_FILE_BYTES) {
+      throw new Error('E_MEMORY_METADATA_INVALID');
     }
-    this.withIndexLock(() => {
-      let writeError: unknown;
-      try {
-        for (const record of prepared.values()) this.putUnlocked(record);
-      } catch (error) {
-        writeError = error;
-      } finally {
-        try {
-          this.rescanUnlocked();
-        } catch (indexError) {
-          if (writeError === undefined) throw indexError;
+
+    return this.withIndexLock(() => {
+      this.writeJson(this.file(safeId), record);
+      this.rescanUnlocked();
+      return record;
+    });
+  }
+
+  async delete(
+    id: string,
+    options: { readonly expectedUpdatedAt?: string | undefined } = {},
+  ): Promise<boolean> {
+    const safeId = safeMemoryId(id);
+    return this.withIndexLock(() => {
+      const targetFile = this.file(safeId);
+      if (!fs.existsSync(targetFile)) {
+        this.rescanUnlocked();
+        return false;
+      }
+      if (options.expectedUpdatedAt !== undefined) {
+        const existing = readMemoryRecordFile(targetFile, safeId);
+        if (existing.updated_at !== options.expectedUpdatedAt) {
+          throw new Error('E_MEMORY_PRECONDITION_FAILED');
         }
       }
-      if (writeError !== undefined) throw writeError;
+      fs.unlinkSync(targetFile);
+      this.rescanUnlocked();
+      return true;
     });
-    return memories.length;
   }
+
+  search(query: string, limit = 20): ProjectMemory[] {
+    if (
+      typeof query !== 'string' ||
+      query.trim() === '' ||
+      [...query].length > MAX_SEARCH_QUERY_LENGTH ||
+      !Number.isInteger(limit) ||
+      limit < 1 ||
+      limit > 100
+    ) {
+      throw new Error('E_MEMORY_SEARCH_INVALID');
+    }
+    const terms = query.toLocaleLowerCase().split(/\s+/).filter(Boolean);
+    return this.list()
+      .map((record) => ({
+        record,
+        score: terms.reduce(
+          (sum, term) => sum + (record.text.toLocaleLowerCase().includes(term) ? 1 : 0),
+          0,
+        ),
+      }))
+      .filter(({ score }) => score > 0)
+      .sort(
+        (a, b) =>
+          b.score - a.score ||
+          Date.parse(b.record.updated_at) - Date.parse(a.record.updated_at) ||
+          b.record.updated_at.localeCompare(a.record.updated_at) ||
+          a.record.id.localeCompare(b.record.id),
+      )
+      .slice(0, limit)
+      .map(({ record }) => record);
+  }
+
+  export(): MemoryExport {
+    return { schema_version: 1, memories: this.list() };
+  }
+
+  private computeImportPlan(
+    bundle: unknown,
+    options: MemoryImportOptions = {},
+  ): {
+    readonly plan: MemoryImportPlan;
+    readonly resolvedRecords: Map<string, ProjectMemory>;
+  } {
+    const validatedBundle = validateRawImportBundle(bundle);
+    const conflictPolicy: MemoryConflictPolicy = validateConflictPolicy(options.conflict);
+
+    // 1. Validate each record in bundle
+    const validatedIncoming: ProjectMemory[] = [];
+    for (const rawItem of validatedBundle.memories) {
+      if (rawItem === null || typeof rawItem !== 'object' || Array.isArray(rawItem)) {
+        throw new Error('E_MEMORY_IMPORT_INVALID');
+      }
+      const itemObj = rawItem as Record<string, unknown>;
+      if (itemObj.schema_version !== 1) {
+        throw new Error('E_MEMORY_IMPORT_INVALID');
+      }
+      const id = safeMemoryId(itemObj.id);
+      const text = cleanMemoryText(itemObj.text);
+      const metadata = cleanMemoryMetadata(itemObj.metadata);
+      const updatedAt = validIsoDate(itemObj.updated_at)
+        ? (itemObj.updated_at as string)
+        : this.now().toISOString();
+
+      const incomingRecord: ProjectMemory = {
+        schema_version: 1,
+        id,
+        text,
+        metadata,
+        updated_at: updatedAt,
+      };
+      const onDisk = `${JSON.stringify(incomingRecord, null, 2)}\n`;
+      if (Buffer.byteLength(onDisk, 'utf8') > MAX_RECORD_FILE_BYTES) {
+        throw new Error('E_MEMORY_RECORD_INVALID');
+      }
+
+      validatedIncoming.push(incomingRecord);
+    }
+
+    // 2. Read local records to discover conflicts
+    const localMap = new Map<string, ProjectMemory>();
+    for (const record of this.listUnlocked()) {
+      localMap.set(record.id, record);
+    }
+
+    // 3. Detect bundle-internal duplicates and plan actions
+    const seenInBundle = new Map<string, ProjectMemory>();
+    const conflicts: { readonly id: string; readonly reason: string }[] = [];
+    const items: MemoryImportPlanItem[] = [];
+    const toCreate: string[] = [];
+    const toReplace: string[] = [];
+    const toSkip: string[] = [];
+
+    for (const incoming of validatedIncoming) {
+      const priorInBundle = seenInBundle.get(incoming.id);
+
+      if (priorInBundle !== undefined) {
+        if (conflictPolicy === 'reject') {
+          conflicts.push({
+            id: incoming.id,
+            reason: `Duplicate ID in import bundle: ${incoming.id}`,
+          });
+          continue;
+        } else if (conflictPolicy === 'skip') {
+          toSkip.push(incoming.id);
+          items.push({
+            id: incoming.id,
+            action: 'skip',
+            reason: 'Duplicate ID in bundle skipped',
+            incoming_updated_at: incoming.updated_at,
+          });
+          continue;
+        } else if (conflictPolicy === 'replace') {
+          toSkip.push(priorInBundle.id);
+          items.push({
+            id: priorInBundle.id,
+            action: 'skip',
+            reason: 'Prior duplicate ID in bundle replaced by later record',
+            incoming_updated_at: priorInBundle.updated_at,
+          });
+          seenInBundle.set(incoming.id, incoming);
+          continue;
+        } else if (conflictPolicy === 'newer-wins') {
+          const priorTime = Date.parse(priorInBundle.updated_at);
+          const incomingTime = Date.parse(incoming.updated_at);
+          if (incomingTime > priorTime) {
+            toSkip.push(priorInBundle.id);
+            items.push({
+              id: priorInBundle.id,
+              action: 'skip',
+              reason: `Older duplicate ID in bundle (${priorInBundle.updated_at}) superseded by newer (${incoming.updated_at})`,
+              incoming_updated_at: priorInBundle.updated_at,
+            });
+            seenInBundle.set(incoming.id, incoming);
+          } else {
+            toSkip.push(incoming.id);
+            items.push({
+              id: incoming.id,
+              action: 'skip',
+              reason: `Older duplicate ID in bundle (${incoming.updated_at}) skipped in favor of (${priorInBundle.updated_at})`,
+              incoming_updated_at: incoming.updated_at,
+            });
+          }
+          continue;
+        }
+      }
+
+      seenInBundle.set(incoming.id, incoming);
+    }
+
+    for (const incoming of seenInBundle.values()) {
+      const existing = localMap.get(incoming.id);
+      if (existing === undefined) {
+        toCreate.push(incoming.id);
+        items.push({
+          id: incoming.id,
+          action: 'create',
+          incoming_updated_at: incoming.updated_at,
+        });
+      } else {
+        if (conflictPolicy === 'reject') {
+          conflicts.push({
+            id: incoming.id,
+            reason: `ID already exists in memory store: ${incoming.id}`,
+          });
+        } else if (conflictPolicy === 'skip') {
+          toSkip.push(incoming.id);
+          items.push({
+            id: incoming.id,
+            action: 'skip',
+            reason: 'Existing ID skipped',
+            incoming_updated_at: incoming.updated_at,
+            existing_updated_at: existing.updated_at,
+          });
+        } else if (conflictPolicy === 'replace') {
+          toReplace.push(incoming.id);
+          items.push({
+            id: incoming.id,
+            action: 'replace',
+            incoming_updated_at: incoming.updated_at,
+            existing_updated_at: existing.updated_at,
+          });
+        } else if (conflictPolicy === 'newer-wins') {
+          const incomingTime = Date.parse(incoming.updated_at);
+          const existingTime = Date.parse(existing.updated_at);
+          if (incomingTime > existingTime) {
+            toReplace.push(incoming.id);
+            items.push({
+              id: incoming.id,
+              action: 'replace',
+              reason: `Incoming timestamp (${incoming.updated_at}) is newer than local (${existing.updated_at})`,
+              incoming_updated_at: incoming.updated_at,
+              existing_updated_at: existing.updated_at,
+            });
+          } else {
+            toSkip.push(incoming.id);
+            items.push({
+              id: incoming.id,
+              action: 'skip',
+              reason: `Local timestamp (${existing.updated_at}) is newer or equal to incoming (${incoming.updated_at})`,
+              incoming_updated_at: incoming.updated_at,
+              existing_updated_at: existing.updated_at,
+            });
+          }
+        }
+      }
+    }
+
+    const plan: MemoryImportPlan = {
+      schema_version: 1,
+      conflict_policy: conflictPolicy,
+      total_incoming: validatedIncoming.length,
+      to_create: toCreate,
+      to_replace: toReplace,
+      to_skip: toSkip,
+      conflicts,
+      items,
+    };
+
+    return {
+      plan,
+      resolvedRecords: seenInBundle,
+    };
+  }
+
+  planImport(
+    bundle: unknown,
+    options: MemoryImportOptions = {},
+  ): MemoryImportPlan {
+    return this.computeImportPlan(bundle, options).plan;
+  }
+
+  async import(
+    bundle: unknown,
+    options: MemoryImportOptions = {},
+  ): Promise<MemoryImportReceipt> {
+    const { plan, resolvedRecords } = this.computeImportPlan(bundle, options);
+
+    if (plan.conflicts.length > 0) {
+      const conflictIds = plan.conflicts.map((c) => c.id).join(', ');
+      throw new Error(`E_MEMORY_CONFLICT: Conflicting IDs: ${conflictIds}`);
+    }
+
+    const importedCount = plan.to_create.length + plan.to_replace.length;
+    const receipt: MemoryImportReceipt = {
+      schema_version: 1,
+      dry_run: options.dryRun === true,
+      conflict_policy: plan.conflict_policy,
+      imported: importedCount,
+      created: plan.to_create,
+      replaced: plan.to_replace,
+      skipped: plan.to_skip,
+    };
+
+    if (options.dryRun === true) {
+      return receipt;
+    }
+
+    // Only commit records that were selected to create or replace
+    const recordsToCommit = new Map<string, ProjectMemory>();
+    for (const id of [...plan.to_create, ...plan.to_replace]) {
+      const record = resolvedRecords.get(id);
+      if (record !== undefined) {
+        recordsToCommit.set(id, record);
+      }
+    }
+
+    return this.withIndexLock(() => {
+      const recordsDir = this.dir();
+      if (fs.existsSync(recordsDir)) {
+        const stat = fs.lstatSync(recordsDir);
+        if (stat.isSymbolicLink() || !stat.isDirectory()) {
+          throw new Error('E_MEMORY_PARENT_INVALID: records directory cannot be a symlink');
+        }
+      } else {
+        fs.mkdirSync(recordsDir, { recursive: true, mode: 0o700 });
+      }
+
+      // Transactional commit using a temporary staging directory
+      const stagingDir = path.join(
+        withinStateRoot(this.root, 'memory'),
+        `.staging-${Date.now()}-${crypto.randomBytes(6).toString('hex')}`,
+      );
+      fs.mkdirSync(stagingDir, { recursive: true, mode: 0o700 });
+
+      try {
+        // Stage all incoming writes
+        const stagedFiles: { readonly stagingPath: string; readonly targetPath: string }[] = [];
+        for (const record of recordsToCommit.values()) {
+          const stagingPath = path.join(stagingDir, `${record.id}.json`);
+          const targetPath = this.file(record.id);
+          this.writeJson(stagingPath, record);
+          const stat = fs.statSync(stagingPath);
+          if (stat.size > MAX_RECORD_FILE_BYTES) {
+            throw new Error('E_MEMORY_RECORD_INVALID: staged record exceeds size limit');
+          }
+          stagedFiles.push({ stagingPath, targetPath });
+        }
+
+        // Validate all target paths against symlinks before any rename occurs
+        for (const { targetPath } of stagedFiles) {
+          secureFilePath(targetPath, 'E_MEMORY');
+          if (fs.existsSync(targetPath) && fs.lstatSync(targetPath).isSymbolicLink()) {
+            throw new Error('E_MEMORY_TARGET_INVALID: target record cannot be a symlink');
+          }
+        }
+
+        // Atomically commit all staged files into records/
+        for (const { stagingPath, targetPath } of stagedFiles) {
+          fs.renameSync(stagingPath, targetPath);
+        }
+
+        // Rebuild index once
+        this.rescanUnlocked();
+
+        return receipt;
+      } finally {
+        try {
+          if (fs.existsSync(stagingDir)) {
+            fs.rmSync(stagingDir, { recursive: true, force: true });
+          }
+        } catch {}
+      }
+    });
+  }
+
+  async doctor(options: { readonly repair?: boolean | undefined } = {}): Promise<MemoryDoctorReport> {
+    return this.withIndexLock(() => {
+      const recordsDir = this.dir();
+      const corruptRecords: {
+        file: string;
+        id?: string | undefined;
+        reason: string;
+        quarantined_to?: string | undefined;
+      }[] = [];
+
+      let totalRecords = 0;
+      let validRecords = 0;
+      const validRecordIds: string[] = [];
+      const validRecordsMap = new Map<string, { readonly updated_at: string; readonly byte_size: number }>();
+
+      if (fs.existsSync(recordsDir)) {
+        const entries = fs.readdirSync(recordsDir).sort();
+        for (const entry of entries) {
+          if (entry.startsWith('.')) continue;
+          totalRecords++;
+          const filePath = path.join(recordsDir, entry);
+          let isValid = false;
+          let recordId: string | undefined;
+
+          try {
+            if (!entry.endsWith('.json')) {
+              throw new Error('Filename does not end with .json');
+            }
+            recordId = entry.slice(0, -'.json'.length);
+            const record = readMemoryRecordFile(filePath, recordId);
+            const byteSize = fs.statSync(filePath).size;
+            isValid = true;
+            validRecords++;
+            validRecordIds.push(recordId);
+            validRecordsMap.set(recordId, {
+              updated_at: record.updated_at,
+              byte_size: byteSize,
+            });
+          } catch (err) {
+            const reason = (err as Error).message;
+            let quarantinedTo: string | undefined;
+
+            if (options.repair === true) {
+              const qDir = this.quarantineDir();
+              fs.mkdirSync(qDir, { recursive: true, mode: 0o700 });
+              const nonce = crypto.randomBytes(6).toString('hex');
+              const qFile = path.join(qDir, safeQuarantineFilename(entry, nonce, Date.now()));
+              fs.renameSync(filePath, qFile);
+              quarantinedTo = qFile;
+            }
+
+            corruptRecords.push({
+              file: entry,
+              id: recordId,
+              reason,
+              quarantined_to: quarantinedTo,
+            });
+          }
+        }
+      }
+
+      const indexFile = this.indexFile();
+      let indexIssue: string | undefined;
+      let indexStat: fs.Stats | undefined;
+
+      try {
+        indexStat = fs.lstatSync(indexFile);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          indexIssue = `Index file stat failed: ${(err as Error).message}`;
+        }
+      }
+
+      if (!indexStat) {
+        if (validRecordIds.length > 0) {
+          indexIssue = 'Index file is missing';
+        }
+      } else {
+        try {
+          if (!indexStat.isFile() || indexStat.isSymbolicLink()) {
+            indexIssue = 'Index file is not a regular file';
+          } else if (typeof process.getuid === 'function' && indexStat.uid !== process.getuid()) {
+            indexIssue = 'Index file is not owned by current user';
+          } else if (indexStat.size > MAX_INDEX_FILE_BYTES) {
+            indexIssue = `Index file exceeds maximum allowed size (${indexStat.size} bytes > ${MAX_INDEX_FILE_BYTES} bytes)`;
+          } else {
+            let rawIndex: unknown;
+            try {
+              rawIndex = JSON.parse(fs.readFileSync(indexFile, 'utf8'));
+            } catch (err) {
+              indexIssue = `Index file is unreadable: ${(err as Error).message}`;
+            }
+
+            if (rawIndex !== undefined) {
+              let memoryIndex: MemoryIndex | undefined;
+              try {
+                memoryIndex = validateMemoryIndex(rawIndex);
+              } catch (err) {
+                indexIssue = `Index file is malformed: ${(err as Error).message}`;
+              }
+
+              if (memoryIndex !== undefined) {
+                const indexIds = [...memoryIndex.ids].sort();
+                const sortedValidIds = [...validRecordIds].sort();
+                if (
+                  indexIds.length !== sortedValidIds.length ||
+                  indexIds.some((id, idx) => id !== sortedValidIds[idx])
+                ) {
+                  indexIssue = `Index IDs [${indexIds.join(', ')}] do not match scanned records [${sortedValidIds.join(', ')}]`;
+                } else if (memoryIndex.entries !== undefined) {
+                  if (memoryIndex.entries.length !== validRecordIds.length) {
+                    indexIssue = `Index entries count (${memoryIndex.entries.length}) does not match scanned records count (${validRecordIds.length})`;
+                  } else {
+                    const seenEntryIds = new Set<string>();
+                    for (const entry of memoryIndex.entries) {
+                      if (seenEntryIds.has(entry.id)) {
+                        indexIssue = `Index entries contain duplicate ID "${entry.id}"`;
+                        break;
+                      }
+                      seenEntryIds.add(entry.id);
+                      const validRecord = validRecordsMap.get(entry.id);
+                      if (!validRecord) {
+                        indexIssue = `Index entry ID "${entry.id}" does not correspond to a valid scanned record`;
+                        break;
+                      }
+                      if (entry.updated_at !== validRecord.updated_at) {
+                        indexIssue = `Index entry "${entry.id}" updated_at (${entry.updated_at}) does not match record (${validRecord.updated_at})`;
+                        break;
+                      }
+                      if (entry.byte_size !== validRecord.byte_size) {
+                        indexIssue = `Index entry "${entry.id}" byte_size (${entry.byte_size}) does not match record file size (${validRecord.byte_size})`;
+                        break;
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        } catch (err) {
+          indexIssue = `Index file check failed: ${(err as Error).message}`;
+        }
+      }
+
+      if (indexIssue !== undefined) {
+        let quarantinedTo: string | undefined;
+        let indexStillExists = false;
+        try {
+          fs.lstatSync(indexFile);
+          indexStillExists = true;
+        } catch {}
+
+        if (options.repair === true && indexStillExists) {
+          const qDir = this.quarantineDir();
+          fs.mkdirSync(qDir, { recursive: true, mode: 0o700 });
+          const nonce = crypto.randomBytes(6).toString('hex');
+          const qFile = path.join(qDir, safeQuarantineFilename('index.json', nonce, Date.now()));
+          fs.renameSync(indexFile, qFile);
+          quarantinedTo = qFile;
+        }
+
+        corruptRecords.push({
+          file: 'index.json',
+          reason: indexIssue,
+          quarantined_to: quarantinedTo,
+        });
+      }
+
+      let indexRebuilt = false;
+      let indexFileExists = false;
+      try {
+        fs.lstatSync(indexFile);
+        indexFileExists = true;
+      } catch {}
+
+      if (options.repair === true && (corruptRecords.length > 0 || !indexFileExists)) {
+        this.rescanUnlocked();
+        indexRebuilt = true;
+      }
+
+      return {
+        ok: corruptRecords.length === 0,
+        total_records: totalRecords,
+        valid_records: validRecords,
+        corrupt_records: corruptRecords,
+        index_rebuilt: indexRebuilt,
+      };
+    });
+  }
+
   rescan(): readonly string[] {
     return this.withIndexLock(() => this.rescanUnlocked());
   }

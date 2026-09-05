@@ -242,7 +242,27 @@ export const COMMAND_SCHEMAS: Readonly<Record<string, CommandSchema>> = Object.f
       show: { stateAccess: 'read-existing', options: [{ name: '--id', kind: 'string', required: true, pattern: SAFE_KEY_PATTERN }] },
       search: { stateAccess: 'read-existing', options: [{ name: '--query', kind: 'string', required: true, pattern: NON_BLANK_PATTERN, maxLength: 1024 }, { name: '--limit', kind: 'integer', min: 1, max: 100, default: 20 }] },
       export: { stateAccess: 'read-existing' },
-      import: { stateAccess: 'write-ensure', options: [{ name: '--file', kind: 'string', required: true }] },
+      import: {
+        stateAccess: 'write-ensure',
+        options: [
+          { name: '--file', kind: 'string', required: true },
+          { name: '--conflict', kind: 'string', enum: ['reject', 'skip', 'replace', 'newer-wins'], default: 'reject' },
+          { name: '--dry-run', kind: 'flag', stateAccess: 'read-existing' },
+        ],
+      },
+      delete: {
+        stateAccess: 'write-ensure',
+        options: [
+          { name: '--id', kind: 'string', required: true, pattern: SAFE_KEY_PATTERN },
+          { name: '--expected-updated-at', kind: 'string', pattern: NON_BLANK_PATTERN },
+        ],
+      },
+      doctor: {
+        stateAccess: 'write-ensure',
+        options: [
+          { name: '--repair', kind: 'flag' },
+        ],
+      },
       rescan: { stateAccess: 'write-ensure' },
     },
   },
