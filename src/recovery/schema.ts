@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { redactText } from '../runtime/redaction.js';
 
 export const RECOVERY_LINE_LIMIT = 900;
 export const MAX_SOURCE_BYTES = 128 * 1024 * 1024; // 128 MiB
@@ -239,6 +240,12 @@ export function recoverySummary(snapshot: RecoverySnapshot): RecoverySummary {
   const first = snapshot.schema_version === 2 ? snapshot.retained_first_line : (snapshot.source_lines === 0 ? 0 : snapshot.source_lines - snapshot.copied_lines + 1);
   const last = snapshot.schema_version === 2 ? snapshot.retained_last_line : snapshot.source_lines;
 
+  const redactedWarnings: RecoveryWarning[] = snapshot.warnings.map((warning) => ({
+    code: warning.code,
+    line: warning.line,
+    detail: redactText(warning.detail),
+  }));
+
   return {
     recovery_id: snapshot.recovery_id,
     schema_version: snapshot.schema_version,
@@ -253,7 +260,7 @@ export function recoverySummary(snapshot: RecoverySnapshot): RecoverySummary {
     malformed_count: malformedCount,
     broken_chain_count: brokenChainCount,
     outside_tail_count: outsideTailCount,
-    warnings: snapshot.warnings,
+    warnings: redactedWarnings,
     note: 'parent_outside_retained_tail is expected under truncation and does not represent corruption. Recovery snapshots are non-authoritative.',
   };
 }

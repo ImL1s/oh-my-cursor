@@ -812,5 +812,38 @@ describe('Recovery streaming and truthful chain validation (#21)', () => {
     const broken = snapshot.warnings.filter((w) => w.code === 'W_BROKEN_CHAIN');
     expect(broken).toHaveLength(0);
   });
+
+  it('redacts sensitive parent IDs from warning details and recovery summary', () => {
+    const cwd = workspace();
+    const root = projectStateRoot(cwd);
+    const transcript = path.join(cwd, 'sensitive-parent.jsonl');
+
+    // Missing parent contains sensitive token format
+    const secretParent = 'token=super-secret-12345';
+    const childRecord = JSON.stringify({
+      id: 'msg-child',
+      parent_id: secretParent,
+      type: 'message',
+    });
+    fs.writeFileSync(transcript, `${childRecord}\n`);
+
+    const snapshot = recoverCursorSession(root, {
+      transcriptPath: transcript,
+      recoveryId: 'sensitive-parent',
+      now: fixedNow,
+    });
+
+    const brokenWarning = snapshot.warnings.find((w) => w.code === 'W_BROKEN_CHAIN');
+    expect(brokenWarning).toBeDefined();
+    expect(brokenWarning!.detail).not.toContain('super-secret-12345');
+    expect(brokenWarning!.detail).toContain('<redacted>');
+
+    const summary = recoverySummary(snapshot);
+    const summaryBroken = summary.warnings.find((w) => w.code === 'W_BROKEN_CHAIN');
+    expect(summaryBroken).toBeDefined();
+    expect(summaryBroken!.detail).not.toContain('super-secret-12345');
+    expect(summaryBroken!.detail).toContain('<redacted>');
+  });
 });
+
 

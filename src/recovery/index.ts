@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { atomicWriteJson } from '../runtime/atomic.js';
-import { redact } from '../runtime/redaction.js';
+import { redact, redactText } from '../runtime/redaction.js';
 import { withinStateRoot, type StateRoot } from '../runtime/state-root.js';
 import {
   MAX_LINE_BYTES,
@@ -503,35 +503,36 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
 
     for (const ref of parentRefs) {
       if (!tailIds.has(ref.parent)) {
+        const safeParent = redactText(ref.parent);
         if (foundInPrefix.has(ref.parent)) {
           warnings.push({
             code: 'W_PARENT_OUTSIDE_RETAINED_TAIL',
             line: ref.line,
-            detail: `parent ${ref.parent} located outside retained tail in omitted prefix`,
+            detail: `parent ${safeParent} located outside retained tail in omitted prefix`,
           });
         } else if (unverifiedInTail.has(ref.parent)) {
           warnings.push({
             code: 'W_CHAIN_UNVERIFIED',
             line: ref.line,
-            detail: `parent ${ref.parent} unverified due to malformed retained record`,
+            detail: `parent ${safeParent} unverified due to malformed retained record`,
           });
         } else if (unverifiedInPrefix.has(ref.parent)) {
           warnings.push({
             code: 'W_CHAIN_UNVERIFIED',
             line: ref.line,
-            detail: `parent ${ref.parent} unverified due to malformed prefix record`,
+            detail: `parent ${safeParent} unverified due to malformed prefix record`,
           });
         } else if (chainScanError) {
           warnings.push({
             code: 'W_CHAIN_UNVERIFIED',
             line: ref.line,
-            detail: `parent ${ref.parent} verification incomplete due to scan error`,
+            detail: `parent ${safeParent} verification incomplete due to scan error`,
           });
         } else {
           warnings.push({
             code: 'W_BROKEN_CHAIN',
             line: ref.line,
-            detail: `missing parent ${ref.parent}`,
+            detail: `missing parent ${safeParent}`,
           });
         }
       }
