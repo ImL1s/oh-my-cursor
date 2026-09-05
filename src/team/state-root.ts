@@ -82,6 +82,10 @@ export function teamTasksDir(root: StateRoot, teamName: string): string {
   return path.join(teamStateDir(root, teamName), 'tasks');
 }
 
+export function teamTaskJournalDir(root: StateRoot, teamName: string, taskId: string): string {
+  return path.join(teamStateDir(root, teamName), 'task-journals', taskId);
+}
+
 export function teamMailboxDir(root: StateRoot, teamName: string): string {
   return path.join(teamStateDir(root, teamName), 'mailbox');
 }

@@ -43,8 +43,11 @@ describe('team api interop (P0)', () => {
       'create-task',
       'list-tasks',
       'claim-task',
+      'renew-task-claim',
+      'reclaim-task',
       'transition-task-status',
       'release-task-claim',
+      'reopen-task',
       'get-summary',
       'write-worker-inbox',
     ]);
@@ -383,5 +386,95 @@ describe('team api interop (P0)', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.code).toBe('message_not_found');
+  });
+
+  it('renews, reclaims, and reopens tasks via Team API with generation fencing', async () => {
+    const { root, teamName } = workspace('lifecycle-api');
+
+    const created = await executeTeamApiOperation('create-task', {
+      team_name: teamName,
+      subject: 'lifecycle task',
+      description: 'full lifecycle test',
+    }, root);
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const taskId = (created.data.task as { id: string }).id;
+
+    // Claim
+    const claimed = await executeTeamApiOperation('claim-task', {
+      team_name: teamName,
+      task_id: taskId,
+      worker: 'one',
+    }, root);
+    expect(claimed.ok).toBe(true);
+    if (!claimed.ok) return;
+    const claimToken = (claimed.data as { claimToken: string }).claimToken;
+    const taskClaimed = claimed.data.task as { claim: { generation: number; heartbeat_sequence?: number } };
+    expect(taskClaimed.claim.generation).toBe(1);
+
+    // Renew
+    const renewed = await executeTeamApiOperation('renew-task-claim', {
+      team_name: teamName,
+      task_id: taskId,
+      worker: 'one',
+      claim_token: claimToken,
+      generation: 1,
+      lease_ms: 60000,
+    }, root);
+    expect(renewed.ok).toBe(true);
+    if (!renewed.ok) return;
+    const taskRenewed = renewed.data.task as { claim: { heartbeat_sequence?: number } };
+    expect(taskRenewed.claim.heartbeat_sequence).toBe(1);
+
+    // Reclaim with force
+    const reclaimed = await executeTeamApiOperation('reclaim-task', {
+      team_name: teamName,
+      task_id: taskId,
+      worker: 'two',
+      force: true,
+      reason: 'handover to worker two',
+    }, root);
+    expect(reclaimed.ok).toBe(true);
+    if (!reclaimed.ok) return;
+    expect(reclaimed.data.previousGeneration).toBe(1);
+    expect(reclaimed.data.newGeneration).toBe(2);
+    const worker2Token = (reclaimed.data as { claimToken: string }).claimToken;
+
+    // Old worker token/generation fails to transition
+    const oldTransition = await executeTeamApiOperation('transition-task-status', {
+      team_name: teamName,
+      task_id: taskId,
+      from: 'in_progress',
+      to: 'completed',
+      claim_token: claimToken,
+      generation: 1,
+    }, root);
+    expect(oldTransition.ok).toBe(false);
+    if (oldTransition.ok) return;
+    expect(oldTransition.error.code).toBe('claim_conflict');
+
+    // Worker 2 completes task with generation 2
+    const complete = await executeTeamApiOperation('transition-task-status', {
+      team_name: teamName,
+      task_id: taskId,
+      from: 'in_progress',
+      to: 'completed',
+      claim_token: worker2Token,
+      generation: 2,
+      result: 'all done',
+    }, root);
+    expect(complete.ok).toBe(true);
+
+    // Reopen task
+    const reopened = await executeTeamApiOperation('reopen-task', {
+      team_name: teamName,
+      task_id: taskId,
+      reason: 're-evaluating results',
+    }, root);
+    expect(reopened.ok).toBe(true);
+    if (!reopened.ok) return;
+    const taskReopened = reopened.data.task as { status: string; last_claim_generation?: number };
+    expect(taskReopened.status).toBe('pending');
+    expect(taskReopened.last_claim_generation).toBe(2);
   });
 });

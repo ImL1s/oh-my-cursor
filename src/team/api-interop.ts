@@ -5,7 +5,10 @@ import {
   createTask,
   getTeamSummary,
   listTasks,
+  reclaimTask,
   releaseTaskClaim,
+  renewTaskClaim,
+  reopenTask,
   TEAM_TASK_STATUSES,
   transitionTaskStatus,
   type TeamTaskStatus,
@@ -20,8 +23,11 @@ export const TEAM_API_OPERATIONS = [
   'create-task',
   'list-tasks',
   'claim-task',
+  'renew-task-claim',
+  'reclaim-task',
   'transition-task-status',
   'release-task-claim',
+  'reopen-task',
   'get-summary',
   'write-worker-inbox',
 ] as const;
@@ -143,6 +149,33 @@ export function validateTeamApiOperationInput(
         invalidInput('expected_version must be a positive integer');
       }
       break;
+    case 'renew-task-claim':
+      taskId(args);
+      safeWorker(args, 'worker');
+      requiredString(args, 'claim_token', 512);
+      if (args.generation !== undefined && (!isFiniteInteger(args.generation) || args.generation < 1)) {
+        invalidInput('generation must be a positive integer');
+      }
+      if (args.lease_ms !== undefined && (!isFiniteInteger(args.lease_ms) || args.lease_ms < 1)) {
+        invalidInput('lease_ms must be a positive integer');
+      }
+      if (args.heartbeat_sequence !== undefined && (!isFiniteInteger(args.heartbeat_sequence) || args.heartbeat_sequence < 0)) {
+        invalidInput('heartbeat_sequence must be a non-negative integer');
+      }
+      break;
+    case 'reclaim-task':
+      taskId(args);
+      safeWorker(args, 'worker');
+      if (args.reason !== undefined && typeof args.reason !== 'string') {
+        invalidInput('reason must be a string');
+      }
+      if (args.force !== undefined && typeof args.force !== 'boolean') {
+        invalidInput('force must be a boolean');
+      }
+      if (args.lease_ms !== undefined && (!isFiniteInteger(args.lease_ms) || args.lease_ms < 1)) {
+        invalidInput('lease_ms must be a positive integer');
+      }
+      break;
     case 'transition-task-status': {
       taskId(args);
       const allowed = new Set<string>(TEAM_TASK_STATUSES);
@@ -152,12 +185,33 @@ export function validateTeamApiOperationInput(
       requiredString(args, 'claim_token', 512);
       if (args.result !== undefined && typeof args.result !== 'string') invalidInput('result must be a string');
       if (args.error !== undefined && typeof args.error !== 'string') invalidInput('error must be a string');
+      if (args.generation !== undefined && (!isFiniteInteger(args.generation) || args.generation < 1)) {
+        invalidInput('generation must be a positive integer');
+      }
+      if (args.expected_version !== undefined && (!isFiniteInteger(args.expected_version) || args.expected_version < 1)) {
+        invalidInput('expected_version must be a positive integer');
+      }
+      if (args.workspace_generation !== undefined && (!isFiniteInteger(args.workspace_generation) || args.workspace_generation < 1)) {
+        invalidInput('workspace_generation must be a positive integer');
+      }
       break;
     }
     case 'release-task-claim':
       taskId(args);
       safeWorker(args, 'worker');
       requiredString(args, 'claim_token', 512);
+      if (args.generation !== undefined && (!isFiniteInteger(args.generation) || args.generation < 1)) {
+        invalidInput('generation must be a positive integer');
+      }
+      if (args.expected_version !== undefined && (!isFiniteInteger(args.expected_version) || args.expected_version < 1)) {
+        invalidInput('expected_version must be a positive integer');
+      }
+      break;
+    case 'reopen-task':
+      taskId(args);
+      if (args.reason !== undefined && typeof args.reason !== 'string') {
+        invalidInput('reason must be a string');
+      }
       break;
     case 'write-worker-inbox':
       safeWorker(args, 'worker');
@@ -288,6 +342,41 @@ export async function executeTeamApiOperation(
         const result = await claimTask(root, teamName, taskId, worker, (rawExpected as number | undefined) ?? null);
         return taskOpResult(operation, result as { ok: boolean; error?: string } & Record<string, unknown>);
       }
+      case 'renew-task-claim': {
+        const teamName = String(args.team_name ?? '').trim();
+        const taskId = String(args.task_id ?? '').trim();
+        const worker = String(args.worker ?? '').trim();
+        const claimToken = String(args.claim_token ?? '').trim();
+        if (!teamName || !taskId || !worker || !claimToken) {
+          return fail(operation, 'invalid_input', 'team_name, task_id, worker, claim_token are required');
+        }
+        const generation = isFiniteInteger(args.generation) ? (args.generation as number) : undefined;
+        const leaseMs = isFiniteInteger(args.lease_ms) ? (args.lease_ms as number) : undefined;
+        const heartbeatSequence = isFiniteInteger(args.heartbeat_sequence) ? (args.heartbeat_sequence as number) : undefined;
+        const result = await renewTaskClaim(root, teamName, taskId, worker, claimToken, {
+          ...(generation !== undefined ? { generation } : {}),
+          ...(leaseMs !== undefined ? { leaseMs } : {}),
+          ...(heartbeatSequence !== undefined ? { heartbeatSequence } : {}),
+        });
+        return taskOpResult(operation, result as { ok: boolean; error?: string } & Record<string, unknown>);
+      }
+      case 'reclaim-task': {
+        const teamName = String(args.team_name ?? '').trim();
+        const taskId = String(args.task_id ?? '').trim();
+        const worker = String(args.worker ?? '').trim();
+        if (!teamName || !taskId || !worker) {
+          return fail(operation, 'invalid_input', 'team_name, task_id, worker are required');
+        }
+        const reason = typeof args.reason === 'string' ? args.reason : undefined;
+        const force = args.force === true;
+        const leaseMs = isFiniteInteger(args.lease_ms) ? (args.lease_ms as number) : undefined;
+        const result = await reclaimTask(root, teamName, taskId, worker, {
+          ...(reason !== undefined ? { reason } : {}),
+          ...(force ? { force: true } : {}),
+          ...(leaseMs !== undefined ? { leaseMs } : {}),
+        });
+        return taskOpResult(operation, result as { ok: boolean; error?: string } & Record<string, unknown>);
+      }
       case 'transition-task-status': {
         const teamName = String(args.team_name ?? '').trim();
         const taskId = String(args.task_id ?? '').trim();
@@ -307,6 +396,9 @@ export async function executeTeamApiOperation(
         if (args.error !== undefined && typeof args.error !== 'string') {
           return fail(operation, 'invalid_input', 'error must be a string when provided');
         }
+        const generation = isFiniteInteger(args.generation) ? (args.generation as number) : undefined;
+        const expectedVersion = isFiniteInteger(args.expected_version) ? (args.expected_version as number) : undefined;
+        const workspaceGeneration = isFiniteInteger(args.workspace_generation) ? (args.workspace_generation as number) : undefined;
         const result = await transitionTaskStatus(
           root,
           teamName,
@@ -317,6 +409,9 @@ export async function executeTeamApiOperation(
           {
             ...(typeof args.result === 'string' ? { result: args.result } : {}),
             ...(typeof args.error === 'string' ? { error: args.error } : {}),
+            ...(generation !== undefined ? { generation } : {}),
+            ...(expectedVersion !== undefined ? { expectedVersion } : {}),
+            ...(workspaceGeneration !== undefined ? { workspaceGeneration } : {}),
           },
         );
         return taskOpResult(operation, result as { ok: boolean; error?: string } & Record<string, unknown>);
@@ -329,7 +424,24 @@ export async function executeTeamApiOperation(
         if (!teamName || !taskId || !claimToken || !worker) {
           return fail(operation, 'invalid_input', 'team_name, task_id, claim_token, worker are required');
         }
-        const result = await releaseTaskClaim(root, teamName, taskId, claimToken, worker);
+        const generation = isFiniteInteger(args.generation) ? (args.generation as number) : undefined;
+        const expectedVersion = isFiniteInteger(args.expected_version) ? (args.expected_version as number) : undefined;
+        const result = await releaseTaskClaim(root, teamName, taskId, claimToken, worker, undefined, {
+          ...(generation !== undefined ? { generation } : {}),
+          ...(expectedVersion !== undefined ? { expectedVersion } : {}),
+        });
+        return taskOpResult(operation, result as { ok: boolean; error?: string } & Record<string, unknown>);
+      }
+      case 'reopen-task': {
+        const teamName = String(args.team_name ?? '').trim();
+        const taskId = String(args.task_id ?? '').trim();
+        if (!teamName || !taskId) {
+          return fail(operation, 'invalid_input', 'team_name and task_id are required');
+        }
+        const reason = typeof args.reason === 'string' ? args.reason : undefined;
+        const result = await reopenTask(root, teamName, taskId, {
+          ...(reason !== undefined ? { reason } : {}),
+        });
         return taskOpResult(operation, result as { ok: boolean; error?: string } & Record<string, unknown>);
       }
       case 'get-summary': {

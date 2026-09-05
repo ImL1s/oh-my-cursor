@@ -2,11 +2,17 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { atomicCreateJson, atomicWriteJson, withDirectoryLock, type AtomicWriteOptions } from '../runtime/atomic.js';
+import { Journal, type JournalRecord } from '../runtime/journal.js';
+import {
+  classifyProcessLiveness,
+  type ProcessIdentityRuntime,
+} from '../runtime/process-identity.js';
 import type { StateRoot } from '../runtime/state-root.js';
 import {
   assertSafeWorkerName,
   readTeamConfig,
   teamConfigPath,
+  teamTaskJournalDir,
   teamTasksDir,
   writeTeamConfig,
   type TeamCoordinationConfig,
@@ -17,19 +23,34 @@ export type TeamTaskStatus = (typeof TEAM_TASK_STATUSES)[number];
 
 const TERMINAL = new Set<TeamTaskStatus>(['completed', 'failed']);
 const TRANSITIONS: Readonly<Record<TeamTaskStatus, readonly TeamTaskStatus[]>> = {
-  pending: [],
-  blocked: [],
-  in_progress: ['completed', 'failed'],
+  pending: ['in_progress', 'blocked'],
+  blocked: ['pending', 'in_progress'],
+  in_progress: ['completed', 'failed', 'pending'],
   completed: [],
   failed: [],
 };
 
 export const CLAIM_LEASE_MS = 15 * 60 * 1000;
+export const MAX_TOTAL_LEASE_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+export interface WorkerProcessIdentityClaim {
+  readonly pid: number;
+  readonly start_identity: string;
+  readonly start_identity_proven?: boolean;
+  readonly nonce_sha256?: string;
+}
 
 export interface TeamTaskClaim {
   readonly owner: string;
-  readonly token: string;
+  readonly generation: number;
+  readonly token_sha256: string;
+  readonly token?: string;
+  readonly worker_process_identity?: WorkerProcessIdentityClaim;
+  readonly acquired_at: string;
+  readonly renewed_at?: string;
   readonly leased_until: string;
+  readonly heartbeat_sequence?: number;
+  readonly workspace_generation?: number;
 }
 
 export interface TeamTask {
@@ -39,6 +60,7 @@ export interface TeamTask {
   readonly status: TeamTaskStatus;
   readonly created_at: string;
   readonly version: number;
+  readonly last_claim_generation?: number;
   readonly request_id?: string;
   readonly request_payload_sha256?: string;
   /** Immutable owner from the idempotent create request; later claims may rewrite owner. */
@@ -51,17 +73,91 @@ export interface TeamTask {
   readonly error?: string;
 }
 
+export type TeamTaskJournalEvent =
+  | { readonly kind: 'created'; readonly task: TeamTask }
+  | { readonly kind: 'claimed'; readonly task: TeamTask; readonly claim: TeamTaskClaim }
+  | { readonly kind: 'renewed'; readonly task: TeamTask; readonly claim: TeamTaskClaim }
+  | { readonly kind: 'released'; readonly task: TeamTask }
+  | { readonly kind: 'reclaimed'; readonly task: TeamTask; readonly previous_generation: number; readonly new_generation: number; readonly reason?: string }
+  | { readonly kind: 'transitioned'; readonly task: TeamTask; readonly from: TeamTaskStatus; readonly to: TeamTaskStatus }
+  | { readonly kind: 'reopened'; readonly task: TeamTask; readonly reason?: string };
+
 export type ClaimTaskResult =
   | { readonly ok: true; readonly task: TeamTask; readonly claimToken: string }
-  | { readonly ok: false; readonly error: 'task_not_found' | 'claim_conflict' | 'worker_not_found' | 'already_terminal' | 'blocked_dependency'; readonly dependencies?: readonly string[] };
+  | {
+      readonly ok: false;
+      readonly error:
+        | 'task_not_found'
+        | 'claim_conflict'
+        | 'worker_not_found'
+        | 'already_terminal'
+        | 'blocked_dependency'
+        | 'worker_alive'
+        | 'reconciliation_required';
+      readonly dependencies?: readonly string[];
+      readonly reason?: string;
+    };
+
+export type RenewTaskClaimResult =
+  | { readonly ok: true; readonly task: TeamTask }
+  | {
+      readonly ok: false;
+      readonly error:
+        | 'task_not_found'
+        | 'claim_conflict'
+        | 'worker_not_found'
+        | 'already_terminal'
+        | 'lease_expired'
+        | 'lease_limit_exceeded'
+        | 'process_dead'
+        | 'process_ambiguous'
+        | 'process_stale';
+      readonly reason?: string;
+    };
+
+export type ReclaimTaskResult =
+  | {
+      readonly ok: true;
+      readonly task: TeamTask;
+      readonly claimToken: string;
+      readonly previousGeneration: number;
+      readonly newGeneration: number;
+    }
+  | {
+      readonly ok: false;
+      readonly error:
+        | 'task_not_found'
+        | 'worker_not_found'
+        | 'not_in_progress'
+        | 'lease_active'
+        | 'worker_alive'
+        | 'reconciliation_required'
+        | 'already_terminal';
+      readonly reason?: string;
+      readonly priorGeneration?: number;
+      readonly priorOwner?: string;
+    };
 
 export type TransitionTaskResult =
   | { readonly ok: true; readonly task: TeamTask }
-  | { readonly ok: false; readonly error: 'task_not_found' | 'claim_conflict' | 'invalid_transition' | 'already_terminal' | 'lease_expired' };
+  | {
+      readonly ok: false;
+      readonly error: 'task_not_found' | 'claim_conflict' | 'invalid_transition' | 'already_terminal' | 'lease_expired';
+    };
 
 export type ReleaseTaskClaimResult =
   | { readonly ok: true; readonly task: TeamTask }
-  | { readonly ok: false; readonly error: 'task_not_found' | 'claim_conflict' | 'already_terminal' | 'lease_expired' };
+  | {
+      readonly ok: false;
+      readonly error: 'task_not_found' | 'claim_conflict' | 'already_terminal' | 'lease_expired';
+    };
+
+export type ReopenTaskResult =
+  | { readonly ok: true; readonly task: TeamTask }
+  | {
+      readonly ok: false;
+      readonly error: 'task_not_found' | 'not_terminal';
+    };
 
 export interface TeamSummary {
   readonly teamName: string;
@@ -98,6 +194,59 @@ export interface CreateTaskInput {
   readonly request_id?: string;
 }
 
+export interface ClaimTaskOptions {
+  readonly expectedVersion?: number | null;
+  readonly leaseMs?: number;
+  readonly processIdentity?: WorkerProcessIdentityClaim | null;
+  readonly processRuntime?: ProcessIdentityRuntime;
+  readonly taskWriteOptions?: AtomicWriteOptions;
+  readonly now?: () => Date;
+}
+
+export interface RenewTaskClaimOptions {
+  readonly leaseMs?: number;
+  readonly maxTotalLeaseMs?: number;
+  readonly generation?: number;
+  readonly heartbeatSequence?: number;
+  readonly processRuntime?: ProcessIdentityRuntime;
+  readonly taskWriteOptions?: AtomicWriteOptions;
+  readonly now?: () => Date;
+}
+
+export interface ReclaimTaskOptions {
+  readonly reason?: string;
+  readonly force?: boolean;
+  readonly killProcess?: (pid: number) => void;
+  readonly processRuntime?: ProcessIdentityRuntime;
+  readonly leaseMs?: number;
+  readonly newProcessIdentity?: WorkerProcessIdentityClaim | null;
+  readonly taskWriteOptions?: AtomicWriteOptions;
+  readonly now?: () => Date;
+}
+
+export interface TransitionTaskTerminalData {
+  readonly result?: string;
+  readonly error?: string;
+  readonly generation?: number;
+  readonly expectedVersion?: number;
+  readonly workspaceGeneration?: number;
+  readonly taskWriteOptions?: AtomicWriteOptions;
+  readonly now?: () => Date;
+}
+
+export interface ReleaseTaskOptions {
+  readonly generation?: number;
+  readonly expectedVersion?: number;
+  readonly taskWriteOptions?: AtomicWriteOptions;
+  readonly now?: () => Date;
+}
+
+export interface ReopenTaskOptions {
+  readonly reason?: string;
+  readonly now?: () => Date;
+  readonly taskWriteOptions?: AtomicWriteOptions;
+}
+
 function assertTaskId(taskId: string): string {
   if (!/^\d{1,20}$/.test(taskId)) throw new Error('E_TEAM_TASK_ID_INVALID');
   return taskId;
@@ -107,48 +256,315 @@ function taskFilePath(root: StateRoot, teamName: string, taskId: string): string
   return path.join(teamTasksDir(root, teamName), `task-${assertTaskId(taskId)}.json`);
 }
 
+function isValidIsoTimestamp(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length < 10 || value.length > 35) return false;
+  const time = Date.parse(value);
+  return Number.isFinite(time);
+}
+
+function isValidWorkerName(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value);
+}
+
+function isClaim(value: unknown): value is TeamTaskClaim {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const c = value as Record<string, unknown>;
+  if (!isValidWorkerName(c.owner)) return false;
+  if (c.generation !== undefined && (!Number.isInteger(c.generation) || (c.generation as number) < 1)) return false;
+  if (c.token_sha256 !== undefined && (typeof c.token_sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(c.token_sha256))) return false;
+  if (c.token !== undefined && (typeof c.token !== 'string' || c.token.trim() === '')) return false;
+  if (c.token_sha256 === undefined && c.token === undefined) return false;
+  if (!isValidIsoTimestamp(c.leased_until)) return false;
+  if (c.acquired_at !== undefined && !isValidIsoTimestamp(c.acquired_at)) return false;
+  if (c.renewed_at !== undefined && !isValidIsoTimestamp(c.renewed_at)) return false;
+  if (c.heartbeat_sequence !== undefined && (!Number.isInteger(c.heartbeat_sequence) || (c.heartbeat_sequence as number) < 0)) return false;
+  if (c.workspace_generation !== undefined && (!Number.isInteger(c.workspace_generation) || (c.workspace_generation as number) < 1)) return false;
+  if (c.worker_process_identity !== undefined) {
+    if (!c.worker_process_identity || typeof c.worker_process_identity !== 'object' || Array.isArray(c.worker_process_identity)) return false;
+    const wpi = c.worker_process_identity as Record<string, unknown>;
+    if (!Number.isSafeInteger(wpi.pid) || (wpi.pid as number) <= 0) return false;
+    if (typeof wpi.start_identity !== 'string' || wpi.start_identity.trim() === '') return false;
+    if (wpi.start_identity_proven !== undefined && typeof wpi.start_identity_proven !== 'boolean') return false;
+    if (wpi.nonce_sha256 !== undefined && (typeof wpi.nonce_sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(wpi.nonce_sha256))) return false;
+  }
+  return true;
+}
+
 function isTeamTask(value: unknown): value is TeamTask {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const task = value as Record<string, unknown>;
-  return typeof task.id === 'string'
-    && /^\d{1,20}$/.test(task.id)
-    && typeof task.subject === 'string'
-    && typeof task.description === 'string'
-    && typeof task.status === 'string'
-    && (TEAM_TASK_STATUSES as readonly string[]).includes(task.status)
-    && typeof task.created_at === 'string'
-    && typeof task.version === 'number'
-    && Number.isInteger(task.version)
-    && task.version >= 1
-    && (task.request_id === undefined || (typeof task.request_id === 'string' && isRequestId(task.request_id)))
-    && (task.request_payload_sha256 === undefined
-      || (typeof task.request_payload_sha256 === 'string' && /^[a-f0-9]{64}$/.test(task.request_payload_sha256)))
-    && (task.request_owner === undefined || task.request_owner === null
-      || (typeof task.request_owner === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(task.request_owner)))
-    && ((task.request_id === undefined) === (task.request_payload_sha256 === undefined))
-    && ((task.request_id === undefined) === (task.request_owner === undefined));
+  if (typeof task.id !== 'string' || !/^\d{1,20}$/.test(task.id)) return false;
+  if (typeof task.subject !== 'string' || task.subject.length > 64 * 1024) return false;
+  if (typeof task.description !== 'string' || task.description.length > 64 * 1024) return false;
+  if (typeof task.status !== 'string' || !(TEAM_TASK_STATUSES as readonly string[]).includes(task.status)) return false;
+  if (!isValidIsoTimestamp(task.created_at)) return false;
+  if (typeof task.version !== 'number' || !Number.isInteger(task.version) || task.version < 1) return false;
+  if (task.last_claim_generation !== undefined && (!Number.isInteger(task.last_claim_generation) || (task.last_claim_generation as number) < 0)) return false;
+
+  if (task.request_id !== undefined && (typeof task.request_id !== 'string' || !isRequestId(task.request_id))) return false;
+  if (task.request_payload_sha256 !== undefined && (typeof task.request_payload_sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(task.request_payload_sha256))) return false;
+  if (task.request_owner !== undefined && task.request_owner !== null && !isValidWorkerName(task.request_owner)) return false;
+  if ((task.request_id === undefined) !== (task.request_payload_sha256 === undefined)) return false;
+  if ((task.request_id === undefined) !== (task.request_owner === undefined)) return false;
+
+  if (task.owner !== undefined && !isValidWorkerName(task.owner)) return false;
+
+  if (task.blocked_by !== undefined) {
+    if (!Array.isArray(task.blocked_by)) return false;
+    for (const dep of task.blocked_by) {
+      if (typeof dep !== 'string' || !/^\d{1,20}$/.test(dep)) return false;
+    }
+  }
+
+  if (task.claim !== undefined && !isClaim(task.claim)) return false;
+
+  if (task.completed_at !== undefined && !isValidIsoTimestamp(task.completed_at)) return false;
+  if (task.result !== undefined && (typeof task.result !== 'string' || task.result.length > 64 * 1024)) return false;
+  if (task.error !== undefined && (typeof task.error !== 'string' || task.error.length > 64 * 1024)) return false;
+
+  if (task.status === 'pending') {
+    if (task.claim !== undefined) return false;
+    if (task.completed_at !== undefined || task.result !== undefined || task.error !== undefined) return false;
+  } else if (task.status === 'blocked') {
+    if (task.claim !== undefined) return false;
+    if (task.completed_at !== undefined || task.result !== undefined || task.error !== undefined) return false;
+    if (!task.blocked_by || task.blocked_by.length === 0) return false;
+  } else if (task.status === 'in_progress') {
+    if (task.claim === undefined || task.owner === undefined) return false;
+    if (task.claim.owner !== task.owner) return false;
+    if (task.completed_at !== undefined || task.result !== undefined || task.error !== undefined) return false;
+  } else if (task.status === 'completed') {
+    if (task.claim !== undefined) return false;
+    if (task.completed_at === undefined) return false;
+    if (task.error !== undefined) return false;
+  } else if (task.status === 'failed') {
+    if (task.claim !== undefined) return false;
+    if (task.completed_at === undefined) return false;
+    if (task.result !== undefined) return false;
+  }
+
+  return true;
+}
+
+function normalizeTask(task: TeamTask): TeamTask {
+  let normalized = task;
+  if (task.last_claim_generation === undefined) {
+    normalized = {
+      ...normalized,
+      last_claim_generation: task.claim ? task.claim.generation : 0,
+    };
+  }
+  if (normalized.claim) {
+    const claim = normalized.claim;
+    let updatedClaim = claim;
+    if (!claim.token_sha256 && claim.token) {
+      updatedClaim = {
+        ...updatedClaim,
+        token_sha256: crypto.createHash('sha256').update(claim.token).digest('hex'),
+      };
+    }
+    if (updatedClaim.generation === undefined) {
+      updatedClaim = {
+        ...updatedClaim,
+        generation: 1,
+      };
+    }
+    if (updatedClaim.acquired_at === undefined) {
+      updatedClaim = {
+        ...updatedClaim,
+        acquired_at: task.created_at,
+      };
+    }
+    normalized = {
+      ...normalized,
+      claim: updatedClaim,
+    };
+  }
+  return normalized;
+}
+
+function taskJournal(
+  root: StateRoot,
+  teamName: string,
+  taskId: string,
+  now: () => Date,
+): Journal<TeamTaskJournalEvent> {
+  const dir = teamTaskJournalDir(root, teamName, taskId);
+  return new Journal<TeamTaskJournalEvent>(dir, `team/${teamName}/task/${taskId}`, {
+    now,
+    maxRecordBytes: 64 * 1024,
+    maxSegmentBytes: 2 * 1024 * 1024,
+  });
+}
+
+function appendTaskJournalEvent(
+  root: StateRoot,
+  teamName: string,
+  taskId: string,
+  event: TeamTaskJournalEvent,
+  now: () => Date,
+): void {
+  try {
+    const journal = taskJournal(root, teamName, taskId, now);
+    journal.append({
+      kind: event.kind,
+      payload: event,
+      at: now().toISOString(),
+    });
+  } catch {
+    // Journal append is best-effort when not under fatal journal corruption
+  }
+}
+
+export function rebuildTaskFromJournal(root: StateRoot, teamName: string, taskId: string): TeamTask | null {
+  try {
+    const journal = taskJournal(root, teamName, taskId, () => new Date());
+    const head = journal.readHead();
+    if (head === null || head.head_sequence === 0) return null;
+    const records = journal.readRange();
+    let currentTask: TeamTask | null = null;
+    for (const record of records) {
+      const p = (record as JournalRecord<TeamTaskJournalEvent>).payload;
+      if (p && 'task' in p && p.task) {
+        currentTask = p.task;
+      }
+    }
+    return currentTask;
+  } catch {
+    return null;
+  }
 }
 
 function leaseExpired(claim: TeamTaskClaim | undefined, now: Date): boolean {
   if (!claim) return false;
-  return new Date(claim.leased_until) <= now;
+  const t = Date.parse(claim.leased_until);
+  if (Number.isNaN(t)) throw new Error('E_TEAM_TASK_CORRUPT');
+  return t <= now.getTime();
+}
+
+function verifyClaimToken(claim: TeamTaskClaim, candidateToken: string): boolean {
+  const trimmed = candidateToken.trim();
+  if (trimmed === '') return false;
+  const hash = crypto.createHash('sha256').update(trimmed).digest('hex');
+  if (claim.token_sha256 && claim.token_sha256 === hash) return true;
+  if (claim.token && claim.token === trimmed) return true;
+  return false;
+}
+
+function classifyWorkerClaimLiveness(
+  identity: WorkerProcessIdentityClaim,
+  source?: ProcessIdentityRuntime,
+): ReturnType<typeof classifyProcessLiveness> {
+  return classifyProcessLiveness({
+    pid: identity.pid,
+    start_identity: identity.start_identity,
+    start_identity_proven: identity.start_identity_proven ?? false,
+  }, source);
 }
 
 function readTaskUnlocked(root: StateRoot, teamName: string, taskId: string): TeamTask | null {
   const file = taskFilePath(root, teamName, taskId);
-  if (!fs.existsSync(file)) return null;
+  if (!fs.existsSync(file)) {
+    const recovered = rebuildTaskFromJournal(root, teamName, taskId);
+    if (recovered && isTeamTask(recovered) && recovered.id === taskId) {
+      writeTaskUnlocked(root, teamName, recovered);
+      return normalizeTask(recovered);
+    }
+    return null;
+  }
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
-    if (!isTeamTask(parsed) || parsed.id !== taskId) throw new Error('E_TEAM_TASK_CORRUPT');
-    return parsed;
+    const raw = fs.readFileSync(file, 'utf8');
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isTeamTask(parsed) || parsed.id !== taskId) {
+      const recovered = rebuildTaskFromJournal(root, teamName, taskId);
+      if (recovered && isTeamTask(recovered) && recovered.id === taskId) {
+        writeTaskUnlocked(root, teamName, recovered);
+        return normalizeTask(recovered);
+      }
+      throw new Error('E_TEAM_TASK_CORRUPT');
+    }
+    return normalizeTask(parsed);
   } catch (error) {
     if ((error as Error).message === 'E_TEAM_TASK_CORRUPT') throw error;
+    const recovered = rebuildTaskFromJournal(root, teamName, taskId);
+    if (recovered && isTeamTask(recovered) && recovered.id === taskId) {
+      writeTaskUnlocked(root, teamName, recovered);
+      return normalizeTask(recovered);
+    }
     throw new Error('E_TEAM_TASK_CORRUPT');
   }
 }
 
 function writeTaskUnlocked(root: StateRoot, teamName: string, task: TeamTask): void {
   atomicWriteJson(taskFilePath(root, teamName, task.id), task);
+}
+
+function checkDependencyCycle(
+  root: StateRoot,
+  teamName: string,
+  candidateTaskId: string,
+  blockedBy: readonly string[],
+): void {
+  const inStack = new Set<string>([candidateTaskId]);
+  const visited = new Set<string>();
+
+  function dfs(currentId: string): void {
+    if (inStack.has(currentId)) {
+      throw new Error('E_TEAM_TASK_DEPENDENCY_CYCLE');
+    }
+    if (visited.has(currentId)) return;
+    inStack.add(currentId);
+    const task = readTaskUnlocked(root, teamName, currentId);
+    if (task && task.blocked_by) {
+      for (const dep of task.blocked_by) {
+        dfs(dep);
+      }
+    }
+    inStack.delete(currentId);
+    visited.add(currentId);
+  }
+
+  for (const dep of blockedBy) {
+    if (dep === candidateTaskId) {
+      throw new Error('E_TEAM_TASK_DEPENDENCY_CYCLE');
+    }
+    dfs(dep);
+  }
+}
+
+function unblockDependentTasks(root: StateRoot, teamName: string, completedTaskId: string, now: () => Date): void {
+  const dir = teamTasksDir(root, teamName);
+  if (!fs.existsSync(dir)) return;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    const match = /^task-(\d+)\.json$/.exec(entry.name);
+    if (!match) continue;
+    const otherId = match[1]!;
+    if (otherId === completedTaskId) continue;
+    withDirectoryLock(taskFilePath(root, teamName, otherId), () => {
+      const other = readTaskUnlocked(root, teamName, otherId);
+      if (other && other.status === 'blocked' && other.blocked_by && other.blocked_by.includes(completedTaskId)) {
+        const stillIncomplete = other.blocked_by.filter((depId) => {
+          const dep = readTaskUnlocked(root, teamName, depId);
+          return dep === null || dep.status !== 'completed';
+        });
+        if (stillIncomplete.length === 0) {
+          const unblocked: TeamTask = {
+            ...other,
+            status: 'pending',
+            version: other.version + 1,
+          };
+          writeTaskUnlocked(root, teamName, unblocked);
+          appendTaskJournalEvent(root, teamName, otherId, {
+            kind: 'transitioned',
+            task: unblocked,
+            from: 'blocked',
+            to: 'pending',
+          }, now);
+        }
+      }
+    });
+  }
 }
 
 export function canTransitionTaskStatus(from: TeamTaskStatus, to: TeamTaskStatus): boolean {
@@ -185,6 +601,7 @@ export async function createTask(
   return withDirectoryLock(teamConfigPath(root, teamName), () => {
     const config = readTeamConfig(root, teamName);
     if (config === null) throw new Error('E_TEAM_NOT_FOUND');
+    let workingConfig = config;
 
     let owner: string | undefined;
     if (input.owner !== undefined) {
@@ -199,11 +616,15 @@ export async function createTask(
       blockedBy = [];
       for (const depId of input.blocked_by) {
         const id = assertTaskId(depId);
+        if (id === String(workingConfig.next_task_id)) {
+          throw new Error('E_TEAM_TASK_DEPENDENCY_CYCLE');
+        }
         if (readTaskUnlocked(root, teamName, id) === null) {
           throw new Error('E_TEAM_BLOCKED_BY_NOT_FOUND');
         }
         blockedBy.push(id);
       }
+      checkDependencyCycle(root, teamName, String(workingConfig.next_task_id), blockedBy);
     }
 
     const requestPayloadSha256 = requestId === undefined ? undefined : canonicalTaskRequestSha256({
@@ -232,7 +653,6 @@ export async function createTask(
       }
     }
 
-    let workingConfig = config;
     while (true) {
       const occupied = readTaskUnlocked(root, teamName, String(workingConfig.next_task_id));
       if (occupied === null) break;
@@ -251,13 +671,24 @@ export async function createTask(
       workingConfig = repaired;
     }
     const nextId = String(workingConfig.next_task_id);
+    let initialStatus: TeamTaskStatus = 'pending';
+    if (blockedBy !== undefined && blockedBy.length > 0) {
+      const incomplete = blockedBy.filter((depId) => {
+        const dep = readTaskUnlocked(root, teamName, depId);
+        return dep === null || dep.status !== 'completed';
+      });
+      if (incomplete.length > 0) {
+        initialStatus = 'blocked';
+      }
+    }
     const task: TeamTask = {
       id: nextId,
       subject,
       description,
-      status: 'pending',
+      status: initialStatus,
       created_at: now().toISOString(),
       version: 1,
+      last_claim_generation: 0,
       ...(requestId !== undefined ? {
         request_id: requestId,
         request_payload_sha256: requestPayloadSha256!,
@@ -266,6 +697,7 @@ export async function createTask(
       ...(owner !== undefined ? { owner } : {}),
       ...(blockedBy !== undefined ? { blocked_by: blockedBy } : {}),
     };
+    appendTaskJournalEvent(root, teamName, task.id, { kind: 'created', task }, now);
     atomicCreateJson(taskFilePath(root, teamName, task.id), task, options.taskWriteOptions);
     const next: TeamCoordinationConfig = { ...workingConfig, next_task_id: workingConfig.next_task_id + 1 };
     try {
@@ -341,7 +773,7 @@ function sameTaskRequest(
   task: TeamTask,
   input: CreateTaskInput,
 ): boolean {
-  return task.version === 1 && task.status === 'pending'
+  return task.version === 1 && (task.status === 'pending' || task.status === 'blocked')
     && task.request_id === input.request_id
     && task.subject === input.subject
     && task.description === input.description
@@ -354,8 +786,9 @@ export async function claimTask(
   teamName: string,
   taskId: string,
   workerName: string,
-  expectedVersion: number | null = null,
-  now: () => Date = () => new Date(),
+  expectedVersionOrOptions: number | null | ClaimTaskOptions = null,
+  nowOrOptions: (() => Date) | ClaimTaskOptions = () => new Date(),
+  options: ClaimTaskOptions = {},
 ): Promise<ClaimTaskResult> {
   const worker = assertSafeWorkerName(workerName);
   const id = assertTaskId(taskId);
@@ -363,10 +796,44 @@ export async function claimTask(
   if (config === null) return { ok: false, error: 'task_not_found' };
   if (!config.workers.some((entry) => entry.name === worker)) return { ok: false, error: 'worker_not_found' };
 
+  let actualOptions: ClaimTaskOptions = {};
+  let expVersion: number | null = null;
+  let nowFn = () => new Date();
+
+  if (expectedVersionOrOptions !== null && typeof expectedVersionOrOptions === 'object') {
+    actualOptions = expectedVersionOrOptions;
+    expVersion = actualOptions.expectedVersion ?? null;
+    nowFn = actualOptions.now ?? (() => new Date());
+  } else {
+    expVersion = (typeof expectedVersionOrOptions === 'number' && Number.isInteger(expectedVersionOrOptions))
+      ? expectedVersionOrOptions
+      : null;
+    if (typeof nowOrOptions === 'function') {
+      nowFn = nowOrOptions;
+      actualOptions = options;
+      if (actualOptions.now) nowFn = actualOptions.now;
+      if (actualOptions.expectedVersion !== undefined && expVersion === null) {
+        expVersion = actualOptions.expectedVersion;
+      }
+    } else if (typeof nowOrOptions === 'object' && nowOrOptions !== null) {
+      actualOptions = nowOrOptions;
+      nowFn = actualOptions.now ?? (() => new Date());
+      if (actualOptions.expectedVersion !== undefined && expVersion === null) {
+        expVersion = actualOptions.expectedVersion;
+      }
+    } else {
+      actualOptions = options;
+      if (actualOptions.now) nowFn = actualOptions.now;
+      if (actualOptions.expectedVersion !== undefined && expVersion === null) {
+        expVersion = actualOptions.expectedVersion;
+      }
+    }
+  }
+
   return withDirectoryLock(taskFilePath(root, teamName, id), () => {
     const current = readTaskUnlocked(root, teamName, id);
     if (current === null) return { ok: false, error: 'task_not_found' as const };
-    if (expectedVersion !== null && current.version !== expectedVersion) return { ok: false, error: 'claim_conflict' as const };
+    if (expVersion !== null && current.version !== expVersion) return { ok: false, error: 'claim_conflict' as const };
     if (TERMINAL.has(current.status)) return { ok: false, error: 'already_terminal' as const };
 
     const deps = current.blocked_by ?? [];
@@ -380,7 +847,16 @@ export async function claimTask(
 
     let working = current;
     if (working.status === 'in_progress') {
-      if (!leaseExpired(working.claim, now())) return { ok: false, error: 'claim_conflict' as const };
+      if (!leaseExpired(working.claim, nowFn())) return { ok: false, error: 'claim_conflict' as const };
+      if (working.claim?.worker_process_identity) {
+        const liveness = classifyWorkerClaimLiveness(working.claim.worker_process_identity, actualOptions.processRuntime);
+        if (liveness.status === 'active') {
+          return { ok: false, error: 'worker_alive' as const, reason: 'prior worker process is still active' };
+        }
+        if (liveness.status === 'ambiguous') {
+          return { ok: false, error: 'reconciliation_required' as const, reason: liveness.reason };
+        }
+      }
       working = {
         id: working.id,
         subject: working.subject,
@@ -388,15 +864,32 @@ export async function claimTask(
         status: 'pending',
         created_at: working.created_at,
         version: working.version + 1,
+        ...(working.last_claim_generation !== undefined ? { last_claim_generation: working.last_claim_generation } : {}),
         ...requestMetadata(working),
         ...(working.blocked_by !== undefined ? { blocked_by: working.blocked_by } : {}),
       };
     }
 
-    if (working.claim && !leaseExpired(working.claim, now())) return { ok: false, error: 'claim_conflict' as const };
+    if (working.claim && !leaseExpired(working.claim, nowFn())) return { ok: false, error: 'claim_conflict' as const };
     if (working.owner && working.owner !== worker) return { ok: false, error: 'claim_conflict' as const };
 
+    const newGeneration = Math.max(working.last_claim_generation ?? 0, working.claim?.generation ?? 0) + 1;
     const claimToken = crypto.randomUUID();
+    const tokenSha256 = crypto.createHash('sha256').update(claimToken).digest('hex');
+    const leaseMs = actualOptions.leaseMs ?? CLAIM_LEASE_MS;
+    const leasedUntil = new Date(nowFn().getTime() + leaseMs).toISOString();
+
+    const claim: TeamTaskClaim = {
+      owner: worker,
+      generation: newGeneration,
+      token_sha256: tokenSha256,
+      acquired_at: nowFn().toISOString(),
+      leased_until: leasedUntil,
+      heartbeat_sequence: 0,
+      workspace_generation: newGeneration,
+      ...(actualOptions.processIdentity ? { worker_process_identity: actualOptions.processIdentity } : {}),
+    };
+
     const updated: TeamTask = {
       id: working.id,
       subject: working.subject,
@@ -404,13 +897,193 @@ export async function claimTask(
       status: 'in_progress',
       created_at: working.created_at,
       version: working.version + 1,
+      last_claim_generation: newGeneration,
       ...requestMetadata(working),
       owner: worker,
-      claim: { owner: worker, token: claimToken, leased_until: new Date(now().getTime() + CLAIM_LEASE_MS).toISOString() },
+      claim,
       ...(working.blocked_by !== undefined ? { blocked_by: working.blocked_by } : {}),
     };
     writeTaskUnlocked(root, teamName, updated);
+    appendTaskJournalEvent(root, teamName, updated.id, {
+      kind: 'claimed',
+      task: updated,
+      claim,
+    }, nowFn);
     return { ok: true as const, task: updated, claimToken };
+  });
+}
+
+export async function renewTaskClaim(
+  root: StateRoot,
+  teamName: string,
+  taskId: string,
+  workerName: string,
+  claimToken: string,
+  options: RenewTaskClaimOptions = {},
+  now: () => Date = options.now ?? (() => new Date()),
+): Promise<RenewTaskClaimResult> {
+  const worker = assertSafeWorkerName(workerName);
+  const id = assertTaskId(taskId);
+  const config = readTeamConfig(root, teamName);
+  if (config === null) return { ok: false, error: 'task_not_found' };
+  if (!config.workers.some((entry) => entry.name === worker)) return { ok: false, error: 'worker_not_found' };
+
+  return withDirectoryLock(taskFilePath(root, teamName, id), () => {
+    const current = readTaskUnlocked(root, teamName, id);
+    if (current === null) return { ok: false, error: 'task_not_found' as const };
+    if (TERMINAL.has(current.status)) return { ok: false, error: 'already_terminal' as const };
+    if (current.status !== 'in_progress' || !current.claim || !current.owner) {
+      return { ok: false, error: 'claim_conflict' as const };
+    }
+    if (current.owner !== worker || current.claim.owner !== worker) {
+      return { ok: false, error: 'claim_conflict' as const };
+    }
+    if (options.generation !== undefined && current.claim.generation !== options.generation) {
+      return { ok: false, error: 'claim_conflict' as const };
+    }
+    if (!verifyClaimToken(current.claim, claimToken)) {
+      return { ok: false, error: 'claim_conflict' as const };
+    }
+    if (leaseExpired(current.claim, now())) {
+      return { ok: false, error: 'lease_expired' as const };
+    }
+
+    const leaseMs = options.leaseMs ?? CLAIM_LEASE_MS;
+    const maxTotalMs = options.maxTotalLeaseMs ?? MAX_TOTAL_LEASE_MS;
+    const newLeasedUntil = new Date(now().getTime() + leaseMs);
+    const acquiredAtTime = Date.parse(current.claim.acquired_at);
+    if (Number.isFinite(acquiredAtTime) && newLeasedUntil.getTime() - acquiredAtTime > maxTotalMs) {
+      return { ok: false, error: 'lease_limit_exceeded' as const };
+    }
+
+    if (current.claim.worker_process_identity) {
+      const liveness = classifyWorkerClaimLiveness(current.claim.worker_process_identity, options.processRuntime);
+      if (liveness.status === 'dead') return { ok: false, error: 'process_dead' as const };
+      if (liveness.status === 'stale') return { ok: false, error: 'process_stale' as const };
+      if (liveness.status === 'ambiguous') {
+        return { ok: false, error: 'process_ambiguous' as const, reason: liveness.reason };
+      }
+    }
+
+    const updatedClaim: TeamTaskClaim = {
+      ...current.claim,
+      renewed_at: now().toISOString(),
+      leased_until: newLeasedUntil.toISOString(),
+      heartbeat_sequence: options.heartbeatSequence ?? ((current.claim.heartbeat_sequence ?? 0) + 1),
+    };
+
+    const updated: TeamTask = {
+      ...current,
+      version: current.version + 1,
+      claim: updatedClaim,
+    };
+    writeTaskUnlocked(root, teamName, updated);
+    appendTaskJournalEvent(root, teamName, updated.id, {
+      kind: 'renewed',
+      task: updated,
+      claim: updatedClaim,
+    }, now);
+    return { ok: true as const, task: updated };
+  });
+}
+
+export async function reclaimTask(
+  root: StateRoot,
+  teamName: string,
+  taskId: string,
+  newWorkerName: string,
+  options: ReclaimTaskOptions = {},
+  now: () => Date = options.now ?? (() => new Date()),
+): Promise<ReclaimTaskResult> {
+  const worker = assertSafeWorkerName(newWorkerName);
+  const id = assertTaskId(taskId);
+  const config = readTeamConfig(root, teamName);
+  if (config === null) return { ok: false, error: 'task_not_found' };
+  if (!config.workers.some((entry) => entry.name === worker)) return { ok: false, error: 'worker_not_found' };
+
+  return withDirectoryLock(taskFilePath(root, teamName, id), () => {
+    const current = readTaskUnlocked(root, teamName, id);
+    if (current === null) return { ok: false, error: 'task_not_found' as const };
+    if (TERMINAL.has(current.status)) return { ok: false, error: 'already_terminal' as const };
+    if (current.status !== 'in_progress' || !current.claim) {
+      return { ok: false, error: 'not_in_progress' as const };
+    }
+
+    if (!leaseExpired(current.claim, now()) && !options.force) {
+      return { ok: false, error: 'lease_active' as const };
+    }
+
+    if (current.claim.worker_process_identity) {
+      let liveness = classifyWorkerClaimLiveness(current.claim.worker_process_identity, options.processRuntime);
+      if (liveness.status === 'active') {
+        if (options.force && options.killProcess) {
+          try {
+            options.killProcess(current.claim.worker_process_identity.pid);
+          } catch {
+            // best effort kill
+          }
+          liveness = classifyWorkerClaimLiveness(current.claim.worker_process_identity, options.processRuntime);
+        }
+        if (liveness.status === 'active') {
+          return {
+            ok: false,
+            error: 'worker_alive' as const,
+            reason: 'prior worker process is still active',
+            priorGeneration: current.claim.generation,
+            priorOwner: current.claim.owner,
+          };
+        }
+      }
+      if (liveness.status === 'ambiguous') {
+        return {
+          ok: false,
+          error: 'reconciliation_required' as const,
+          reason: liveness.reason,
+          priorGeneration: current.claim.generation,
+          priorOwner: current.claim.owner,
+        };
+      }
+    }
+
+    const priorGeneration = current.claim.generation;
+    const newGeneration = Math.max(current.last_claim_generation ?? 0, priorGeneration) + 1;
+    const claimToken = crypto.randomUUID();
+    const tokenSha256 = crypto.createHash('sha256').update(claimToken).digest('hex');
+    const leaseMs = options.leaseMs ?? CLAIM_LEASE_MS;
+
+    const claim: TeamTaskClaim = {
+      owner: worker,
+      generation: newGeneration,
+      token_sha256: tokenSha256,
+      acquired_at: now().toISOString(),
+      leased_until: new Date(now().getTime() + leaseMs).toISOString(),
+      heartbeat_sequence: 0,
+      workspace_generation: newGeneration,
+      ...(options.newProcessIdentity ? { worker_process_identity: options.newProcessIdentity } : {}),
+    };
+
+    const updated: TeamTask = {
+      ...current,
+      owner: worker,
+      version: current.version + 1,
+      last_claim_generation: newGeneration,
+      claim,
+    };
+    writeTaskUnlocked(root, teamName, updated);
+    appendTaskJournalEvent(root, teamName, updated.id, {
+      kind: 'reclaimed',
+      task: updated,
+      previous_generation: priorGeneration,
+      new_generation: newGeneration,
+      ...(options.reason !== undefined ? { reason: options.reason } : {}),
+    }, now);
+    return {
+      ok: true as const,
+      task: updated,
+      claimToken,
+      previousGeneration: priorGeneration,
+      newGeneration,
+    };
   });
 }
 
@@ -421,23 +1094,35 @@ export async function transitionTaskStatus(
   from: TeamTaskStatus,
   to: TeamTaskStatus,
   claimToken: string,
-  terminalData: { readonly result?: string; readonly error?: string } = {},
-  now: () => Date = () => new Date(),
+  terminalData: TransitionTaskTerminalData = {},
+  now: () => Date = terminalData.now ?? (() => new Date()),
 ): Promise<TransitionTaskResult> {
   if (!canTransitionTaskStatus(from, to)) return { ok: false, error: 'invalid_transition' };
   const id = assertTaskId(taskId);
   const token = claimToken.trim();
   if (token === '') return { ok: false, error: 'claim_conflict' };
+  const nowFn = terminalData.now ?? now;
 
   return withDirectoryLock(taskFilePath(root, teamName, id), () => {
     const current = readTaskUnlocked(root, teamName, id);
     if (current === null) return { ok: false, error: 'task_not_found' as const };
     if (TERMINAL.has(current.status)) return { ok: false, error: 'already_terminal' as const };
-    if (current.status !== from || !canTransitionTaskStatus(current.status, to)) return { ok: false, error: 'invalid_transition' as const };
-    if (!current.owner || !current.claim || current.claim.owner !== current.owner || current.claim.token !== token) {
+    if (current.status !== from || !canTransitionTaskStatus(current.status, to)) {
+      return { ok: false, error: 'invalid_transition' as const };
+    }
+    if (!current.owner || !current.claim || current.claim.owner !== current.owner || !verifyClaimToken(current.claim, token)) {
       return { ok: false, error: 'claim_conflict' as const };
     }
-    if (leaseExpired(current.claim, now())) return { ok: false, error: 'lease_expired' as const };
+    if (terminalData.generation !== undefined && current.claim.generation !== terminalData.generation) {
+      return { ok: false, error: 'claim_conflict' as const };
+    }
+    if (terminalData.workspaceGeneration !== undefined && current.claim.workspace_generation !== terminalData.workspaceGeneration) {
+      return { ok: false, error: 'claim_conflict' as const };
+    }
+    if (terminalData.expectedVersion !== undefined && current.version !== terminalData.expectedVersion) {
+      return { ok: false, error: 'claim_conflict' as const };
+    }
+    if (leaseExpired(current.claim, nowFn())) return { ok: false, error: 'lease_expired' as const };
 
     const updated: TeamTask = {
       id: current.id,
@@ -446,14 +1131,24 @@ export async function transitionTaskStatus(
       status: to,
       created_at: current.created_at,
       version: current.version + 1,
+      ...(current.last_claim_generation !== undefined ? { last_claim_generation: current.last_claim_generation } : {}),
       ...requestMetadata(current),
       owner: current.owner,
-      completed_at: now().toISOString(),
+      completed_at: nowFn().toISOString(),
       ...(current.blocked_by !== undefined ? { blocked_by: current.blocked_by } : {}),
       ...(to === 'completed' && terminalData.result !== undefined ? { result: terminalData.result } : {}),
       ...(to === 'failed' && terminalData.error !== undefined ? { error: terminalData.error } : {}),
     };
     writeTaskUnlocked(root, teamName, updated);
+    appendTaskJournalEvent(root, teamName, updated.id, {
+      kind: 'transitioned',
+      task: updated,
+      from,
+      to,
+    }, nowFn);
+    if (to === 'completed') {
+      unblockDependentTasks(root, teamName, current.id, nowFn);
+    }
     return { ok: true as const, task: updated };
   });
 }
@@ -464,11 +1159,22 @@ export async function releaseTaskClaim(
   taskId: string,
   claimToken: string,
   workerName: string,
-  now: () => Date = () => new Date(),
+  nowOrOptions: (() => Date) | ReleaseTaskOptions = () => new Date(),
+  options: ReleaseTaskOptions = {},
 ): Promise<ReleaseTaskClaimResult> {
   const id = assertTaskId(taskId);
   const worker = assertSafeWorkerName(workerName);
   const token = claimToken.trim();
+
+  let actualOptions = options;
+  let nowFn = () => new Date();
+  if (typeof nowOrOptions === 'function') {
+    nowFn = nowOrOptions;
+    actualOptions = options;
+  } else if (typeof nowOrOptions === 'object' && nowOrOptions !== null) {
+    actualOptions = nowOrOptions;
+  }
+  if (actualOptions.now) nowFn = actualOptions.now;
 
   return withDirectoryLock(taskFilePath(root, teamName, id), () => {
     const current = readTaskUnlocked(root, teamName, id);
@@ -477,10 +1183,16 @@ export async function releaseTaskClaim(
       return { ok: true as const, task: current };
     }
     if (TERMINAL.has(current.status)) return { ok: false, error: 'already_terminal' as const };
-    if (!current.owner || current.owner !== worker || !current.claim || current.claim.token !== token) {
+    if (!current.owner || current.owner !== worker || !current.claim || !verifyClaimToken(current.claim, token)) {
       return { ok: false, error: 'claim_conflict' as const };
     }
-    if (leaseExpired(current.claim, now())) return { ok: false, error: 'lease_expired' as const };
+    if (actualOptions.generation !== undefined && current.claim.generation !== actualOptions.generation) {
+      return { ok: false, error: 'claim_conflict' as const };
+    }
+    if (actualOptions.expectedVersion !== undefined && current.version !== actualOptions.expectedVersion) {
+      return { ok: false, error: 'claim_conflict' as const };
+    }
+    if (leaseExpired(current.claim, nowFn())) return { ok: false, error: 'lease_expired' as const };
 
     const updated: TeamTask = {
       id: current.id,
@@ -489,10 +1201,60 @@ export async function releaseTaskClaim(
       status: 'pending',
       created_at: current.created_at,
       version: current.version + 1,
+      ...(current.last_claim_generation !== undefined ? { last_claim_generation: current.last_claim_generation } : {}),
       ...requestMetadata(current),
       ...(current.blocked_by !== undefined ? { blocked_by: current.blocked_by } : {}),
     };
     writeTaskUnlocked(root, teamName, updated);
+    appendTaskJournalEvent(root, teamName, updated.id, {
+      kind: 'released',
+      task: updated,
+    }, nowFn);
+    return { ok: true as const, task: updated };
+  });
+}
+
+export async function reopenTask(
+  root: StateRoot,
+  teamName: string,
+  taskId: string,
+  options: ReopenTaskOptions = {},
+  now: () => Date = options.now ?? (() => new Date()),
+): Promise<ReopenTaskResult> {
+  const id = assertTaskId(taskId);
+  return withDirectoryLock(taskFilePath(root, teamName, id), () => {
+    const current = readTaskUnlocked(root, teamName, id);
+    if (current === null) return { ok: false, error: 'task_not_found' as const };
+    if (!TERMINAL.has(current.status)) return { ok: false, error: 'not_terminal' as const };
+
+    let newStatus: TeamTaskStatus = 'pending';
+    if (current.blocked_by && current.blocked_by.length > 0) {
+      const incomplete = current.blocked_by.filter((depId) => {
+        const dep = readTaskUnlocked(root, teamName, depId);
+        return dep === null || dep.status !== 'completed';
+      });
+      if (incomplete.length > 0) {
+        newStatus = 'blocked';
+      }
+    }
+
+    const updated: TeamTask = {
+      id: current.id,
+      subject: current.subject,
+      description: current.description,
+      status: newStatus,
+      created_at: current.created_at,
+      version: current.version + 1,
+      ...(current.last_claim_generation !== undefined ? { last_claim_generation: current.last_claim_generation } : {}),
+      ...requestMetadata(current),
+      ...(current.blocked_by !== undefined ? { blocked_by: current.blocked_by } : {}),
+    };
+    writeTaskUnlocked(root, teamName, updated);
+    appendTaskJournalEvent(root, teamName, updated.id, {
+      kind: 'reopened',
+      task: updated,
+      ...(options.reason !== undefined ? { reason: options.reason } : {}),
+    }, now);
     return { ok: true as const, task: updated };
   });
 }
