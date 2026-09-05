@@ -501,7 +501,11 @@ function reconcileInstallTransaction(stateRoot: string, home: string, allowProje
 
 export async function installOrUpdate(input: InstallInput): Promise<InstallResult> {
   const home = path.resolve(input.homeDir ?? os.homedir());
-  const state = ensureExternalStateRoot(path.resolve(input.stateRoot ?? defaultStateRoot(home)));
+  const resolvedState = path.resolve(input.stateRoot ?? defaultStateRoot(home));
+  if (input.dryRun === true) {
+    return installOrUpdateUnlocked(input);
+  }
+  const state = ensureExternalStateRoot(resolvedState);
   const coordinator = ensureExternalStateRoot(defaultStateRoot(home));
   if (coordinator.path === state.path) {
     return withInstallLock(state.path, () => installOrUpdateUnlocked(input), input.lock ?? {});
@@ -513,10 +517,15 @@ export async function installOrUpdate(input: InstallInput): Promise<InstallResul
 
 async function installOrUpdateUnlocked(input: InstallInput): Promise<InstallResult> {
   const home = path.resolve(input.homeDir ?? os.homedir());
-  const state = ensureExternalStateRoot(path.resolve(input.stateRoot ?? defaultStateRoot(home)));
+  const resolvedState = path.resolve(input.stateRoot ?? defaultStateRoot(home));
+  const state = input.dryRun === true
+    ? { path: resolvedState, created: false }
+    : ensureExternalStateRoot(resolvedState);
   const project = path.resolve(input.projectRoot ?? process.cwd());
   const initializeProjectState = input.initializeProjectState ?? false;
-  reconcileInstallTransaction(state.path, home, initializeProjectState);
+  if (input.dryRun !== true) {
+    reconcileInstallTransaction(state.path, home, initializeProjectState);
+  }
   const transactionId = input.transactionId ?? `${Date.now()}-${crypto.randomBytes(6).toString('hex')}`;
   const resolvedProjectState = path.join(project, '.omcu');
   const projectStatePreexisting = initializeProjectState && pathEntryExists(resolvedProjectState);
@@ -1365,7 +1374,11 @@ export async function verifyInstallations(options: {
 
 export async function rollbackInstallation(input: RollbackInput): Promise<RollbackResult> {
   const home = path.resolve(input.homeDir ?? os.homedir());
-  const state = ensureExternalStateRoot(path.resolve(input.stateRoot ?? defaultStateRoot(home)));
+  const resolvedState = path.resolve(input.stateRoot ?? defaultStateRoot(home));
+  if (input.dryRun === true) {
+    return rollbackInstallationUnlocked(input);
+  }
+  const state = ensureExternalStateRoot(resolvedState);
   const coordinator = ensureExternalStateRoot(defaultStateRoot(home));
   if (coordinator.path === state.path) {
     return withInstallLock(state.path, () => rollbackInstallationUnlocked(input), input.lock ?? {});
@@ -1377,8 +1390,13 @@ export async function rollbackInstallation(input: RollbackInput): Promise<Rollba
 
 async function rollbackInstallationUnlocked(input: RollbackInput): Promise<RollbackResult> {
   const home = path.resolve(input.homeDir ?? os.homedir());
-  const state = ensureExternalStateRoot(path.resolve(input.stateRoot ?? defaultStateRoot(home)));
-  reconcileInstallTransaction(state.path, home, false);
+  const resolvedState = path.resolve(input.stateRoot ?? defaultStateRoot(home));
+  const state = input.dryRun === true
+    ? { path: resolvedState, created: false }
+    : ensureExternalStateRoot(resolvedState);
+  if (input.dryRun !== true) {
+    reconcileInstallTransaction(state.path, home, false);
+  }
 
   const receiptsDir = path.join(state.path, 'install', 'receipts');
   const specifiedTarget = input.receiptPathOrId ?? input.target;
@@ -1584,9 +1602,14 @@ async function rollbackInstallationUnlocked(input: RollbackInput): Promise<Rollb
   }
 }
 
-export async function pruneInstallations(options: PruneInput): Promise<PruneResult> {
+export async function pruneInstallations(options: PruneInput = {}): Promise<PruneResult> {
   const home = path.resolve(options.homeDir ?? os.homedir());
-  const state = ensureExternalStateRoot(path.resolve(options.stateRoot ?? defaultStateRoot(home)));
+  const dryRun = options.dryRun ?? true;
+  const resolvedState = path.resolve(options.stateRoot ?? defaultStateRoot(home));
+  if (dryRun) {
+    return pruneInstallationsUnlocked(options);
+  }
+  const state = ensureExternalStateRoot(resolvedState);
   const coordinator = ensureExternalStateRoot(defaultStateRoot(home));
   if (coordinator.path === state.path) {
     return withInstallLock(state.path, () => pruneInstallationsUnlocked(options), options.lock ?? {});
@@ -1598,11 +1621,16 @@ export async function pruneInstallations(options: PruneInput): Promise<PruneResu
 
 async function pruneInstallationsUnlocked(options: PruneInput): Promise<PruneResult> {
   const home = path.resolve(options.homeDir ?? os.homedir());
-  const state = ensureExternalStateRoot(path.resolve(options.stateRoot ?? defaultStateRoot(home)));
-  reconcileInstallTransaction(state.path, home, false);
+  const dryRun = options.dryRun ?? true;
+  const resolvedState = path.resolve(options.stateRoot ?? defaultStateRoot(home));
+  const state = dryRun
+    ? { path: resolvedState, created: false }
+    : ensureExternalStateRoot(resolvedState);
+  if (!dryRun) {
+    reconcileInstallTransaction(state.path, home, false);
+  }
 
   const keep = options.keep ?? 2;
-  const dryRun = options.dryRun ?? true;
   const releasesDir = path.join(state.path, 'install', 'releases');
   const receiptsDir = path.join(state.path, 'install', 'receipts');
   const journalPath = transactionJournal(state.path);

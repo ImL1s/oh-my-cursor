@@ -93,7 +93,8 @@ describe('lifecycle updates, status, rollback, prune, and repair', () => {
 
     expect(result.dry_run).toBe(true);
     expect(result.status).toBe('installed');
-    expect(fs.existsSync(path.join(state, 'install', 'current.json'))).toBe(false);
+    expect(fs.existsSync(state)).toBe(false);
+    expect(fs.existsSync(path.join(home, '.local', 'state', 'oh-my-cursor'))).toBe(false);
     expect(fs.existsSync(path.join(home, '.local', 'bin', 'omcu'))).toBe(false);
   });
 
