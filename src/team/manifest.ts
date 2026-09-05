@@ -5,6 +5,7 @@ import { withinStateRoot, type StateRoot } from '../runtime/state-root.js';
 import type { TeamManifest } from './types.js';
 
 export interface TeamManifestRepository {
+  readonly root?: StateRoot;
   write(manifest: TeamManifest): void;
   read(teamId: string): TeamManifest;
   exists(teamId: string): boolean;
@@ -12,7 +13,7 @@ export interface TeamManifestRepository {
 }
 
 export class TeamManifestStore implements TeamManifestRepository {
-  constructor(private readonly root: StateRoot) {}
+  constructor(readonly root: StateRoot) {}
   private file(teamId: string): string { return withinStateRoot(this.root, 'teams', safe(teamId), 'manifest.json'); }
   write(manifest: TeamManifest): void {
     validateManifest(manifest, manifest.team_id);

@@ -1,15 +1,20 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { buildPrintArgv } from '../host/cursor-agent.js';
 import { assertExclusivePathClaims } from '../modes/path-claims.js';
+import { withDirectoryLock } from '../runtime/atomic.js';
 import { observeStartIdentity, type ProcessStartIdentityObservation } from '../runtime/process-identity.js';
-import type { StateRoot } from '../runtime/state-root.js';
+import { withinStateRoot, type StateRoot } from '../runtime/state-root.js';
 import type { TeamManifestRepository } from './manifest.js';
-import { initializeTeamState, removeTeamState, teamExists } from './state-root.js';
+import { assertSafeTeamName, initializeTeamState, removeTeamState, teamExists } from './state-root.js';
 import type { ProcessGroupKiller, TeamCollection, TeamCommandRunner, TeamManifest, TeamWorkerManifest, TeamWorkerSpec } from './types.js';
 
 const STOP_POLLS = 5;
 const STOP_POLL_MS = 200;
 
 export class ExperimentalTmuxTeamSupervisor {
+  private readonly teamLocks = new Map<string, Promise<void>>();
+
   constructor(
     private readonly manifests: TeamManifestRepository,
     private readonly runner: TeamCommandRunner,
@@ -21,88 +26,119 @@ export class ExperimentalTmuxTeamSupervisor {
     private readonly probeGroup: (pgid: number) => void = (pgid) => { process.kill(-pgid, 0); },
   ) {}
 
-  async start(teamId: string, workers: readonly TeamWorkerSpec[]): Promise<TeamManifest> {
-    if (this.manifests.exists(teamId)) throw new Error('E_TEAM_EXISTS');
-    if (this.coordinationRoot !== null && teamExists(this.coordinationRoot, teamId)) throw new Error('E_TEAM_STATE_EXISTS');
-    validateWorkers(workers);
-    const session = `omcu-${teamId}`;
-    const createdAt = this.now().toISOString();
-    let coordinationInitialized = false;
-    if (this.coordinationRoot !== null) {
-      const inboxContents: Record<string, string> = {};
-      for (const worker of workers) {
-        inboxContents[worker.id] = [
-          `# Worker inbox — ${worker.id}`,
-          '',
-          `Team: ${teamId}`,
-          `Objective: ${worker.objective}`,
-          `Owned paths: ${worker.owned_paths.join(', ')}`,
-          '',
-          'Experimental local tmux coordination (`omcu team`), not a native Cursor team.',
-          'Use `omcu team api` for mailbox/tasks. Never stamp verified.',
-          '',
-        ].join('\n');
+  private async withTeamLock<T>(teamId: string, action: () => Promise<T>): Promise<T> {
+    assertSafeTeamName(teamId);
+    const prevLock = this.teamLocks.get(teamId) ?? Promise.resolve();
+    let resolveLock!: () => void;
+    const lockPromise = new Promise<void>((resolve) => { resolveLock = resolve; });
+    this.teamLocks.set(teamId, lockPromise);
+
+    const root = this.coordinationRoot ?? this.manifests.root ?? null;
+    const runAction = async (): Promise<T> => {
+      if (root !== null) {
+        const teamsDir = withinStateRoot(root, 'teams');
+        fs.mkdirSync(teamsDir, { recursive: true, mode: 0o700 });
+        const lockTarget = path.join(teamsDir, `${teamId}-supervisor`);
+        return withDirectoryLock(lockTarget, action, 30_000, { errorPrefix: 'E_TEAM_SUPERVISOR_LOCK', heartbeatMs: 1_000 });
       }
-      initializeTeamState(this.coordinationRoot, {
-        teamName: teamId,
-        task: workers.map((worker) => worker.objective).join(' | '),
-        workers: workers.map((worker) => ({ name: worker.id, owned_paths: worker.owned_paths })),
-        createdAt,
-        tmuxSession: session,
-        inboxContents,
-      });
-      coordinationInitialized = true;
-    }
-    const workerManifests: TeamWorkerManifest[] = [];
-    let sessionStarted = false;
+      return action();
+    };
+
+    await prevLock;
     try {
-      for (const [index, worker] of workers.entries()) {
-        const argv = buildPrintArgv(teamPrompt(worker), { format: 'stream-json', mode: 'ask' });
-        const tmuxArgs = index === 0
-          ? ['new-session', '-d', '-P', '-F', '#{pane_id}', '-s', session, '-n', worker.id, '-c', worker.cwd]
-          : ['new-window', '-d', '-P', '-F', '#{pane_id}', '-t', session, '-n', worker.id, '-c', worker.cwd];
-        const created = await this.runner('tmux', tmuxArgs, worker.cwd);
-        if (created.code !== 0) throw new Error(`E_TEAM_TMUX_START:${created.stderr}`);
-        sessionStarted = true;
-        const paneTarget = created.stdout.trim();
-        if (!/^%\d+$/.test(paneTarget)) throw new Error('E_TEAM_PANE_TARGET_UNOBSERVED');
-        const retained = await this.runner('tmux', ['set-option', '-p', '-t', paneTarget, 'remain-on-exit', 'on'], worker.cwd);
-        if (retained.code !== 0) throw new Error(`E_TEAM_TMUX_RETAIN:${retained.stderr}`);
-        const launched = await this.runner('tmux', ['respawn-pane', '-k', '-t', paneTarget, 'cursor-agent', ...argv], worker.cwd);
-        if (launched.code !== 0) throw new Error(`E_TEAM_TMUX_LAUNCH:${launched.stderr}`);
-        const panePid = await this.observePanePid(paneTarget, worker.cwd);
-        const paneIdentity = this.identityObserver(panePid);
-        if (!paneIdentity.proven) throw new Error('E_TEAM_PROCESS_IDENTITY_UNPROVEN');
-        const pgid = await this.observeProcessGroup(panePid, worker.cwd);
-        workerManifests.push({ id: worker.id, cwd: worker.cwd, owned_paths: [...worker.owned_paths], pane_target: paneTarget, pane_pid: panePid, pane_start_identity: paneIdentity.value, pane_start_identity_proven: true, process_group_id: pgid, argv });
-        this.manifests.write({
-          schema_version: 2,
-          team_id: teamId,
-          tmux_session: session,
-          capability_tier: 'experimental-local',
-          native_cursor_team: false,
-          workers: [...workerManifests],
-          created_at: createdAt,
-          stopping_at: null,
-          stopping_worker_ids: null,
-          stopped_at: null,
-        });
+      return await runAction();
+    } finally {
+      if (this.teamLocks.get(teamId) === lockPromise) {
+        this.teamLocks.delete(teamId);
       }
-      const manifest: TeamManifest = { schema_version: 2, team_id: teamId, tmux_session: session, capability_tier: 'experimental-local', native_cursor_team: false, workers: workerManifests, created_at: createdAt, stopping_at: null, stopping_worker_ids: null, stopped_at: null };
-      return manifest;
-    } catch (error) {
-      if (coordinationInitialized && this.coordinationRoot !== null) {
-        try { removeTeamState(this.coordinationRoot, teamId); } catch { /* best-effort rollback */ }
-      }
-      if (sessionStarted) {
-        await this.cleanupFailedStart(session, workerManifests, workers[0]?.cwd ?? process.cwd(), error, () => {
-          this.manifests.remove?.(teamId);
-        });
-      } else {
-        try { this.manifests.remove?.(teamId); } catch { /* best-effort rollback */ }
-      }
-      throw error;
+      resolveLock();
     }
+  }
+
+  async start(teamId: string, workers: readonly TeamWorkerSpec[]): Promise<TeamManifest> {
+    return this.withTeamLock(teamId, async () => {
+      if (this.manifests.exists(teamId)) throw new Error('E_TEAM_EXISTS');
+      if (this.coordinationRoot !== null && teamExists(this.coordinationRoot, teamId)) throw new Error('E_TEAM_STATE_EXISTS');
+      validateWorkers(workers);
+      const session = `omcu-${teamId}`;
+      const createdAt = this.now().toISOString();
+      let coordinationInitialized = false;
+      if (this.coordinationRoot !== null) {
+        const inboxContents: Record<string, string> = {};
+        for (const worker of workers) {
+          inboxContents[worker.id] = [
+            `# Worker inbox — ${worker.id}`,
+            '',
+            `Team: ${teamId}`,
+            `Objective: ${worker.objective}`,
+            `Owned paths: ${worker.owned_paths.join(', ')}`,
+            '',
+            'Experimental local tmux coordination (`omcu team`), not a native Cursor team.',
+            'Use `omcu team api` for mailbox/tasks. Never stamp verified.',
+            '',
+          ].join('\n');
+        }
+        initializeTeamState(this.coordinationRoot, {
+          teamName: teamId,
+          task: workers.map((worker) => worker.objective).join(' | '),
+          workers: workers.map((worker) => ({ name: worker.id, owned_paths: worker.owned_paths })),
+          createdAt,
+          tmuxSession: session,
+          inboxContents,
+        });
+        coordinationInitialized = true;
+      }
+      const workerManifests: TeamWorkerManifest[] = [];
+      let sessionStarted = false;
+      try {
+        for (const [index, worker] of workers.entries()) {
+          const argv = buildPrintArgv(teamPrompt(worker), { format: 'stream-json', mode: 'ask' });
+          const tmuxArgs = index === 0
+            ? ['new-session', '-d', '-P', '-F', '#{pane_id}', '-s', session, '-n', worker.id, '-c', worker.cwd]
+            : ['new-window', '-d', '-P', '-F', '#{pane_id}', '-t', session, '-n', worker.id, '-c', worker.cwd];
+          const created = await this.runner('tmux', tmuxArgs, worker.cwd);
+          if (created.code !== 0) throw new Error(`E_TEAM_TMUX_START:${created.stderr}`);
+          sessionStarted = true;
+          const paneTarget = created.stdout.trim();
+          if (!/^%\d+$/.test(paneTarget)) throw new Error('E_TEAM_PANE_TARGET_UNOBSERVED');
+          const retained = await this.runner('tmux', ['set-option', '-p', '-t', paneTarget, 'remain-on-exit', 'on'], worker.cwd);
+          if (retained.code !== 0) throw new Error(`E_TEAM_TMUX_RETAIN:${retained.stderr}`);
+          const launched = await this.runner('tmux', ['respawn-pane', '-k', '-t', paneTarget, 'cursor-agent', ...argv], worker.cwd);
+          if (launched.code !== 0) throw new Error(`E_TEAM_TMUX_LAUNCH:${launched.stderr}`);
+          const panePid = await this.observePanePid(paneTarget, worker.cwd);
+          const paneIdentity = this.identityObserver(panePid);
+          if (!paneIdentity.proven) throw new Error('E_TEAM_PROCESS_IDENTITY_UNPROVEN');
+          const pgid = await this.observeProcessGroup(panePid, worker.cwd);
+          workerManifests.push({ id: worker.id, cwd: worker.cwd, owned_paths: [...worker.owned_paths], pane_target: paneTarget, pane_pid: panePid, pane_start_identity: paneIdentity.value, pane_start_identity_proven: true, process_group_id: pgid, argv });
+          this.manifests.write({
+            schema_version: 2,
+            team_id: teamId,
+            tmux_session: session,
+            capability_tier: 'experimental-local',
+            native_cursor_team: false,
+            workers: [...workerManifests],
+            created_at: createdAt,
+            stopping_at: null,
+            stopping_worker_ids: null,
+            stopped_at: null,
+          });
+        }
+        const manifest: TeamManifest = { schema_version: 2, team_id: teamId, tmux_session: session, capability_tier: 'experimental-local', native_cursor_team: false, workers: workerManifests, created_at: createdAt, stopping_at: null, stopping_worker_ids: null, stopped_at: null };
+        return manifest;
+      } catch (error) {
+        if (coordinationInitialized && this.coordinationRoot !== null) {
+          try { removeTeamState(this.coordinationRoot, teamId); } catch { /* best-effort rollback */ }
+        }
+        if (sessionStarted) {
+          await this.cleanupFailedStart(session, workerManifests, workers[0]?.cwd ?? process.cwd(), error, () => {
+            this.manifests.remove?.(teamId);
+          });
+        } else {
+          try { this.manifests.remove?.(teamId); } catch { /* best-effort rollback */ }
+        }
+        throw error;
+      }
+    });
   }
 
   async collect(teamId: string): Promise<TeamCollection> {
@@ -116,38 +152,40 @@ export class ExperimentalTmuxTeamSupervisor {
   }
 
   async stop(teamId: string): Promise<TeamManifest> {
-    let manifest = this.manifests.read(teamId);
-    if (manifest.stopped_at !== null) return manifest;
-    let candidateWorkers = manifest.stopping_worker_ids === null
-      ? manifest.workers
-      : manifest.workers.filter((worker) => manifest.stopping_worker_ids?.includes(worker.id));
-    if (manifest.stopping_at === null) {
-      candidateWorkers = await this.assertRecordedIdentities(manifest.workers);
-      const boundWorkers = candidateWorkers;
-      manifest = { ...manifest, stopping_at: this.now().toISOString(), stopping_worker_ids: boundWorkers.map((worker) => worker.id) };
-      this.manifests.write(manifest);
-    }
-    const cwd = manifest.workers[0]?.cwd ?? process.cwd();
-    const sessionExists = await this.runner('tmux', ['has-session', '-t', manifest.tmux_session], cwd);
-    if (sessionExists.code === 0) {
-      // Bind PID start identity and PGID while tmux can still prove which pane
-      // owns the group. After kill-session the pane leader may disappear while
-      // descendants in the verified group remain alive.
-      const boundWorkers = await this.assertRecordedIdentities(candidateWorkers);
-      const killedSession = await this.runner('tmux', ['kill-session', '-t', manifest.tmux_session], cwd);
-      if (killedSession.code !== 0) throw new Error(`E_TEAM_TMUX_STOP:${killedSession.stderr}`);
-      await this.terminateGroups(boundWorkers);
-    } else {
-      const alive = await this.aliveGroups(candidateWorkers);
-      if (alive.length > 0) throw new Error(`E_TEAM_STALE_PROCESS_GROUP_UNVERIFIED:${alive.join(',')}`);
-    }
-    const sessionStillExists = await this.runner('tmux', ['has-session', '-t', manifest.tmux_session], cwd);
-    if (sessionStillExists.code === 0) throw new Error('E_TEAM_STOP_INCOMPLETE:session_alive');
-    const alive = await this.aliveGroups(manifest.workers);
-    if (alive.length > 0) throw new Error(`E_TEAM_STOP_INCOMPLETE:groups_alive:${alive.join(',')}`);
-    const stopped = { ...manifest, stopped_at: this.now().toISOString() };
-    this.manifests.write(stopped);
-    return stopped;
+    return this.withTeamLock(teamId, async () => {
+      let manifest = this.manifests.read(teamId);
+      if (manifest.stopped_at !== null) return manifest;
+      let candidateWorkers = manifest.stopping_worker_ids === null
+        ? manifest.workers
+        : manifest.workers.filter((worker) => manifest.stopping_worker_ids?.includes(worker.id));
+      if (manifest.stopping_at === null) {
+        candidateWorkers = await this.assertRecordedIdentities(manifest.workers);
+        const boundWorkers = candidateWorkers;
+        manifest = { ...manifest, stopping_at: this.now().toISOString(), stopping_worker_ids: boundWorkers.map((worker) => worker.id) };
+        this.manifests.write(manifest);
+      }
+      const cwd = manifest.workers[0]?.cwd ?? process.cwd();
+      const sessionExists = await this.runner('tmux', ['has-session', '-t', manifest.tmux_session], cwd);
+      if (sessionExists.code === 0) {
+        // Bind PID start identity and PGID while tmux can still prove which pane
+        // owns the group. After kill-session the pane leader may disappear while
+        // descendants in the verified group remain alive.
+        const boundWorkers = await this.assertRecordedIdentities(candidateWorkers);
+        const killedSession = await this.runner('tmux', ['kill-session', '-t', manifest.tmux_session], cwd);
+        if (killedSession.code !== 0) throw new Error(`E_TEAM_TMUX_STOP:${killedSession.stderr}`);
+        await this.terminateGroups(boundWorkers);
+      } else {
+        const alive = await this.aliveGroups(candidateWorkers);
+        if (alive.length > 0) throw new Error(`E_TEAM_STALE_PROCESS_GROUP_UNVERIFIED:${alive.join(',')}`);
+      }
+      const sessionStillExists = await this.runner('tmux', ['has-session', '-t', manifest.tmux_session], cwd);
+      if (sessionStillExists.code === 0) throw new Error('E_TEAM_STOP_INCOMPLETE:session_alive');
+      const alive = await this.aliveGroups(manifest.workers);
+      if (alive.length > 0) throw new Error(`E_TEAM_STOP_INCOMPLETE:groups_alive:${alive.join(',')}`);
+      const stopped = { ...manifest, stopped_at: this.now().toISOString() };
+      this.manifests.write(stopped);
+      return stopped;
+    });
   }
 
   private async observePanePid(target: string, cwd: string): Promise<number> {

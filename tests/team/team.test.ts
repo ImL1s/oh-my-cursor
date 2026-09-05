@@ -484,4 +484,101 @@ describe('experimental tmux team supervisor', () => {
     const updatedMessages = await listMailboxMessages(root, teamName, 'worker-2');
     expect(updatedMessages).toHaveLength(2);
   });
+
+  it('serializes concurrent start and stop calls so stop waits for complete startup before stopping', async () => {
+    const state = fixture();
+    const root = projectStateRoot(state.workspace);
+    let workerTwoStarted = false;
+    let stopCalled = false;
+    let stopResolved = false;
+    let unblockWorkerTwo!: () => void;
+    const workerTwoGate = new Promise<void>((resolve) => { unblockWorkerTwo = resolve; });
+
+    const slowRunner = async (executable: string, argv: readonly string[], cwd: string) => {
+      if (argv[0] === 'new-window') {
+        workerTwoStarted = true;
+        await workerTwoGate;
+      }
+      return state.runner(executable, argv, cwd);
+    };
+
+    const supervisor = new ExperimentalTmuxTeamSupervisor(
+      new TeamManifestStore(root),
+      slowRunner,
+      undefined,
+      (pgid) => state.aliveGroups.delete(pgid),
+      async () => undefined,
+      root,
+      state.identityObserver,
+      state.groupProbe,
+    );
+
+    const startPromise = supervisor.start('team-concurrent', workers(state.workspace));
+
+    while (!workerTwoStarted) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+
+    const stopPromise = (async () => {
+      stopCalled = true;
+      const res = await supervisor.stop('team-concurrent');
+      stopResolved = true;
+      return res;
+    })();
+
+    await new Promise((r) => setTimeout(r, 50));
+    expect(stopCalled).toBe(true);
+    expect(stopResolved).toBe(false);
+
+    unblockWorkerTwo();
+
+    const [startManifest, stopManifest] = await Promise.all([startPromise, stopPromise]);
+    expect(startManifest.workers).toHaveLength(2);
+    expect(stopManifest.workers).toHaveLength(2);
+    expect(stopManifest.stopped_at).not.toBeNull();
+    expect(state.aliveGroups.size).toBe(0);
+  });
+
+  it('serializes stop after failed startup so stop sees cleaned-up state or handles absent manifest', async () => {
+    const state = fixture();
+    const root = projectStateRoot(state.workspace);
+    let workerTwoStarted = false;
+    let unblockWorkerTwo!: () => void;
+    const workerTwoGate = new Promise<void>((resolve) => { unblockWorkerTwo = resolve; });
+
+    const failingRunner = async (executable: string, argv: readonly string[], cwd: string) => {
+      if (argv[0] === 'new-window') {
+        workerTwoStarted = true;
+        await workerTwoGate;
+        return { code: 1, stdout: '', stderr: 'tmux new-window failed' };
+      }
+      return state.runner(executable, argv, cwd);
+    };
+
+    const supervisor = new ExperimentalTmuxTeamSupervisor(
+      new TeamManifestStore(root),
+      failingRunner,
+      undefined,
+      (pgid) => state.aliveGroups.delete(pgid),
+      async () => undefined,
+      root,
+      state.identityObserver,
+      state.groupProbe,
+    );
+
+    const startPromise = supervisor.start('team-fail-stop', workers(state.workspace));
+
+    while (!workerTwoStarted) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+
+    const stopPromise = supervisor.stop('team-fail-stop');
+
+    unblockWorkerTwo();
+
+    await expect(startPromise).rejects.toThrow('E_TEAM_TMUX_START');
+    await expect(stopPromise).rejects.toThrow('E_TEAM_MANIFEST_ABSENT');
+    expect(state.aliveGroups.size).toBe(0);
+  });
 });
+
