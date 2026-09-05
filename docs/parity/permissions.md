@@ -8,6 +8,6 @@ OMCU maps upstream approval mechanisms to Cursor's native `local.autoReview` API
 
 | Contract | Selected Mechanisms | Disposition | Status |
 |---|---|---|---|
-| `Policy & Permission Boundary` | `cursor-permissions-auto-review, omcu-domain-layer` | `native` | `pass` |
+| `Policy & Permission Boundary` | `cursor-permissions-auto-review` | `native` | `pass` |
 
 - Fail-closed security boundaries prevent arbitrary code execution outside designated workspace bounds.

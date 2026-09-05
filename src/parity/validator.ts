@@ -118,6 +118,12 @@ export function validateParityLocks(locks: ParityLocks): ParityValidationResult 
   }
 
   // 4. Cursor Host Capabilities Mapping Check
+  for (const m of locks.hostCapabilities.mechanisms) {
+    if (!m.mechanism_id.startsWith('cursor-')) {
+      errors.push(`host-capabilities.lock.json: '${m.mechanism_id}' is not an official Cursor mechanism (must start with 'cursor-')`);
+    }
+  }
+
   const validMechanismIds = new Set<string>(
     locks.hostCapabilities.mechanisms.map((m) => m.mechanism_id)
   );
@@ -127,6 +133,9 @@ export function validateParityLocks(locks: ParityLocks): ParityValidationResult 
       errors.push(`Contract ${contract.canonical_id} has no selected Cursor mechanisms`);
     } else {
       for (const mechId of contract.selected_cursor_mechanisms) {
+        if (!mechId.startsWith('cursor-')) {
+          errors.push(`Contract ${contract.canonical_id} references non-Cursor mechanism '${mechId}'. Only official Cursor host mechanisms ('cursor-*') are allowed.`);
+        }
         if (!validMechanismIds.has(mechId)) {
           errors.push(`Contract ${contract.canonical_id} references unknown Cursor mechanism: ${mechId}`);
         }

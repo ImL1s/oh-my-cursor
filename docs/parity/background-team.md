@@ -10,4 +10,4 @@
 
 | Contract | Domain Behavior | Mechanisms | Disposition |
 |---|---|---|---|
-| `Team Coordination & Leasing` | Renewable generation-fenced task ownership with atomic lease compensation and heartbeat monitoring | `cursor-sdk-subagent, omcu-domain-layer, cursor-worktree` | `thin-extension` |
+| `Team Coordination & Leasing` | Renewable generation-fenced task ownership with atomic lease compensation and heartbeat monitoring | `cursor-sdk-subagent, cursor-worktree` | `thin-extension` |

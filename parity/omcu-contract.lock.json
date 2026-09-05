@@ -29,8 +29,7 @@
       },
       "selected_cursor_mechanisms": [
         "cursor-plugin-skill",
-        "cursor-sdk-local",
-        "omcu-domain-layer"
+        "cursor-sdk-local"
       ],
       "omcu_domain_behavior": "Coordinates 5-phase execution (interview -> ralplan -> ultragoal -> review -> ultraqa) with durable stage checkpoints",
       "disposition": "composed",
@@ -51,8 +50,7 @@
       },
       "selected_cursor_mechanisms": [
         "cursor-plugin-hook",
-        "cursor-sdk-local",
-        "omcu-domain-layer"
+        "cursor-sdk-local"
       ],
       "omcu_domain_behavior": "Enforces self-referential loop with generation-fenced journal until verifier passes",
       "disposition": "composed",
@@ -73,8 +71,7 @@
       },
       "selected_cursor_mechanisms": [
         "cursor-sdk-subagent",
-        "cursor-worktree",
-        "omcu-domain-layer"
+        "cursor-worktree"
       ],
       "omcu_domain_behavior": "Fans out independent tasks across concurrent local SDK subagents with worker leases",
       "disposition": "composed",
@@ -116,8 +113,7 @@
       },
       "selected_cursor_mechanisms": [
         "cursor-plugin-skill",
-        "cursor-sdk-subagent",
-        "omcu-domain-layer"
+        "cursor-sdk-subagent"
       ],
       "omcu_domain_behavior": "Generates adversarial test scenarios and coordinates fix-verify loops until clean",
       "disposition": "composed",
@@ -139,7 +135,6 @@
       },
       "selected_cursor_mechanisms": [
         "cursor-sdk-subagent",
-        "omcu-domain-layer",
         "cursor-worktree"
       ],
       "omcu_domain_behavior": "Renewable generation-fenced task ownership with atomic lease compensation and heartbeat monitoring",
@@ -161,8 +156,7 @@
         "omc": "omc_cancel"
       },
       "selected_cursor_mechanisms": [
-        "cursor-cli",
-        "omcu-domain-layer"
+        "cursor-cli"
       ],
       "omcu_domain_behavior": "Broadcasts abort signals to active worker leases and cleans up uncommitted state",
       "disposition": "native",
@@ -204,8 +198,7 @@
         "omx": "omx_notepad"
       },
       "selected_cursor_mechanisms": [
-        "cursor-plugin-rule",
-        "omcu-domain-layer"
+        "cursor-plugin-rule"
       ],
       "omcu_domain_behavior": "Maintains durable markdown scratchpad loaded into agent context and preserved on disk",
       "disposition": "thin-extension",
@@ -226,7 +219,7 @@
       },
       "selected_cursor_mechanisms": [
         "cursor-canvas",
-        "omcu-domain-layer"
+        "cursor-cli"
       ],
       "omcu_domain_behavior": "Computes two-layer statusline rendering mode, status, and worker lease health",
       "disposition": "thin-extension",
@@ -375,8 +368,7 @@
       },
       "selected_cursor_mechanisms": [
         "cursor-plugin-skill",
-        "cursor-sdk-local",
-        "omcu-domain-layer"
+        "cursor-sdk-local"
       ],
       "omcu_domain_behavior": "Stateful research loop recording hypothesis tests, citations, and validation status",
       "disposition": "composed",
@@ -397,7 +389,7 @@
       },
       "selected_cursor_mechanisms": [
         "cursor-sdk-local",
-        "omcu-domain-layer"
+        "cursor-cli"
       ],
       "omcu_domain_behavior": "Executes arbitrary stage pipelines with typed input/output passing and failure gates",
       "disposition": "composed",
@@ -417,8 +409,7 @@
         "omc": "omc_wiki"
       },
       "selected_cursor_mechanisms": [
-        "cursor-plugin-rule",
-        "omcu-domain-layer"
+        "cursor-plugin-rule"
       ],
       "omcu_domain_behavior": "Maintains durable topic pages and architectural decisions in .omcu/wiki/",
       "disposition": "thin-extension",
@@ -649,8 +640,7 @@
         "omx": "omx_subagent_stop"
       },
       "selected_cursor_mechanisms": [
-        "cursor-plugin-hook",
-        "omcu-domain-layer"
+        "cursor-plugin-hook"
       ],
       "omcu_domain_behavior": "Synchronous pre-tool, post-tool, and subagent termination interceptors",
       "disposition": "native",
@@ -671,8 +661,7 @@
         "omx": "omx_tracer"
       },
       "selected_cursor_mechanisms": [
-        "cursor-sdk-custom-tools",
-        "omcu-domain-layer"
+        "cursor-sdk-custom-tools"
       ],
       "omcu_domain_behavior": "Appends structured event records to .omcu/tracker/events.jsonl",
       "disposition": "thin-extension",
@@ -692,8 +681,7 @@
         "omc": "omc_permissions"
       },
       "selected_cursor_mechanisms": [
-        "cursor-permissions-auto-review",
-        "omcu-domain-layer"
+        "cursor-permissions-auto-review"
       ],
       "omcu_domain_behavior": "Configures permissions and autoReview rules to safeguard repository assets",
       "disposition": "native",
@@ -714,8 +702,7 @@
         "omx_doctor": "omx_doctor"
       },
       "selected_cursor_mechanisms": [
-        "cursor-cli",
-        "omcu-domain-layer"
+        "cursor-cli"
       ],
       "omcu_domain_behavior": "Scaffolds .omcu/ runtime state and validates environment readiness",
       "disposition": "native",
@@ -737,7 +724,7 @@
       },
       "selected_cursor_mechanisms": [
         "cursor-sdk-local",
-        "omcu-domain-layer"
+        "cursor-sdk-resume"
       ],
       "omcu_domain_behavior": "Durable multi-goal milestones tracked in JSON ledger across process lifetimes",
       "disposition": "thin-extension",
@@ -758,7 +745,7 @@
       },
       "selected_cursor_mechanisms": [
         "cursor-sdk-local",
-        "omcu-domain-layer"
+        "cursor-cli"
       ],
       "omcu_domain_behavior": "Evaluator-gated performance tuning with benchmark capture",
       "disposition": "composed",
@@ -883,8 +870,7 @@
         "omx": "omx_context_compact"
       },
       "selected_cursor_mechanisms": [
-        "cursor-plugin-hook",
-        "omcu-domain-layer"
+        "cursor-plugin-hook"
       ],
       "omcu_domain_behavior": "Persists active session state to disk prior to LLM context window compaction",
       "disposition": "thin-extension",
@@ -905,8 +891,7 @@
       },
       "selected_cursor_mechanisms": [
         "cursor-worktree",
-        "cursor-sdk-subagent",
-        "omcu-domain-layer"
+        "cursor-sdk-subagent"
       ],
       "omcu_domain_behavior": "Spawns independent agents in isolated git worktrees with separate branches",
       "disposition": "composed",
@@ -947,8 +932,7 @@
         "omo": "omo_context_router"
       },
       "selected_cursor_mechanisms": [
-        "cursor-router",
-        "omcu-domain-layer"
+        "cursor-router"
       ],
       "omcu_domain_behavior": "Monitors prompt token length and dynamically selects fast vs reasoning models",
       "disposition": "native",
@@ -1073,8 +1057,7 @@
         "omo": "omo_post_step_audit"
       },
       "selected_cursor_mechanisms": [
-        "cursor-plugin-hook",
-        "omcu-domain-layer"
+        "cursor-plugin-hook"
       ],
       "omcu_domain_behavior": "Validates that step edits did not introduce syntax errors or broken tests",
       "disposition": "thin-extension",

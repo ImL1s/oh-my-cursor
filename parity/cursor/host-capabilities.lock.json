@@ -451,11 +451,11 @@
       "status": "live"
     },
     {
-      "mechanism_id": "omcu-domain-layer",
-      "surface": "sdk",
-      "name": "OMCU Domain & Coordination Layer",
-      "version_or_commit": "oh-my-cursor@0.3.0",
-      "source_evidence": "src/team/, src/runtime/, src/recovery/, src/workflows/ in oh-my-cursor",
+      "mechanism_id": "cursor-plugin-command",
+      "surface": "plugin",
+      "name": "Cursor Plugin Command Format",
+      "version_or_commit": "cursor/plugins@15ef02d9",
+      "source_evidence": "cursor/plugins repository: commands/*.md standard command declarations",
       "requirements": {
         "local_or_cloud": "both",
         "platform": [
@@ -465,14 +465,14 @@
         ]
       },
       "contract": {
-        "input": "Multi-agent orchestration requests, task definitions, and workflow specifications",
-        "output": "Generation-fenced task leases, durable JSON state root, verified execution journals",
-        "lifecycle": "Initialized under .omcu/ -> Atomic state transitions -> Lease renewals -> Recovery on crash"
+        "input": "User slash command (/command-name) invocation in chat prompt",
+        "output": "Expanded prompt instructions, workflow triggers, and command context",
+        "lifecycle": "Loaded from commands/ -> Matched on slash input -> Prompt expanded -> Executed"
       },
-      "persistence_and_identity": "Atomic filesystem state under .omcu/ with generation numbers and locks",
-      "permissions_and_tools": "Coordinates host mechanisms without duplicating Cursor execution internals",
+      "persistence_and_identity": "Static markdown command definitions committed to commands/ directory",
+      "permissions_and_tools": "Inherits caller environment tool and permission boundaries",
       "known_limitations": [
-        "Requires local filesystem access to workspace root directory"
+        "Static markdown template without dynamic interactive input prompting"
       ],
       "status": "live"
     }

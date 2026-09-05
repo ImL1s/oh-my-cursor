@@ -88,7 +88,7 @@ describe('Parity Contract Matrix & Clean-Room Provenance Lock (Issue #25)', () =
       'cursor-automation',
       'cursor-canvas',
       'cursor-router',
-      'omcu-domain-layer'
+      'cursor-plugin-command'
     ];
 
     const actualIds = locks.hostCapabilities.mechanisms.map((m) => m.mechanism_id);
@@ -292,6 +292,56 @@ describe('Parity Contract Matrix & Clean-Room Provenance Lock (Issue #25)', () =
       const resultLength = validateParityLocks(clonedLocksLength);
       expect(resultLength.valid).toBe(false);
       expect(resultLength.errors.some((e) => e.includes('must decode to exactly 64 bytes'))).toBe(true);
+    });
+
+    it('detects non-Cursor mechanism in host-capabilities.lock.json', () => {
+      const locks = loadParityLocks(REPO_ROOT);
+      const clonedLocks: ParityLocks = {
+        ...locks,
+        hostCapabilities: {
+          ...locks.hostCapabilities,
+          mechanisms: [
+            ...locks.hostCapabilities.mechanisms,
+            {
+              mechanism_id: 'omcu-domain-layer',
+              surface: 'sdk',
+              name: 'OMCU Domain Layer',
+              version_or_commit: '1.0.0',
+              source_evidence: 'local repo',
+              requirements: { local_or_cloud: 'local', platform: ['darwin'] },
+              contract: { input: 'in', output: 'out', lifecycle: 'life' },
+              persistence_and_identity: 'local',
+              permissions_and_tools: 'none',
+              known_limitations: [],
+              status: 'live'
+            }
+          ]
+        }
+      };
+
+      const result = validateParityLocks(clonedLocks);
+      expect(result.valid).toBe(false);
+      expect(result.errors.some((e) => e.includes('is not an official Cursor mechanism'))).toBe(true);
+    });
+
+    it('detects non-Cursor mechanism in selected_cursor_mechanisms', () => {
+      const locks = loadParityLocks(REPO_ROOT);
+      const clonedContracts = locks.contract.contracts.map((c, i) =>
+        i === 0
+          ? { ...c, selected_cursor_mechanisms: ['omcu-domain-layer', ...c.selected_cursor_mechanisms] }
+          : c
+      );
+      const clonedLocks: ParityLocks = {
+        ...locks,
+        contract: {
+          ...locks.contract,
+          contracts: clonedContracts
+        }
+      };
+
+      const result = validateParityLocks(clonedLocks);
+      expect(result.valid).toBe(false);
+      expect(result.errors.some((e) => e.includes('references non-Cursor mechanism \'omcu-domain-layer\''))).toBe(true);
     });
 
     it('detects missing documentation file', () => {

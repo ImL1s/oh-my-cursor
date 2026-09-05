@@ -261,18 +261,18 @@ Cursor provides 18 distinct native primitives that serve as the host runtime tar
   - Automatic routing decisions may vary based on model provider availability
 - **Support Status**: `live`
 
-### 18. `omcu-domain-layer` (OMCU Domain & Coordination Layer)
+### 18. `cursor-plugin-command` (Cursor Plugin Command Format)
 
-- **Surface**: `sdk`
-- **Source Evidence**: src/team/, src/runtime/, src/recovery/, src/workflows/ in oh-my-cursor
+- **Surface**: `plugin`
+- **Source Evidence**: cursor/plugins repository: commands/*.md standard command declarations
 - **Requirements**: Local/Cloud: `both`, Platforms: darwin, linux, win32
 - **Contract**:
-  - *Input*: Multi-agent orchestration requests, task definitions, and workflow specifications
-  - *Output*: Generation-fenced task leases, durable JSON state root, verified execution journals
-  - *Lifecycle*: Initialized under .omcu/ -> Atomic state transitions -> Lease renewals -> Recovery on crash
-- **Persistence & Identity**: Atomic filesystem state under .omcu/ with generation numbers and locks
-- **Permissions & Tools**: Coordinates host mechanisms without duplicating Cursor execution internals
+  - *Input*: User slash command (/command-name) invocation in chat prompt
+  - *Output*: Expanded prompt instructions, workflow triggers, and command context
+  - *Lifecycle*: Loaded from commands/ -> Matched on slash input -> Prompt expanded -> Executed
+- **Persistence & Identity**: Static markdown command definitions committed to commands/ directory
+- **Permissions & Tools**: Inherits caller environment tool and permission boundaries
 - **Known Limitations**:
-  - Requires local filesystem access to workspace root directory
+  - Static markdown template without dynamic interactive input prompting
 - **Support Status**: `live`
 

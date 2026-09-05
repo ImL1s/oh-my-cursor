@@ -8,4 +8,4 @@
 
 | Contract | Mechanisms | Disposition | Status |
 |---|---|---|---|
-| `Setup & Doctor Diagnostics` | `cursor-cli, omcu-domain-layer` | `native` | `pass` |
+| `Setup & Doctor Diagnostics` | `cursor-cli` | `native` | `pass` |
