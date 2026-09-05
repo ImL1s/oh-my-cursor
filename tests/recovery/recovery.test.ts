@@ -974,6 +974,61 @@ describe('Recovery streaming and truthful chain validation (#21)', () => {
     fs.chmodSync(snapshotPath, 0o400);
     expect(() => readRecovery(root, 'truncation-contradiction')).toThrow('E_RECOVERY_INVALID');
   });
+
+  it('recognizes equivalent Unicode escapes in malformed tail records and marks chain unverified', () => {
+    const cwd = workspace();
+    const root = projectStateRoot(cwd);
+    const transcript = path.join(cwd, 'unicode-escape-tail.jsonl');
+
+    // Line 1: malformed line spelling "ghost" with Unicode escape \u0067host
+    // Line 2: valid record referencing parent_id "ghost"
+    fs.writeFileSync(
+      transcript,
+      '{"id":"\\u0067host", broken syntax\n{"id":"child-1","parent_id":"ghost","role":"user"}\n',
+    );
+
+    const snapshot = recoverCursorSession(root, {
+      transcriptPath: transcript,
+      recoveryId: 'unicode-tail-check',
+      now: fixedNow,
+    });
+
+    const unverified = snapshot.warnings.filter((w) => w.code === 'W_CHAIN_UNVERIFIED');
+    expect(unverified).toHaveLength(1);
+    expect(unverified[0]!.detail).toContain('ghost');
+    expect(unverified[0]!.detail).toContain('malformed retained record');
+
+    const broken = snapshot.warnings.filter((w) => w.code === 'W_BROKEN_CHAIN');
+    expect(broken).toHaveLength(0);
+  });
+
+  it('recognizes equivalent Unicode escapes in malformed prefix records and marks chain unverified', () => {
+    const cwd = workspace();
+    const root = projectStateRoot(cwd);
+    const transcript = path.join(cwd, 'unicode-escape-prefix.jsonl');
+
+    // 1000 lines: line 1 has malformed JSON with \u0067host, tail has record referencing "ghost"
+    const lines: string[] = ['{"id":"\\u0067host", broken prefix'];
+    for (let i = 2; i <= 999; i++) {
+      lines.push(JSON.stringify({ id: `item-${i}`, role: 'assistant' }));
+    }
+    lines.push(JSON.stringify({ id: 'child-tail', parent_id: 'ghost', role: 'user' }));
+    fs.writeFileSync(transcript, `${lines.join('\n')}\n`);
+
+    const snapshot = recoverCursorSession(root, {
+      transcriptPath: transcript,
+      recoveryId: 'unicode-prefix-check',
+      now: fixedNow,
+    });
+
+    const unverified = snapshot.warnings.filter((w) => w.code === 'W_CHAIN_UNVERIFIED');
+    expect(unverified).toHaveLength(1);
+    expect(unverified[0]!.detail).toContain('ghost');
+    expect(unverified[0]!.detail).toContain('malformed prefix record');
+
+    const broken = snapshot.warnings.filter((w) => w.code === 'W_BROKEN_CHAIN');
+    expect(broken).toHaveLength(0);
+  });
 });
 
 

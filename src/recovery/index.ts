@@ -158,11 +158,37 @@ function candidateRepresentations(id: string): string[] {
   return Array.from(set);
 }
 
-function lineMatchesParent(lineStr: string, parent: string): boolean {
+function decodeJsonEscapes(str: string): string {
+  return str.replace(/\\(?:u([0-9a-fA-F]{4})|["\\/bfnrt])/g, (match, hex) => {
+    if (hex !== undefined) {
+      try {
+        const code = parseInt(hex, 16);
+        return String.fromCharCode(code);
+      } catch {
+        return match;
+      }
+    }
+    switch (match) {
+      case '\\"': return '"';
+      case '\\\\': return '\\';
+      case '\\/': return '/';
+      case '\\b': return '\b';
+      case '\\f': return '\f';
+      case '\\n': return '\n';
+      case '\\r': return '\r';
+      case '\\t': return '\t';
+      default: return match;
+    }
+  });
+}
+
+function lineMatchesParent(lineStr: string, parent: string, decodedLine?: string): boolean {
   if (lineStr.includes(parent)) return true;
+  const decoded = decodedLine ?? decodeJsonEscapes(lineStr);
+  if (decoded.includes(parent)) return true;
   try {
     const encoded = JSON.stringify(parent).slice(1, -1);
-    return lineStr.includes(encoded);
+    return lineStr.includes(encoded) || decoded.includes(encoded);
   } catch {
     return false;
   }
@@ -420,9 +446,10 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
       if (searchRegex !== null) {
         for (const malformedLine of malformedTailLines) {
           if (candidateTailParents.size === 0) break;
-          if (searchRegex.test(malformedLine)) {
+          const decodedLine = decodeJsonEscapes(malformedLine);
+          if (searchRegex.test(malformedLine) || searchRegex.test(decodedLine)) {
             for (const parent of candidateTailParents) {
-              if (lineMatchesParent(malformedLine, parent)) {
+              if (lineMatchesParent(malformedLine, parent, decodedLine)) {
                 unverifiedInTail.add(parent);
                 candidateTailParents.delete(parent);
               }
@@ -457,9 +484,10 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
             candidatesNeedingMalformedCheck.delete(validId);
             if (foundInPrefix.size === missingTailParents.size) return true;
           } else if (malformed && searchRegex !== null && candidatesNeedingMalformedCheck.size > 0) {
-            if (searchRegex.test(lineStr)) {
+            const decodedLine = decodeJsonEscapes(lineStr);
+            if (searchRegex.test(lineStr) || searchRegex.test(decodedLine)) {
               for (const parent of candidatesNeedingMalformedCheck) {
-                if (lineMatchesParent(lineStr, parent)) {
+                if (lineMatchesParent(lineStr, parent, decodedLine)) {
                   unverifiedInPrefix.add(parent);
                   candidatesNeedingMalformedCheck.delete(parent);
                 }
