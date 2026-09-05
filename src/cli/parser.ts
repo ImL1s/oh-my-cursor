@@ -110,8 +110,76 @@ const gatesJson = (): OptionSchema => ({ name: '--gates-json', kind: 'json', jso
 export const COMMAND_SCHEMAS: Readonly<Record<string, CommandSchema>> = Object.freeze({
   help: { stateAccess: 'none', positionals: [{ name: 'command' }, { name: 'action' }] },
   version: { stateAccess: 'none' },
-  setup: { stateAccess: 'none', options: [{ name: '--source', kind: 'string' }, { name: '--state-root', kind: 'string' }, { name: '--init-project-state', kind: 'flag', stateAccess: 'write-ensure' }] },
-  update: { stateAccess: 'none', options: [{ name: '--source', kind: 'string' }, { name: '--state-root', kind: 'string' }, { name: '--init-project-state', kind: 'flag', stateAccess: 'write-ensure' }] },
+  setup: {
+    stateAccess: 'none',
+    options: [
+      { name: '--source', kind: 'string' },
+      { name: '--archive', kind: 'string' },
+      { name: '--checksums', kind: 'string' },
+      { name: '--tag', kind: 'string' },
+      { name: '--latest', kind: 'flag' },
+      { name: '--state-root', kind: 'string' },
+      { name: '--init-project-state', kind: 'flag', stateAccess: 'write-ensure' },
+      { name: '--dry-run', kind: 'flag' },
+    ],
+  },
+  update: {
+    stateAccess: 'none',
+    options: [
+      { name: '--source', kind: 'string' },
+      { name: '--archive', kind: 'string' },
+      { name: '--checksums', kind: 'string' },
+      { name: '--tag', kind: 'string' },
+      { name: '--latest', kind: 'flag' },
+      { name: '--state-root', kind: 'string' },
+      { name: '--init-project-state', kind: 'flag', stateAccess: 'write-ensure' },
+      { name: '--dry-run', kind: 'flag' },
+    ],
+  },
+  install: {
+    stateAccess: 'none',
+    requireAction: true,
+    actions: {
+      status: {
+        options: [
+          { name: '--state-root', kind: 'string' },
+        ],
+      },
+      list: {
+        options: [
+          { name: '--state-root', kind: 'string' },
+        ],
+      },
+      verify: {
+        options: [
+          { name: '--state-root', kind: 'string' },
+          { name: '--all', kind: 'flag' },
+        ],
+      },
+      prune: {
+        options: [
+          { name: '--state-root', kind: 'string' },
+          { name: '--dry-run', kind: 'flag' },
+          { name: '--apply', kind: 'flag' },
+          { name: '--keep', kind: 'integer', min: 0, default: 2 },
+        ],
+        mutuallyExclusive: [['--dry-run', '--apply']],
+      },
+      repair: {
+        options: [
+          { name: '--state-root', kind: 'string' },
+        ],
+      },
+    },
+  },
+  rollback: {
+    stateAccess: 'none',
+    options: [
+      { name: '--receipt', kind: 'string' },
+      { name: '--state-root', kind: 'string' },
+      { name: '--dry-run', kind: 'flag' },
+    ],
+  },
   doctor: { stateAccess: 'none', options: [{ name: '--repair-owner', kind: 'flag', stateAccess: 'write-existing' }, { name: '--repair-journals', kind: 'flag', stateAccess: 'write-existing' }] },
   uninstall: {
     stateAccess: 'none',

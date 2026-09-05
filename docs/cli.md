@@ -254,8 +254,15 @@ Do not edit this block manually; it is generated from `COMMAND_SCHEMAS`.
 
 - `omcu help` | options: none | positionals: command; action
 - `omcu version` | options: none | positionals: none
-- `omcu setup` | options: --source:string; --state-root:string; --init-project-state:flag | positionals: none
-- `omcu update` | options: --source:string; --state-root:string; --init-project-state:flag | positionals: none
+- `omcu setup` | options: --source:string; --archive:string; --checksums:string; --tag:string; --latest:flag; --state-root:string; --init-project-state:flag; --dry-run:flag | positionals: none
+- `omcu update` | options: --source:string; --archive:string; --checksums:string; --tag:string; --latest:flag; --state-root:string; --init-project-state:flag; --dry-run:flag | positionals: none
+- `omcu install` | options: none | positionals: none
+- `omcu install status` | options: --state-root:string | positionals: none
+- `omcu install list` | options: --state-root:string | positionals: none
+- `omcu install verify` | options: --state-root:string; --all:flag | positionals: none
+- `omcu install prune` | options: --state-root:string; --dry-run:flag; --apply:flag; --keep:integer default=2 | positionals: none
+- `omcu install repair` | options: --state-root:string | positionals: none
+- `omcu rollback` | options: --receipt:string; --state-root:string; --dry-run:flag | positionals: none
 - `omcu doctor` | options: --repair-owner:flag; --repair-journals:flag | positionals: none
 - `omcu uninstall` | options: --receipt:string; --state-root:string; --purge-project-state:flag | positionals: none
 - `omcu capabilities` | options: none | positionals: none

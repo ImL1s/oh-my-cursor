@@ -39,7 +39,9 @@ Host launch (OMX-aligned):
   omcu --direct|--tmux …       launch policy (auto falls back; --tmux fails closed)
 
 Lifecycle / orchestration:
+  omcu install status|list|verify|prune|repair      lifecycle inspection, repair & garbage collection
   omcu setup|update [--init-project-state]           lifecycle (project state is opt-in)
+  omcu rollback --receipt <id|path> [--dry-run]      transactional operator rollback
   omcu doctor [--repair-owner|--repair-journals]|uninstall  observational doctor; explicit owner/journal repair
   omcu capabilities discover|native-status          pinned host probes
   omcu state create|status|transition|verify|event   CLI-authoritative state

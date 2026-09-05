@@ -221,4 +221,103 @@ describe('integrated CLI surface', () => {
       expect(prompts[0]).not.toContain('Objective: 1');
     } finally { fs.rmSync(cwd, { recursive: true, force: true }); }
   });
+
+  it('integrates install lifecycle commands: status, list, verify, rollback, prune, repair, and update-source enforcement', async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-lifecycle-cli-'));
+    fs.chmodSync(cwd, 0o700);
+    const h = harness(cwd);
+    const home = h.dependencies.homeDir;
+    fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+    fs.chmodSync(home, 0o700);
+
+    const healthyAdapter = new CursorAgentAdapter('cursor-agent', async (_exe, invocation) => {
+      if (invocation.argv[0] === '--version') return { code: 0, stdout: '2026.07.20-test\n', stderr: '' };
+      if (invocation.argv[0] === 'status') return { code: 0, stdout: 'authenticated\n', stderr: '' };
+      return { code: 0, stdout: '--version --help status --plugin-dir\n', stderr: '' };
+    });
+
+    function fixture(ver: string): string {
+      const p = path.join(cwd, `pkg-${ver}`);
+      fs.mkdirSync(path.join(p, 'dist', 'bin'), { recursive: true });
+      fs.mkdirSync(path.join(p, '.cursor-plugin'), { recursive: true });
+      fs.mkdirSync(path.join(p, '.cursor', 'rules'), { recursive: true });
+      fs.writeFileSync(path.join(p, 'package.json'), JSON.stringify({ name: '@iml1s/oh-my-cursor', version: ver, files: ['dist', '.cursor-plugin', '.cursor/rules'] }));
+      fs.writeFileSync(path.join(p, 'dist', 'bin', 'omcu.js'), `#!/usr/bin/env node\nconsole.log("${ver}");\n`);
+      fs.writeFileSync(path.join(p, '.cursor', 'rules', 'oh-my-cursor.mdc'), '---\nalwaysApply: true\n---\n');
+      fs.writeFileSync(path.join(p, '.cursor-plugin', 'plugin.json'), JSON.stringify({ name: 'oh-my-cursor', version: ver, rules: './.cursor/rules/' }));
+      return p;
+    }
+
+    const pkg1 = fixture('1.0.0');
+    const pkg2 = fixture('2.0.0');
+
+    function makeWritable(dir: string): void {
+      if (!fs.existsSync(dir)) return;
+      const stat = fs.lstatSync(dir);
+      if (!stat.isDirectory()) return;
+      fs.chmodSync(dir, 0o700);
+      for (const name of fs.readdirSync(dir)) makeWritable(path.join(dir, name));
+    }
+
+    try {
+      // 1. bare update without source should fail with E_UPDATE_SOURCE_REQUIRED
+      expect(await runCli(['update'], { ...h.dependencies, adapter: healthyAdapter }, h.io)).toBe(1);
+      expect(h.stderr.join('')).toContain('E_UPDATE_SOURCE_REQUIRED');
+      h.stderr.length = 0;
+      h.stdout.length = 0;
+
+      // 2. install status before install
+      expect(await runCli(['install', 'status'], { ...h.dependencies, adapter: healthyAdapter }, h.io)).toBe(1);
+      expect(h.stdout.join('')).toContain('"healthy": false');
+      h.stdout.length = 0;
+
+      // 3. install v1 via setup
+      expect(await runCli(['setup', '--source', pkg1], { ...h.dependencies, adapter: healthyAdapter }, h.io)).toBe(0);
+      expect(h.stdout.join('')).toContain('"status": "installed"');
+      h.stdout.length = 0;
+
+      // 4. install status after install
+      expect(await runCli(['install', 'status'], { ...h.dependencies, adapter: healthyAdapter }, h.io)).toBe(0);
+      expect(h.stdout.join('')).toContain('"healthy": true');
+      h.stdout.length = 0;
+
+      // 5. install list
+      expect(await runCli(['install', 'list'], { ...h.dependencies, adapter: healthyAdapter }, h.io)).toBe(0);
+      expect(h.stdout.join('')).toContain('"version": "1.0.0"');
+      h.stdout.length = 0;
+
+      // 6. install verify
+      expect(await runCli(['install', 'verify'], { ...h.dependencies, adapter: healthyAdapter }, h.io)).toBe(0);
+      expect(h.stdout.join('')).toContain('"ok": true');
+      h.stdout.length = 0;
+
+      // 7. update to v2
+      expect(await runCli(['update', '--source', pkg2], { ...h.dependencies, adapter: healthyAdapter }, h.io)).toBe(0);
+      expect(h.stdout.join('')).toContain('"status": "updated"');
+      h.stdout.length = 0;
+
+      // 8. rollback without --receipt automatically rolls back to v1
+      const rollbackCode = await runCli(['rollback'], { ...h.dependencies, adapter: healthyAdapter }, h.io);
+      if (rollbackCode !== 0) {
+        console.error('ROLLBACK FAILED:', { rollbackCode, stdout: h.stdout.join(''), stderr: h.stderr.join('') });
+      }
+      expect(rollbackCode).toBe(0);
+      expect(h.stdout.join('')).toContain('"status": "rolled_back"');
+      expect(h.stdout.join('')).toContain('"version": "1.0.0"');
+      h.stdout.length = 0;
+
+      // 9. install prune --dry-run
+      expect(await runCli(['install', 'prune', '--dry-run'], { ...h.dependencies, adapter: healthyAdapter }, h.io)).toBe(0);
+      expect(h.stdout.join('')).toContain('"dry_run": true');
+      h.stdout.length = 0;
+
+      // 10. install repair
+      expect(await runCli(['install', 'repair'], { ...h.dependencies, adapter: healthyAdapter }, h.io)).toBe(0);
+      expect(h.stdout.join('')).toContain('"repaired": false');
+      h.stdout.length = 0;
+    } finally {
+      makeWritable(cwd);
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  }, 20_000);
 });
