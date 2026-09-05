@@ -1333,11 +1333,13 @@ export async function reclaimTask(
           }
           liveness = classifyWorkerClaimLiveness(current.claim.worker_process_identity, options.processRuntime);
         }
-        if (liveness.status === 'active' && !options.force) {
+        if (liveness.status === 'active') {
           return {
             ok: false,
             error: 'worker_alive' as const,
-            reason: 'prior worker process is still active',
+            reason: options.force
+              ? 'prior worker process remains active and could not be terminated'
+              : 'prior worker process is still active',
             priorGeneration: current.claim.generation,
             priorOwner: current.claim.owner,
           };
@@ -1616,6 +1618,7 @@ export async function reopenTask(
         version: current.version + 1,
         ...(current.last_claim_generation !== undefined ? { last_claim_generation: current.last_claim_generation } : {}),
         ...requestMetadata(current),
+        ...(current.request_owner !== undefined && current.request_owner !== null ? { owner: current.request_owner } : {}),
         ...(current.blocked_by !== undefined ? { blocked_by: current.blocked_by } : {}),
       };
       await commitTaskWithJournal(

@@ -42,6 +42,7 @@ export type TeamApiOperation = (typeof TEAM_API_OPERATIONS)[number];
 export interface TeamApiExecutionOptions {
   readonly isSupervisor?: boolean;
   readonly processRuntime?: ProcessIdentityRuntime;
+  readonly killProcess?: (pid: number) => void;
 }
 
 export type TeamApiEnvelope =
@@ -509,6 +510,7 @@ export async function executeTeamApiOperation(
           ...(leaseMs !== undefined ? { leaseMs } : {}),
           ...(newProcessIdentity !== undefined ? { newProcessIdentity } : {}),
           ...(options?.processRuntime !== undefined ? { processRuntime: options.processRuntime } : {}),
+          ...(options?.killProcess !== undefined ? { killProcess: options.killProcess } : {}),
         });
         return taskOpResult(operation, result as { ok: boolean; error?: string } & Record<string, unknown>);
       }
