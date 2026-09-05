@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "package_name": "@cursor/sdk",
+  "version": "1.0.31",
+  "integrity": "sha512-0SdJQqp5oXn81oJqIVkLpgHih+CL6CAudK83pCsdJyA23AvInSWlMaGpLi+JlrK3efHoswiEhhASs9WpeEz3QQ==",
+  "tarball_url": "https://registry.npmjs.org/@cursor/sdk/-/sdk-1.0.31.tgz",
+  "published_at": "2026-07-20T12:00:00.000Z",
+  "dependencies": {
+    "@cursor/protocol": "1.0.31"
+  },
+  "capabilities": [
+    {
+      "id": "agent-prompt",
+      "name": "Agent.prompt",
+      "description": "Streamed message execution with prompt, tools, and options",
+      "api_signature": "Agent.prompt(prompt: string, options?: PromptOptions): Promise<AgentStreamResponse>",
+      "verification_status": "verified"
+    },
+    {
+      "id": "agent-create",
+      "name": "Agent.create",
+      "description": "Initialize a new agent session instance",
+      "api_signature": "Agent.create(config?: AgentConfig): Promise<AgentInstance>",
+      "verification_status": "verified"
+    },
+    {
+      "id": "agent-resume",
+      "name": "Agent.resume",
+      "description": "Resume an existing conversation by session UUID",
+      "api_signature": "Agent.resume(sessionId: string): Promise<AgentInstance>",
+      "persistence_backend": "SQLite / JSON local store",
+      "verification_status": "verified"
+    },
+    {
+      "id": "agent-list",
+      "name": "Agent.list",
+      "description": "Query all persisted sessions and metadata",
+      "api_signature": "Agent.list(): Promise<SessionSummary[]>",
+      "persistence_backend": "SQLite / JSON local store",
+      "verification_status": "verified"
+    },
+    {
+      "id": "agent-create-child",
+      "name": "Agent.createChild",
+      "description": "Spawn a nested child subagent with dedicated persona and tool whitelist",
+      "api_signature": "agent.createChild(subagentConfig: SubagentConfig): Promise<AgentInstance>",
+      "verification_status": "verified"
+    },
+    {
+      "id": "local-custom-tools",
+      "name": "local.customTools",
+      "description": "Register in-process TypeScript custom tools callable by the model",
+      "api_signature": "local.customTools.register(toolDefinition: ToolDefinition): void",
+      "verification_status": "verified"
+    },
+    {
+      "id": "local-auto-review",
+      "name": "local.autoReview",
+      "description": "Hook into tool and shell execution for automated policy approval decisions",
+      "api_signature": "local.autoReview.onToolCall(handler: (call: ToolCall) => Promise<ReviewDecision>): void",
+      "verification_status": "verified"
+    },
+    {
+      "id": "cloud-agent-create",
+      "name": "CloudAgent.create",
+      "description": "Dispatch an autonomous cloud agent task on remote infrastructure",
+      "api_signature": "CloudAgent.create(cloudTaskConfig: CloudTaskConfig): Promise<CloudRunHandle>",
+      "verification_status": "verified"
+    }
+  ]
+}

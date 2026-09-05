@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const help = fs.readFileSync(new URL('../src/cli/application.ts', import.meta.url), 'utf8');
 for (const command of ['setup', 'update', 'install', 'rollback', 'doctor', 'uninstall', 'capabilities', 'native-status', 'state', 'cancel', 'session', 'resume', 'recover', 'compact', 'memory', 'notify', 'tracker', 'wiki', 'mcp-server', 'mcp-install', 'workflow', 'ralplan', 'ralph', 'ulw', 'autopilot', 'pipeline', 'persist', 'team', 'review', 'qa', 'accept', 'integrate', 'ask']) assert.ok(help.includes(command), `missing help: ${command}`);
@@ -69,8 +70,15 @@ for (const docName of ['cli.md', 'cli.zh.md', 'cli.zh-TW.md']) {
   assert.equal(reference, firstReference, `translated CLI references differ: ${docName}`);
 }
 const manifest = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
-for (const asset of ['.cursor-plugin', '.cursor/rules', '.mcp.json', 'agents', 'commands', 'hooks', 'skills', 'templates']) assert.ok(manifest.files.includes(asset), `missing package asset: ${asset}`);
+for (const asset of ['.cursor-plugin', '.cursor/rules', '.mcp.json', 'agents', 'commands', 'hooks', 'skills', 'templates', 'parity', 'docs/parity', 'THIRD-PARTY-NOTICES.md']) assert.ok(manifest.files.includes(asset), `missing package asset: ${asset}`);
 assert.equal('createCliMutationAuthority' in await import('../dist/src/index.js'), false, 'authority factory must not be public');
 const { PACKAGE_VERSION } = await import('../dist/src/index.js');
 assert.equal(PACKAGE_VERSION, manifest.version, 'PACKAGE_VERSION must match package.json version');
 console.log('CLI_PARITY:PASS');
+
+const { runParityAudit } = await import('../dist/src/parity/index.js');
+const repoRoot = fileURLToPath(new URL('..', import.meta.url));
+const audit = runParityAudit(repoRoot);
+assert.ok(audit.valid, `Parity audit failed:\n  ${audit.errors.join('\n  ')}`);
+console.log(`CONTRACT_MATRIX_PARITY:PASS (${audit.lockResult.mappedUpstreamItems}/${audit.lockResult.totalUpstreamItems} upstreams mapped, ${audit.lockResult.totalContracts} contracts verified)`);
+

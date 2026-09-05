@@ -1,0 +1,26 @@
+name: upstream-drift
+on:
+  schedule:
+    - cron: '0 4 * * 1' # Every Monday at 04:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-drift:
+    name: Check Upstream Baseline Drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Verify existing parity matrix
+        run: npm run parity
+      - name: Check OMC / OMX / OMO upstream drift against pinned commits
+        run: node scripts/check-upstream-drift.mjs
+

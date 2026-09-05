@@ -1,0 +1,827 @@
+{
+  "schema_version": 1,
+  "upstream_id": "omc",
+  "repository": "Yeachan-Heo/oh-my-claudecode",
+  "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+  "default_license": "MIT",
+  "observed_at": "2026-07-24T00:00:00.000Z",
+  "total_items": 32,
+  "items": [
+    {
+      "id": "omc_autopilot",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "skills/autopilot/SKILL.md",
+      "hash_sha256": "519bbe10cb4ca30dc25a6724118e904183ff21667fff18e2d37e4d49ede5ed01",
+      "license_class": "mit",
+      "surface_family": "workflow",
+      "source_name": "autopilot",
+      "aliases": [
+        "autopilot",
+        "ap"
+      ],
+      "invocation_grammar": "/autopilot <goal>",
+      "agents_models_tools_hooks": [
+        "omc-planner",
+        "omc-executor",
+        "omc-verifier"
+      ],
+      "state_lifecycle": ".omcu/workflows/autopilot.json",
+      "parallel_team_behavior": "Single session multi-stage execution with stage gating",
+      "permission_requirements": [
+        "read",
+        "write",
+        "shell"
+      ],
+      "artifacts_verification": "Stage execution receipts and completion report",
+      "cancel_resume_recovery": "State-driven stage resume from last verified checkpoint",
+      "upstream_evidence": "Upstream autopilot workflow in oh-my-claudecode"
+    },
+    {
+      "id": "omc_ralph",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "skills/ralph/SKILL.md",
+      "hash_sha256": "95746d9352f26c3c0cce0ca4c1569c6c755b16292fcbc19c7ca0b531d14d47a9",
+      "license_class": "mit",
+      "surface_family": "workflow",
+      "source_name": "ralph",
+      "aliases": [
+        "ralph",
+        "loop"
+      ],
+      "invocation_grammar": "/ralph <objective>",
+      "agents_models_tools_hooks": [
+        "omc-architect",
+        "omc-executor",
+        "omc-verifier"
+      ],
+      "state_lifecycle": ".omcu/workflows/ralph.json",
+      "parallel_team_behavior": "Iterative single or parallel subagent verification loop",
+      "permission_requirements": [
+        "read",
+        "write",
+        "shell"
+      ],
+      "artifacts_verification": "Loop iteration journals and verifier assertions",
+      "cancel_resume_recovery": "Stateful resumption across context compaction",
+      "upstream_evidence": "Upstream ralph self-referential iteration loop"
+    },
+    {
+      "id": "omc_ultrawork",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "skills/ultrawork/SKILL.md",
+      "hash_sha256": "dc95123f9fe55d49c96bd60d66f473b4ed12ec52a1dea62f61b28e46bd8ddcf5",
+      "license_class": "mit",
+      "surface_family": "workflow",
+      "source_name": "ultrawork",
+      "aliases": [
+        "ultrawork",
+        "ulw"
+      ],
+      "invocation_grammar": "/ulw <tasks...>",
+      "agents_models_tools_hooks": [
+        "omc-executor",
+        "omc-verifier"
+      ],
+      "state_lifecycle": ".omcu/workflows/ulw.json",
+      "parallel_team_behavior": "Parallel fan-out across independent work items",
+      "permission_requirements": [
+        "read",
+        "write"
+      ],
+      "artifacts_verification": "Batch task manifest and per-worker results",
+      "cancel_resume_recovery": "Re-dispatch failed task items on worker crash",
+      "upstream_evidence": "Upstream ultrawork parallel execution"
+    },
+    {
+      "id": "omc_ecomode",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "skills/ecomode/SKILL.md",
+      "hash_sha256": "8c3104ab62b396e3078ce94d476034b2e7e27383b500db66052a11ee58d61fe9",
+      "license_class": "mit",
+      "surface_family": "skill",
+      "source_name": "ecomode",
+      "aliases": [
+        "ecomode",
+        "eco"
+      ],
+      "invocation_grammar": "/ecomode [on|off]",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": ".omcu/config.json:ecomode",
+      "parallel_team_behavior": "Applies to all active workers in session",
+      "permission_requirements": [],
+      "artifacts_verification": "Token savings telemetry",
+      "cancel_resume_recovery": "Config persisted in session metadata",
+      "upstream_evidence": "Upstream ecomode model routing"
+    },
+    {
+      "id": "omc_ultraqa",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "skills/ultraqa/SKILL.md",
+      "hash_sha256": "fcacdf3ce37896d2a46bade8e4fc266faf5268c32b9401af5019b1a9fad57e8d",
+      "license_class": "mit",
+      "surface_family": "workflow",
+      "source_name": "ultraqa",
+      "aliases": [
+        "ultraqa",
+        "qa-loop"
+      ],
+      "invocation_grammar": "/ultraqa <target>",
+      "agents_models_tools_hooks": [
+        "omc-qa-tester",
+        "omc-debugger",
+        "omc-executor"
+      ],
+      "state_lifecycle": ".omcu/workflows/ultraqa.json",
+      "parallel_team_behavior": "Adversarial tester vs debugger fix loop",
+      "permission_requirements": [
+        "read",
+        "write",
+        "shell"
+      ],
+      "artifacts_verification": "Dynamic test suite and verification matrix",
+      "cancel_resume_recovery": "Resume from failed test scenario index",
+      "upstream_evidence": "Upstream ultraqa adversarial QA workflow"
+    },
+    {
+      "id": "omc_team",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "skills/team/SKILL.md",
+      "hash_sha256": "6abcf61eafd3a535fd3581b2fb0c806b1389855f0c38a7925f61853d4352c827",
+      "license_class": "mit",
+      "surface_family": "team",
+      "source_name": "team",
+      "aliases": [
+        "team",
+        "swarm"
+      ],
+      "invocation_grammar": "/team <role-spec> <goal>",
+      "agents_models_tools_hooks": [
+        "omc-architect",
+        "omc-executor",
+        "omc-qa-tester"
+      ],
+      "state_lifecycle": ".omcu/team/state.json",
+      "parallel_team_behavior": "Multi-worker concurrent coordination with lease fencing",
+      "permission_requirements": [
+        "read",
+        "write",
+        "shell"
+      ],
+      "artifacts_verification": "Team manifest, worker mailboxes, task boards",
+      "cancel_resume_recovery": "Heartbeat monitoring and lease compensation re-claim",
+      "upstream_evidence": "Upstream team coordination protocol"
+    },
+    {
+      "id": "omc_cancel",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "skills/cancel/SKILL.md",
+      "hash_sha256": "6e81ee9a491df4c30faaf0dba5d1d4c3944426301fd9bc2cca52be349b53e868",
+      "license_class": "mit",
+      "surface_family": "workflow",
+      "source_name": "cancel",
+      "aliases": [
+        "cancel",
+        "abort"
+      ],
+      "invocation_grammar": "/cancel [run-id]",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": ".omcu/runs/active.json",
+      "parallel_team_behavior": "Broadcasts SIGTERM/cancel message to all worker tasks",
+      "permission_requirements": [
+        "shell"
+      ],
+      "artifacts_verification": "Cancellation audit record",
+      "cancel_resume_recovery": "Clean shutdown of active subprocesses and state rollback",
+      "upstream_evidence": "Upstream cancel command"
+    },
+    {
+      "id": "omc_ask",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "skills/ask/SKILL.md",
+      "hash_sha256": "8305ec853750d80ddc8b9e94ef76d2dcfa0e24208941a0947870e85274845fb6",
+      "license_class": "mit",
+      "surface_family": "skill",
+      "source_name": "ask",
+      "aliases": [
+        "ask",
+        "advisor"
+      ],
+      "invocation_grammar": "/ask <advisor> <query>",
+      "agents_models_tools_hooks": [
+        "omc-scientist"
+      ],
+      "state_lifecycle": ".omcu/artifacts/advisors.json",
+      "parallel_team_behavior": "External advisor query broker",
+      "permission_requirements": [
+        "shell"
+      ],
+      "artifacts_verification": "Captured markdown advisor responses",
+      "cancel_resume_recovery": "Idempotent cache of previous advisor answers",
+      "upstream_evidence": "Upstream ask advisor broker"
+    },
+    {
+      "id": "omc_note",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "skills/note/SKILL.md",
+      "hash_sha256": "ef77ef24038768ae9755dedf809bd54e213733edfea6136aba7839890d607bf4",
+      "license_class": "mit",
+      "surface_family": "artifact",
+      "source_name": "note",
+      "aliases": [
+        "note",
+        "scratchpad"
+      ],
+      "invocation_grammar": "/note <text>",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": ".omcu/notepad.md",
+      "parallel_team_behavior": "Shared notepad accessible by all session workers",
+      "permission_requirements": [
+        "read",
+        "write"
+      ],
+      "artifacts_verification": "Notepad markdown entries",
+      "cancel_resume_recovery": "Survives compaction and session resets",
+      "upstream_evidence": "Upstream note capture"
+    },
+    {
+      "id": "omc_hud",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "skills/hud/SKILL.md",
+      "hash_sha256": "757f488fddc43094e0951ab6b4becf68ff176967004cad69eae6ebab3afcccdc",
+      "license_class": "mit",
+      "surface_family": "skill",
+      "source_name": "hud",
+      "aliases": [
+        "hud",
+        "statusline"
+      ],
+      "invocation_grammar": "/hud [refresh]",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": ".omcu/hud.json",
+      "parallel_team_behavior": "Aggregates state across all active workers",
+      "permission_requirements": [],
+      "artifacts_verification": "Two-layer statusline rendering",
+      "cancel_resume_recovery": "Recomputed on each turn from runtime state root",
+      "upstream_evidence": "Upstream HUD statusline"
+    },
+    {
+      "id": "omc_deep_interview",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "skills/deep-interview/SKILL.md",
+      "hash_sha256": "0ef32e0b589ae7b06832be58b1ca8dbf9fb0b3c7a55f1c6c24505074ed62faa9",
+      "license_class": "mit",
+      "surface_family": "workflow",
+      "source_name": "deep-interview",
+      "aliases": [
+        "deep-interview",
+        "interview"
+      ],
+      "invocation_grammar": "/deep-interview <topic>",
+      "agents_models_tools_hooks": [
+        "omc-planner"
+      ],
+      "state_lifecycle": ".omcu/workflows/interview.json",
+      "parallel_team_behavior": "Interactive user-agent ambiguity clarification",
+      "permission_requirements": [
+        "read"
+      ],
+      "artifacts_verification": "Synthesized requirements brief with ambiguity score",
+      "cancel_resume_recovery": "Question state machine preserves partial answers",
+      "upstream_evidence": "Upstream Socratic deep interview"
+    },
+    {
+      "id": "omc_ralplan",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "skills/ralplan/SKILL.md",
+      "hash_sha256": "1d1eb680c72b742916e2947b640457d458f1e62f0a1b779cfb6b0e8220dfc18f",
+      "license_class": "mit",
+      "surface_family": "workflow",
+      "source_name": "ralplan",
+      "aliases": [
+        "ralplan",
+        "plan-consensus"
+      ],
+      "invocation_grammar": "/ralplan <prompt>",
+      "agents_models_tools_hooks": [
+        "omc-planner",
+        "omc-critic",
+        "omc-verifier"
+      ],
+      "state_lifecycle": ".omcu/workflows/ralplan.json",
+      "parallel_team_behavior": "Planner + critic consensus verification loop",
+      "permission_requirements": [
+        "read"
+      ],
+      "artifacts_verification": "Steelman implementation plan and review verdict",
+      "cancel_resume_recovery": "Plan versioning with review rounds tracking",
+      "upstream_evidence": "Upstream ralplan consensus planner"
+    },
+    {
+      "id": "omc_code_review",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "skills/code-review/SKILL.md",
+      "hash_sha256": "4fbb023c319be882e8de10a0118b1af0d6663adbef4b4debc6f5cfdbaa959e8f",
+      "license_class": "mit",
+      "surface_family": "skill",
+      "source_name": "code-review",
+      "aliases": [
+        "code-review",
+        "review"
+      ],
+      "invocation_grammar": "/code-review [diff-target]",
+      "agents_models_tools_hooks": [
+        "omc-critic",
+        "omc-verifier"
+      ],
+      "state_lifecycle": ".omcu/reviews/",
+      "parallel_team_behavior": "Independent read-only review lane",
+      "permission_requirements": [
+        "read"
+      ],
+      "artifacts_verification": "Structured markdown review with file:line citations",
+      "cancel_resume_recovery": "Cached git diff hash prevents redundant review",
+      "upstream_evidence": "Upstream code review skill"
+    },
+    {
+      "id": "omc_security_review",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "skills/security-review/SKILL.md",
+      "hash_sha256": "0ec69e7d751303b4ea96db38fb1833b7b68fc1e83268857a5b35e8ea4d14dd12",
+      "license_class": "mit",
+      "surface_family": "skill",
+      "source_name": "security-review",
+      "aliases": [
+        "security-review",
+        "sec-audit"
+      ],
+      "invocation_grammar": "/security-review [target]",
+      "agents_models_tools_hooks": [
+        "omc-critic"
+      ],
+      "state_lifecycle": ".omcu/security/",
+      "parallel_team_behavior": "Static analysis and secret scanning lane",
+      "permission_requirements": [
+        "read"
+      ],
+      "artifacts_verification": "Security vulnerability and secret scan reports",
+      "cancel_resume_recovery": "Rule-based check idempotency",
+      "upstream_evidence": "Upstream security review skill"
+    },
+    {
+      "id": "omc_ai_slop_cleaner",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "skills/ai-slop-cleaner/SKILL.md",
+      "hash_sha256": "be1b9814d1e066d6575fbcdccbf49b2ff5018023012b33e69e7b49d68dfca43b",
+      "license_class": "mit",
+      "surface_family": "skill",
+      "source_name": "ai-slop-cleaner",
+      "aliases": [
+        "ai-slop-cleaner",
+        "deslop"
+      ],
+      "invocation_grammar": "/ai-slop-cleaner <path>",
+      "agents_models_tools_hooks": [
+        "omc-executor"
+      ],
+      "state_lifecycle": ".omcu/deslop.json",
+      "parallel_team_behavior": "Refactoring pass over candidate files",
+      "permission_requirements": [
+        "read",
+        "write"
+      ],
+      "artifacts_verification": "Slop removal diff and summary",
+      "cancel_resume_recovery": "Revertible git working tree modifications",
+      "upstream_evidence": "Upstream anti-slop cleaning skill"
+    },
+    {
+      "id": "omc_best_practice_research",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "skills/best-practice-research/SKILL.md",
+      "hash_sha256": "ada168345dc2c67eb994f2db80a1dd38524fed611818dced773c735001e49846",
+      "license_class": "mit",
+      "surface_family": "skill",
+      "source_name": "best-practice-research",
+      "aliases": [
+        "best-practice-research",
+        "bpr"
+      ],
+      "invocation_grammar": "/best-practice-research <topic>",
+      "agents_models_tools_hooks": [
+        "omc-scientist"
+      ],
+      "state_lifecycle": ".omcu/research/",
+      "parallel_team_behavior": "Evidence gathering research subagent",
+      "permission_requirements": [
+        "read"
+      ],
+      "artifacts_verification": "Research brief citing official documentation",
+      "cancel_resume_recovery": "Cached upstream query results",
+      "upstream_evidence": "Upstream best practice research skill"
+    },
+    {
+      "id": "omc_autoresearch",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "skills/autoresearch/SKILL.md",
+      "hash_sha256": "c03eeb5afd4aa786bebcc7a83cb60c789d99fb1e4c1d13ee9afd4fa580ad192f",
+      "license_class": "mit",
+      "surface_family": "workflow",
+      "source_name": "autoresearch",
+      "aliases": [
+        "autoresearch"
+      ],
+      "invocation_grammar": "/autoresearch <domain>",
+      "agents_models_tools_hooks": [
+        "omc-scientist",
+        "omc-verifier"
+      ],
+      "state_lifecycle": ".omcu/workflows/autoresearch.json",
+      "parallel_team_behavior": "Hypothesis testing research loop with validator",
+      "permission_requirements": [
+        "read",
+        "write"
+      ],
+      "artifacts_verification": "Durable research logbook and findings",
+      "cancel_resume_recovery": "Iterative hypothesis checkpoints",
+      "upstream_evidence": "Upstream stateful autoresearch"
+    },
+    {
+      "id": "omc_pipeline",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "skills/pipeline/SKILL.md",
+      "hash_sha256": "0aa703979d88a0de23442680cdc73b69c1f19e34d429d96fb5d352af656d8657",
+      "license_class": "mit",
+      "surface_family": "workflow",
+      "source_name": "pipeline",
+      "aliases": [
+        "pipeline",
+        "pipe"
+      ],
+      "invocation_grammar": "/pipeline <config-file>",
+      "agents_models_tools_hooks": [
+        "omc-planner",
+        "omc-executor",
+        "omc-verifier"
+      ],
+      "state_lifecycle": ".omcu/workflows/pipeline.json",
+      "parallel_team_behavior": "Configurable multi-stage DAG orchestrator",
+      "permission_requirements": [
+        "read",
+        "write",
+        "shell"
+      ],
+      "artifacts_verification": "Stage execution trace and pipeline summary",
+      "cancel_resume_recovery": "Stage-level resumption on failure",
+      "upstream_evidence": "Upstream pipeline orchestrator"
+    },
+    {
+      "id": "omc_wiki",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "skills/wiki/SKILL.md",
+      "hash_sha256": "5d8e80f0114e1b21b95a45b3c3dc0fb4eddb56e3549ae89b9337684398a1ee1a",
+      "license_class": "mit",
+      "surface_family": "artifact",
+      "source_name": "wiki",
+      "aliases": [
+        "wiki"
+      ],
+      "invocation_grammar": "/wiki <query|write>",
+      "agents_models_tools_hooks": [
+        "omc-writer"
+      ],
+      "state_lifecycle": ".omcu/wiki/",
+      "parallel_team_behavior": "Repository knowledge base shared by all agents",
+      "permission_requirements": [
+        "read",
+        "write"
+      ],
+      "artifacts_verification": "Markdown wiki pages and index",
+      "cancel_resume_recovery": "Git-backed file storage",
+      "upstream_evidence": "Upstream project wiki skill"
+    },
+    {
+      "id": "omc_architect",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "agents/architect.md",
+      "hash_sha256": "4eb7500832a9f8203e51fa3c34a68e5c67460acf56dd32d82be5f296f62ba5b0",
+      "license_class": "mit",
+      "surface_family": "agent",
+      "source_name": "omc-architect",
+      "aliases": [
+        "architect"
+      ],
+      "invocation_grammar": "subagent:architect",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": "Stateless review agent",
+      "parallel_team_behavior": "Architecture gate in ralph and team loops",
+      "permission_requirements": [
+        "read"
+      ],
+      "artifacts_verification": "Architecture sign-off or block decision",
+      "cancel_resume_recovery": "N/A",
+      "upstream_evidence": "Upstream architect agent definition"
+    },
+    {
+      "id": "omc_critic",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "agents/critic.md",
+      "hash_sha256": "c77d4a141c664032313756b180e699c2d71622d2daef1c63b7b6065d53c8abb9",
+      "license_class": "mit",
+      "surface_family": "agent",
+      "source_name": "omc-critic",
+      "aliases": [
+        "critic"
+      ],
+      "invocation_grammar": "subagent:critic",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": "Stateless review agent",
+      "parallel_team_behavior": "Adversarial critic in ralplan and review passes",
+      "permission_requirements": [
+        "read"
+      ],
+      "artifacts_verification": "Critique and defect list",
+      "cancel_resume_recovery": "N/A",
+      "upstream_evidence": "Upstream critic agent definition"
+    },
+    {
+      "id": "omc_debugger",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "agents/debugger.md",
+      "hash_sha256": "8c3204c10d12c987dcd669be971ef8d13914ee4394697d05c1f74a23bf8efb95",
+      "license_class": "mit",
+      "surface_family": "agent",
+      "source_name": "omc-debugger",
+      "aliases": [
+        "debugger"
+      ],
+      "invocation_grammar": "subagent:debugger",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": "Session debugging state",
+      "parallel_team_behavior": "Specialized debugger worker",
+      "permission_requirements": [
+        "read",
+        "write",
+        "shell"
+      ],
+      "artifacts_verification": "Root-cause analysis and patch proposals",
+      "cancel_resume_recovery": "Preserves diagnostic hypotheses across iterations",
+      "upstream_evidence": "Upstream debugger agent definition"
+    },
+    {
+      "id": "omc_executor",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "agents/executor.md",
+      "hash_sha256": "4ad7d1403bec717847ceaeec236099cef80f8cfb9c1d432ada3c6d150a5c7604",
+      "license_class": "mit",
+      "surface_family": "agent",
+      "source_name": "omc-executor",
+      "aliases": [
+        "executor"
+      ],
+      "invocation_grammar": "subagent:executor",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": "File modification state",
+      "parallel_team_behavior": "Implementation worker in ulw and ralph",
+      "permission_requirements": [
+        "read",
+        "write",
+        "shell"
+      ],
+      "artifacts_verification": "Code changes and commit proposals",
+      "cancel_resume_recovery": "Working tree rollback on assertion failure",
+      "upstream_evidence": "Upstream executor agent definition"
+    },
+    {
+      "id": "omc_explore",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "agents/explore.md",
+      "hash_sha256": "5c052545cb267954949ee0051420570bb6b36a5987e05064426e1fc10dff5f7e",
+      "license_class": "mit",
+      "surface_family": "agent",
+      "source_name": "omc-explore",
+      "aliases": [
+        "explore"
+      ],
+      "invocation_grammar": "subagent:explore",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": "Stateless exploration",
+      "parallel_team_behavior": "Fast read-only reconnaissance",
+      "permission_requirements": [
+        "read"
+      ],
+      "artifacts_verification": "Codebase map and symbol location list",
+      "cancel_resume_recovery": "N/A",
+      "upstream_evidence": "Upstream explore agent definition"
+    },
+    {
+      "id": "omc_planner",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "agents/planner.md",
+      "hash_sha256": "915f29b0c67534388e0a45ad6f9e93d0167706e7e149db777c007255f299b614",
+      "license_class": "mit",
+      "surface_family": "agent",
+      "source_name": "omc-planner",
+      "aliases": [
+        "planner"
+      ],
+      "invocation_grammar": "subagent:planner",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": "Planning state",
+      "parallel_team_behavior": "Decomposition and dependency analysis",
+      "permission_requirements": [
+        "read"
+      ],
+      "artifacts_verification": "Task breakdown and execution DAG",
+      "cancel_resume_recovery": "Preserves task dependency graph across sessions",
+      "upstream_evidence": "Upstream planner agent definition"
+    },
+    {
+      "id": "omc_qa_tester",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "agents/qa-tester.md",
+      "hash_sha256": "88e9f536c66f5a56188cff78168296843abb7acec35dc9fc12a8cc7fcbddefc3",
+      "license_class": "mit",
+      "surface_family": "agent",
+      "source_name": "omc-qa-tester",
+      "aliases": [
+        "qa-tester"
+      ],
+      "invocation_grammar": "subagent:qa-tester",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": "Test execution state",
+      "parallel_team_behavior": "Test generation and test execution lane",
+      "permission_requirements": [
+        "read",
+        "write",
+        "shell"
+      ],
+      "artifacts_verification": "Automated test suites and failure logs",
+      "cancel_resume_recovery": "Re-runs failing test scenarios on patch",
+      "upstream_evidence": "Upstream QA tester agent definition"
+    },
+    {
+      "id": "omc_scientist",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "agents/scientist.md",
+      "hash_sha256": "04f81f0c460f34f0486575bf3bb646370b48c9bf414bf6bbbd644f09e5dc3fd3",
+      "license_class": "mit",
+      "surface_family": "agent",
+      "source_name": "omc-scientist",
+      "aliases": [
+        "scientist"
+      ],
+      "invocation_grammar": "subagent:scientist",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": "Analysis state",
+      "parallel_team_behavior": "Evidence-based experimenter",
+      "permission_requirements": [
+        "read"
+      ],
+      "artifacts_verification": "Empirical benchmark data and analysis briefs",
+      "cancel_resume_recovery": "N/A",
+      "upstream_evidence": "Upstream scientist agent definition"
+    },
+    {
+      "id": "omc_verifier",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "agents/verifier.md",
+      "hash_sha256": "152e92903b0ad4bf7fd3238e0e9652bebb2e5a679ca3e40a40be92efd685c030",
+      "license_class": "mit",
+      "surface_family": "agent",
+      "source_name": "omc-verifier",
+      "aliases": [
+        "verifier"
+      ],
+      "invocation_grammar": "subagent:verifier",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": "Verification state",
+      "parallel_team_behavior": "Independent verification gate",
+      "permission_requirements": [
+        "read",
+        "shell"
+      ],
+      "artifacts_verification": "Verification evidence report (build, test, smoke)",
+      "cancel_resume_recovery": "Re-runs checks against fresh commit head",
+      "upstream_evidence": "Upstream verifier agent definition"
+    },
+    {
+      "id": "omc_writer",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "agents/writer.md",
+      "hash_sha256": "26dc76147b979606f6c2cefc1e052209a8d7a957e724a6905b2b479c5c2fa232",
+      "license_class": "mit",
+      "surface_family": "agent",
+      "source_name": "omc-writer",
+      "aliases": [
+        "writer"
+      ],
+      "invocation_grammar": "subagent:writer",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": "Documentation state",
+      "parallel_team_behavior": "Technical writer for guides and specs",
+      "permission_requirements": [
+        "read",
+        "write"
+      ],
+      "artifacts_verification": "Markdown guides, README updates, API docs",
+      "cancel_resume_recovery": "N/A",
+      "upstream_evidence": "Upstream writer agent definition"
+    },
+    {
+      "id": "omc_hooks",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "hooks/lifecycle.json",
+      "hash_sha256": "f8dc158cb193a0081cfd4d1ecbc21ce0380e0a4a186c41efc849c95dfe864587",
+      "license_class": "mit",
+      "surface_family": "hook",
+      "source_name": "omc-hooks",
+      "aliases": [
+        "lifecycle-hooks"
+      ],
+      "invocation_grammar": "hook:session-start|pre-prompt|tool-call|stop",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": ".omcu/hooks/state.json",
+      "parallel_team_behavior": "Fires synchronously before/after agent turns",
+      "permission_requirements": [
+        "read",
+        "write"
+      ],
+      "artifacts_verification": "Hook execution audit logs",
+      "cancel_resume_recovery": "Fails closed if critical hook errors",
+      "upstream_evidence": "Upstream hook lifecycle integration"
+    },
+    {
+      "id": "omc_tracker",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "tools/tracker.json",
+      "hash_sha256": "c836da464283f6996f3729f0d2f651e7c7864ea94792f58675c709cae3908726",
+      "license_class": "mit",
+      "surface_family": "tool",
+      "source_name": "omc-tracker",
+      "aliases": [
+        "tracker"
+      ],
+      "invocation_grammar": "tool:tracker_record",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": ".omcu/tracker/events.jsonl",
+      "parallel_team_behavior": "Central timeline logger for all workers",
+      "permission_requirements": [
+        "write"
+      ],
+      "artifacts_verification": "Structured timeline logs and event graphs",
+      "cancel_resume_recovery": "Append-only event log resilience",
+      "upstream_evidence": "Upstream tracker tool"
+    },
+    {
+      "id": "omc_permissions",
+      "source_project": "Yeachan-Heo/oh-my-claudecode",
+      "commit": "41a4c0f77144c5beb5f5f000a89cff379c680606",
+      "path": "config/permissions.json",
+      "hash_sha256": "f5b4075df385cc37bc75b8c21771461e8b2df10c173ac1cb0a994e158dd27ebc",
+      "license_class": "mit",
+      "surface_family": "permissions",
+      "source_name": "omc-permissions",
+      "aliases": [
+        "permissions"
+      ],
+      "invocation_grammar": "permission:grant|deny|prompt",
+      "agents_models_tools_hooks": [],
+      "state_lifecycle": ".omcu/permissions.json",
+      "parallel_team_behavior": "Authoritative permission policies per worker role",
+      "permission_requirements": [],
+      "artifacts_verification": "Audit record of approved/rejected operations",
+      "cancel_resume_recovery": "Static security configuration",
+      "upstream_evidence": "Upstream permission policy system"
+    }
+  ]
+}

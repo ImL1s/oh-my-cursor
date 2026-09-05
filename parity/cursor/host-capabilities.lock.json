@@ -1,0 +1,480 @@
+{
+  "schema_version": 2,
+  "host": "cursor-agent",
+  "host_version": "2026.07.23-e383d2b",
+  "observed_at": "2026-07-24T00:00:00.000Z",
+  "mechanisms": [
+    {
+      "mechanism_id": "cursor-sdk-local",
+      "surface": "sdk",
+      "name": "Cursor Local SDK Agent Execution",
+      "version_or_commit": "@cursor/sdk@1.0.31",
+      "source_evidence": "@cursor/sdk npm package: Agent.prompt, Agent.create, Agent.send",
+      "requirements": {
+        "local_or_cloud": "local",
+        "platform": [
+          "darwin",
+          "linux",
+          "win32"
+        ]
+      },
+      "contract": {
+        "input": "Prompt string, optional tool definitions, system instructions, and configuration options",
+        "output": "Streamed message chunks, tool calls, finished status, and final response text",
+        "lifecycle": "Agent instance lifecycle: created -> active prompt -> tool execution -> completed -> idle"
+      },
+      "persistence_and_identity": "In-process or SQLite session storage identified by unique string session ID",
+      "permissions_and_tools": "Full access to local custom tools, workspace files, and local shell commands subject to permissions",
+      "known_limitations": [
+        "Requires local Node.js runtime",
+        "Local context bound by machine RAM and token budget"
+      ],
+      "status": "live"
+    },
+    {
+      "mechanism_id": "cursor-sdk-cloud",
+      "surface": "cloud",
+      "name": "Cursor Cloud Agent Dispatch",
+      "version_or_commit": "@cursor/sdk@1.0.31",
+      "source_evidence": "@cursor/sdk npm package: CloudAgent.create, CloudAgent.status",
+      "requirements": {
+        "local_or_cloud": "cloud",
+        "platform": [
+          "darwin",
+          "linux",
+          "win32"
+        ],
+        "account_tier": "pro_or_enterprise"
+      },
+      "contract": {
+        "input": "Repository URI, commit hash, goal description, and environment secrets",
+        "output": "Remote execution run ID, streamed telemetry logs, and final git branch/PR URI",
+        "lifecycle": "Queued -> Provisioning remote VM -> Cloning -> Executing -> Generating PR -> Finished"
+      },
+      "persistence_and_identity": "Cursor Cloud persistent run storage with cryptographic run ID",
+      "permissions_and_tools": "Cloud sandbox isolated containers with internet access and configured secrets",
+      "known_limitations": [
+        "Network roundtrip latency",
+        "Requires active Cursor cloud subscription"
+      ],
+      "status": "live"
+    },
+    {
+      "mechanism_id": "cursor-sdk-resume",
+      "surface": "sdk",
+      "name": "Cursor Conversation Resume & Persistence",
+      "version_or_commit": "@cursor/sdk@1.0.31",
+      "source_evidence": "@cursor/sdk npm package: Agent.resume, Agent.list, SDK store",
+      "requirements": {
+        "local_or_cloud": "local",
+        "platform": [
+          "darwin",
+          "linux",
+          "win32"
+        ]
+      },
+      "contract": {
+        "input": "Session ID string and optional resumed prompt",
+        "output": "Restored agent state with complete prior message history and active context",
+        "lifecycle": "Lookup stored session -> Rehydrate message state -> Re-attach custom tools -> Ready"
+      },
+      "persistence_and_identity": "Persisted to disk SQLite / JSON conversation store keyed by session UUID",
+      "permissions_and_tools": "Inherits original session tool definitions and authorization bounds",
+      "known_limitations": [
+        "State rehydration fails if backing database or files are corrupted or deleted"
+      ],
+      "status": "live"
+    },
+    {
+      "mechanism_id": "cursor-sdk-subagent",
+      "surface": "sdk",
+      "name": "Cursor Local Subagent Hierarchy",
+      "version_or_commit": "@cursor/sdk@1.0.31",
+      "source_evidence": "@cursor/sdk npm package: Agent.createChild, DAG task runner pattern",
+      "requirements": {
+        "local_or_cloud": "local",
+        "platform": [
+          "darwin",
+          "linux",
+          "win32"
+        ]
+      },
+      "contract": {
+        "input": "Child role name, specialized system prompt, scoped tool whitelist, and parent context slice",
+        "output": "Structured child task result, telemetry metrics, and parent notification message",
+        "lifecycle": "Parent spawns child -> Child runs independently -> Emits result -> Parent collects -> Teardown"
+      },
+      "persistence_and_identity": "Child session linked hierarchically to parent conversation ID",
+      "permissions_and_tools": "Strict subset of parent permissions; cannot elevate privileges",
+      "known_limitations": [
+        "Deep subagent recursion may exhaust process memory or file descriptors"
+      ],
+      "status": "live"
+    },
+    {
+      "mechanism_id": "cursor-sdk-custom-tools",
+      "surface": "sdk",
+      "name": "Cursor In-Process TypeScript Custom Tools",
+      "version_or_commit": "@cursor/sdk@1.0.31",
+      "source_evidence": "@cursor/sdk npm package: local.customTools registration API",
+      "requirements": {
+        "local_or_cloud": "local",
+        "platform": [
+          "darwin",
+          "linux",
+          "win32"
+        ]
+      },
+      "contract": {
+        "input": "JSON schema parameters matching registered tool signature",
+        "output": "Arbitrary JSON-serializable output object or string returned to model",
+        "lifecycle": "Registered at startup -> Invoked during agent reasoning loop -> Synchronous/async execution -> Return"
+      },
+      "persistence_and_identity": "Stateless tool handlers bound to host process lifecycle",
+      "permissions_and_tools": "Can interact with local filesystem, network, and system APIs directly in Node.js",
+      "known_limitations": [
+        "Tool execution blocks agent loop if asynchronous operations fail to timeout"
+      ],
+      "status": "live"
+    },
+    {
+      "mechanism_id": "cursor-plugin-skill",
+      "surface": "plugin",
+      "name": "Cursor Plugin Skill Format",
+      "version_or_commit": "cursor/plugins@15ef02d9",
+      "source_evidence": "cursor/plugins repository: skills/<skill>/SKILL.md standard structure",
+      "requirements": {
+        "local_or_cloud": "both",
+        "platform": [
+          "darwin",
+          "linux",
+          "win32"
+        ]
+      },
+      "contract": {
+        "input": "Slash command invocation (/command <args>) from user or parent agent",
+        "output": "Structured Markdown instructions, prompt expansion, and recommended tool calls",
+        "lifecycle": "Discovered from skills/ directory -> Matched on slash invocation -> Injected into prompt"
+      },
+      "persistence_and_identity": "File-based markdown skill definitions discovered at plugin registration time",
+      "permissions_and_tools": "Inherits caller environment tool and permission boundaries",
+      "known_limitations": [
+        "Static instruction format; dynamic logic requires host script or tool execution"
+      ],
+      "status": "live"
+    },
+    {
+      "mechanism_id": "cursor-plugin-agent",
+      "surface": "plugin",
+      "name": "Cursor Plugin Agent Persona Format",
+      "version_or_commit": "cursor/plugins@15ef02d9",
+      "source_evidence": "cursor/plugins repository: agents/<agent>.md persona and tool scoping definitions",
+      "requirements": {
+        "local_or_cloud": "both",
+        "platform": [
+          "darwin",
+          "linux",
+          "win32"
+        ]
+      },
+      "contract": {
+        "input": "Target task description and agent invocation tag",
+        "output": "Specialized agent execution under defined persona and restricted toolset",
+        "lifecycle": "Loaded from agents/ -> Spawned as dedicated subagent or primary personality -> Completed"
+      },
+      "persistence_and_identity": "File-based markdown persona definitions with frontmatter role and capabilities",
+      "permissions_and_tools": "Tools explicitly scoped in frontmatter tools whitelist",
+      "known_limitations": [
+        "Model selection depends on host support and configured API keys"
+      ],
+      "status": "live"
+    },
+    {
+      "mechanism_id": "cursor-plugin-rule",
+      "surface": "plugin",
+      "name": "Cursor Persistent Context Rules (AGENTS.md & .cursor/rules)",
+      "version_or_commit": "cursor/plugins@15ef02d9",
+      "source_evidence": ".cursor/rules/*.mdc and repository AGENTS.md conventions",
+      "requirements": {
+        "local_or_cloud": "both",
+        "platform": [
+          "darwin",
+          "linux",
+          "win32"
+        ]
+      },
+      "contract": {
+        "input": "Workspace file pattern match or root directory context loading",
+        "output": "Persistent prompt constraints injected into every turn of every agent",
+        "lifecycle": "Evaluated at each user turn based on glob pattern matches or global root inclusion"
+      },
+      "persistence_and_identity": "Committed repository files under .cursor/rules/ or root AGENTS.md",
+      "permissions_and_tools": "Context injection only; no direct execution privileges",
+      "known_limitations": [
+        "Consumes token context window on every turn"
+      ],
+      "status": "live"
+    },
+    {
+      "mechanism_id": "cursor-plugin-hook",
+      "surface": "hook",
+      "name": "Cursor Lifecycle Hooks",
+      "version_or_commit": "cursor/plugins@15ef02d9",
+      "source_evidence": "cursor/cookbook: cookbook hooks examples and hooks/hooks.json definitions",
+      "requirements": {
+        "local_or_cloud": "local",
+        "platform": [
+          "darwin",
+          "linux",
+          "win32"
+        ]
+      },
+      "contract": {
+        "input": "Event payload (session start, pre-tool, post-tool, stop) serialized as JSON",
+        "output": "Exit code 0 to permit action, non-zero to block, or modified tool arguments",
+        "lifecycle": "Event fires -> Hook script spawned -> Stdin JSON passed -> Stdout parsed -> Proceed or abort"
+      },
+      "persistence_and_identity": "Configured in hooks/hooks.json or plugin manifest",
+      "permissions_and_tools": "Executes as external script with host user privileges",
+      "known_limitations": [
+        "Hook timeouts must be strictly enforced to avoid hanging the interactive UI"
+      ],
+      "status": "live"
+    },
+    {
+      "mechanism_id": "cursor-mcp",
+      "surface": "plugin",
+      "name": "Cursor Model Context Protocol (MCP) Integration",
+      "version_or_commit": "MCP spec 2024-11-05 / Cursor host",
+      "source_evidence": ".mcp.json repository configuration and cursor-sdk plugin MCP integration",
+      "requirements": {
+        "local_or_cloud": "both",
+        "platform": [
+          "darwin",
+          "linux",
+          "win32"
+        ]
+      },
+      "contract": {
+        "input": "JSON-RPC 2.0 requests over stdio or SSE transport",
+        "output": "Structured tool schema definitions, tool execution responses, and resource payloads",
+        "lifecycle": "Host starts MCP server process -> Handshake -> Tool discovery -> Model calls -> Server responds"
+      },
+      "persistence_and_identity": "Configured in .mcp.json or user-level ~/.cursor/mcp.json",
+      "permissions_and_tools": "Server controls exposed tools; host user approves initial server activation",
+      "known_limitations": [
+        "Stdio transport requires local binary installed; SSE requires reachable server"
+      ],
+      "status": "live"
+    },
+    {
+      "mechanism_id": "cursor-permissions-auto-review",
+      "surface": "permissions",
+      "name": "Cursor Permissions & Local Auto-Review Engine",
+      "version_or_commit": "@cursor/sdk@1.0.31",
+      "source_evidence": "@cursor/sdk npm package: local.autoReview API and permissions.json",
+      "requirements": {
+        "local_or_cloud": "local",
+        "platform": [
+          "darwin",
+          "linux",
+          "win32"
+        ]
+      },
+      "contract": {
+        "input": "Proposed tool invocation, command line string, target file path, and risk level",
+        "output": "Approval decision: allow, deny, or escalate to interactive human confirmation modal",
+        "lifecycle": "Tool call intercepted -> autoReview evaluated against rules -> Policy enforced"
+      },
+      "persistence_and_identity": "Configured via policy files or programmable handler function",
+      "permissions_and_tools": "Authoritative gatekeeper preventing unauthorized shell or filesystem writes",
+      "known_limitations": [
+        "Cannot prevent side effects of pre-approved commands"
+      ],
+      "status": "live"
+    },
+    {
+      "mechanism_id": "cursor-cli",
+      "surface": "cli",
+      "name": "Cursor Host CLI Interface",
+      "version_or_commit": "cursor-agent 2026.07.23-e383d2b",
+      "source_evidence": "cursor / cursor-agent binary CLI help and omcu_capabilities.lock.json",
+      "requirements": {
+        "local_or_cloud": "local",
+        "platform": [
+          "darwin",
+          "linux",
+          "win32"
+        ]
+      },
+      "contract": {
+        "input": "CLI arguments: --mode plan|ask, --print, --output-format json|stream-json, create-chat, ls, --resume",
+        "output": "Standard output JSON streams, session metadata, or interactive terminal session",
+        "lifecycle": "Invoked by user or script -> Runs agent loop -> Flushes output -> Exits with code"
+      },
+      "persistence_and_identity": "Interacts with host local session database",
+      "permissions_and_tools": "Runs with user terminal privileges and environment variables",
+      "known_limitations": [
+        "Interactive terminal mode cannot be easily scripted without headless flags"
+      ],
+      "status": "live"
+    },
+    {
+      "mechanism_id": "cursor-agent-window",
+      "surface": "sdk",
+      "name": "Cursor Multi-Agent Window & Tabs",
+      "version_or_commit": "Cursor 0.45+",
+      "source_evidence": "Cursor IDE native Multi-Chat and Agent Window architecture",
+      "requirements": {
+        "local_or_cloud": "local",
+        "platform": [
+          "darwin",
+          "linux",
+          "win32"
+        ]
+      },
+      "contract": {
+        "input": "User message or agent invocation in dedicated chat tab",
+        "output": "Rendered conversational stream with integrated diff viewers and file link badges",
+        "lifecycle": "Tab opened -> Agent assigned -> Concurrent turns executed -> Tab closed/archived"
+      },
+      "persistence_and_identity": "GUI state backed by IDE workspace storage",
+      "permissions_and_tools": "Access to IDE editor buffers, active selections, and terminal panes",
+      "known_limitations": [
+        "GUI surface requires running Cursor desktop application"
+      ],
+      "status": "live"
+    },
+    {
+      "mechanism_id": "cursor-worktree",
+      "surface": "worktree",
+      "name": "Cursor Git Worktree Workspace Isolation",
+      "version_or_commit": "git 2.30+ / Cursor host integration",
+      "source_evidence": "cursor-team-kit and cookbook worktree execution patterns",
+      "requirements": {
+        "local_or_cloud": "local",
+        "platform": [
+          "darwin",
+          "linux",
+          "win32"
+        ]
+      },
+      "contract": {
+        "input": "Branch name and target checkout directory",
+        "output": "Isolated filesystem working tree sharing underlying .git repository objects",
+        "lifecycle": "git worktree add -> Agent operates in worktree -> Branch committed -> Merged or pruned"
+      },
+      "persistence_and_identity": "Git repository worktree metadata under .git/worktrees/",
+      "permissions_and_tools": "Full filesystem access within the worktree boundary",
+      "known_limitations": [
+        "Requires clean git repository state; simultaneous writes to same file handled via git branches"
+      ],
+      "status": "live"
+    },
+    {
+      "mechanism_id": "cursor-automation",
+      "surface": "automation",
+      "name": "Cursor Background Automations",
+      "version_or_commit": "Cursor Cloud Automations v1",
+      "source_evidence": "Cursor docs: background automations, scheduled runs, and event triggers",
+      "requirements": {
+        "local_or_cloud": "cloud",
+        "platform": [
+          "darwin",
+          "linux",
+          "win32"
+        ],
+        "account_tier": "enterprise"
+      },
+      "contract": {
+        "input": "Cron trigger or webhook event + workflow automation specification",
+        "output": "Autonomous headless agent execution run and pull request / notification output",
+        "lifecycle": "Scheduled event triggers -> Cloud runner spins up -> Executes task -> Emits report"
+      },
+      "persistence_and_identity": "Cursor Cloud automation dashboard and run histories",
+      "permissions_and_tools": "Scoped repository token permissions and cloud sandbox resources",
+      "known_limitations": [
+        "Requires enterprise cloud configuration"
+      ],
+      "status": "live"
+    },
+    {
+      "mechanism_id": "cursor-canvas",
+      "surface": "canvas",
+      "name": "Cursor Canvas & Artifact Interface",
+      "version_or_commit": "Cursor Canvas 2026.1",
+      "source_evidence": "Cursor IDE Canvas interactive preview and artifact visualization panels",
+      "requirements": {
+        "local_or_cloud": "both",
+        "platform": [
+          "darwin",
+          "linux",
+          "win32"
+        ]
+      },
+      "contract": {
+        "input": "Markdown, HTML, SVG, or JSON artifact payload",
+        "output": "Interactive side-by-side rendered visual canvas with live feedback controls",
+        "lifecycle": "Agent writes artifact -> Canvas panel renders -> User reviews / interacts -> Agent updates"
+      },
+      "persistence_and_identity": "Stored in workspace scratch directory or embedded in conversation transcript",
+      "permissions_and_tools": "Read-only display for user interaction; can dispatch actions to agent",
+      "known_limitations": [
+        "Complex JS execution in canvas requires trusted sandbox mode"
+      ],
+      "status": "live"
+    },
+    {
+      "mechanism_id": "cursor-router",
+      "surface": "router",
+      "name": "Cursor Adaptive Model Router",
+      "version_or_commit": "Cursor Router v2",
+      "source_evidence": "Cursor model selection settings: auto/fast/smart/reasoning dynamic routing",
+      "requirements": {
+        "local_or_cloud": "both",
+        "platform": [
+          "darwin",
+          "linux",
+          "win32"
+        ]
+      },
+      "contract": {
+        "input": "Prompt complexity, active task type (code edit vs reasoning vs chat), and latency target",
+        "output": "Optimally routed LLM model endpoint invocation (Sonnet, Opus, GPT-5, Flash, etc.)",
+        "lifecycle": "Prompt classified at gateway -> Route selected -> Model invoked -> Tokens streamed"
+      },
+      "persistence_and_identity": "Stateless model routing proxy managed by Cursor infrastructure",
+      "permissions_and_tools": "Model capabilities aligned with selected backend",
+      "known_limitations": [
+        "Automatic routing decisions may vary based on model provider availability"
+      ],
+      "status": "live"
+    },
+    {
+      "mechanism_id": "cursor-plugin-command",
+      "surface": "plugin",
+      "name": "Cursor Plugin Command Format",
+      "version_or_commit": "cursor/plugins@15ef02d9",
+      "source_evidence": "cursor/plugins repository: commands/*.md standard command declarations",
+      "requirements": {
+        "local_or_cloud": "both",
+        "platform": [
+          "darwin",
+          "linux",
+          "win32"
+        ]
+      },
+      "contract": {
+        "input": "User slash command (/command-name) invocation in chat prompt",
+        "output": "Expanded prompt instructions, workflow triggers, and command context",
+        "lifecycle": "Loaded from commands/ -> Matched on slash input -> Prompt expanded -> Executed"
+      },
+      "persistence_and_identity": "Static markdown command definitions committed to commands/ directory",
+      "permissions_and_tools": "Inherits caller environment tool and permission boundaries",
+      "known_limitations": [
+        "Static markdown template without dynamic interactive input prompting"
+      ],
+      "status": "live"
+    }
+  ]
+}

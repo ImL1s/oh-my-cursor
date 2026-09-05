@@ -1,0 +1,26 @@
+name: cursor-drift
+on:
+  schedule:
+    - cron: '0 5 * * 1' # Every Monday at 05:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-cursor-drift:
+    name: Check Cursor SDK & Reference Plugins Drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Verify existing parity matrix
+        run: npm run parity
+      - name: Check Cursor SDK and reference drift against pinned locks
+        run: node scripts/check-cursor-drift.mjs
+

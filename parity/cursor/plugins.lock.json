@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "repository": "cursor/plugins",
+  "commit": "15ef02d9719259476fbd13de1b2db35d79f04797",
+  "observed_at": "2026-07-24T00:00:00.000Z",
+  "reference_plugins": [
+    {
+      "id": "cursor-sdk",
+      "path": "plugins/cursor-sdk",
+      "description": "Cursor SDK reference plugin demonstrating custom tools, hooks, and local subagents",
+      "components": [
+        {
+          "type": "skill",
+          "name": "sdk-driver",
+          "path": "plugins/cursor-sdk/skills/sdk-driver/SKILL.md"
+        },
+        {
+          "type": "hook",
+          "name": "lifecycle",
+          "path": "plugins/cursor-sdk/hooks/hooks.json"
+        },
+        {
+          "type": "mcp",
+          "name": "sdk-mcp",
+          "path": "plugins/cursor-sdk/.mcp.json"
+        }
+      ]
+    },
+    {
+      "id": "orchestrate",
+      "path": "plugins/orchestrate",
+      "description": "Multi-agent orchestration reference plugin using cloud agents and worktrees",
+      "components": [
+        {
+          "type": "agent",
+          "name": "lead-orchestrator",
+          "path": "plugins/orchestrate/agents/lead.md"
+        },
+        {
+          "type": "agent",
+          "name": "sub-worker",
+          "path": "plugins/orchestrate/agents/worker.md"
+        },
+        {
+          "type": "skill",
+          "name": "fan-out",
+          "path": "plugins/orchestrate/skills/fan-out/SKILL.md"
+        }
+      ]
+    },
+    {
+      "id": "ralph-loop",
+      "path": "plugins/ralph-loop",
+      "description": "Official Ralph loop reference pattern for iterative self-verifying implementation",
+      "components": [
+        {
+          "type": "skill",
+          "name": "ralph-loop",
+          "path": "plugins/ralph-loop/skills/ralph/SKILL.md"
+        },
+        {
+          "type": "hook",
+          "name": "post-turn-verifier",
+          "path": "plugins/ralph-loop/hooks/verifier.json"
+        },
+        {
+          "type": "rule",
+          "name": "loop-invariants",
+          "path": "plugins/ralph-loop/.cursor/rules/loop.mdc"
+        }
+      ]
+    },
+    {
+      "id": "cursor-team-kit",
+      "path": "plugins/cursor-team-kit",
+      "description": "Team coordination kit for multi-agent roles and mailbox communication",
+      "components": [
+        {
+          "type": "agent",
+          "name": "architect",
+          "path": "plugins/cursor-team-kit/agents/architect.md"
+        },
+        {
+          "type": "agent",
+          "name": "critic",
+          "path": "plugins/cursor-team-kit/agents/critic.md"
+        },
+        {
+          "type": "agent",
+          "name": "verifier",
+          "path": "plugins/cursor-team-kit/agents/verifier.md"
+        },
+        {
+          "type": "skill",
+          "name": "team-board",
+          "path": "plugins/cursor-team-kit/skills/team/SKILL.md"
+        }
+      ]
+    }
+  ]
+}

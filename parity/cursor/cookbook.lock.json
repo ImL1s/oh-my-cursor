@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "repository": "cursor/cookbook",
+  "commit": "1907605052e378a315efd2565beee198c3922c87",
+  "observed_at": "2026-07-24T00:00:00.000Z",
+  "reference_patterns": [
+    {
+      "id": "dag-task-runner",
+      "path": "patterns/dag-task-runner",
+      "description": "Directed Acyclic Graph execution pattern for concurrent task runner with dependency resolution",
+      "pattern_type": "dag_task_runner",
+      "source_files": [
+        "patterns/dag-task-runner/runner.ts",
+        "patterns/dag-task-runner/task.ts"
+      ]
+    },
+    {
+      "id": "coding-agent-cli",
+      "path": "patterns/coding-agent-cli",
+      "description": "Headless CLI harness for Cursor Agent execution and automated code reviews",
+      "pattern_type": "coding_agent_cli",
+      "source_files": [
+        "patterns/coding-agent-cli/main.ts",
+        "patterns/coding-agent-cli/config.ts"
+      ]
+    },
+    {
+      "id": "hooks-examples",
+      "path": "patterns/hooks",
+      "description": "Lifecycle hooks examples for pre-tool policy gates and session state compaction",
+      "pattern_type": "hooks",
+      "source_files": [
+        "patterns/hooks/pre-tool.sh",
+        "patterns/hooks/post-tool.sh",
+        "patterns/hooks/hooks.json"
+      ]
+    },
+    {
+      "id": "custom-tools-examples",
+      "path": "patterns/custom-tools",
+      "description": "In-process TypeScript custom tools bindings and validation schemas",
+      "pattern_type": "custom_tools",
+      "source_files": [
+        "patterns/custom-tools/git-tools.ts",
+        "patterns/custom-tools/test-tools.ts"
+      ]
+    }
+  ]
+}
