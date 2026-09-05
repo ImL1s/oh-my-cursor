@@ -1,7 +1,18 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { quarantineInvalidCliOwnerRecord } from '../state/authority.js';
-import { installOrUpdate, runSetupDoctor, uninstall, type InstallResult } from '../setup/index.js';
+import {
+  inspectInstallStatus,
+  installOrUpdate,
+  listInstallations,
+  pruneInstallations,
+  repairInstallation,
+  rollbackInstallation,
+  runSetupDoctor,
+  uninstall,
+  verifyInstallations,
+  type InstallResult,
+} from '../setup/index.js';
 import {
   inspectMcpStatus,
   installMcpServer,
@@ -14,16 +25,99 @@ export async function handleLifecycle(context: CliContext): Promise<number | nul
   const { command, action } = context.parsed;
   const stateRoot = optionValue<string>(context, '--state-root') ?? externalStateRoot(context.homeDir);
   if (command === 'setup' || command === 'update') {
+    const source = optionValue<string>(context, '--source');
+    const archive = optionValue<string>(context, '--archive');
+    const checksums = optionValue<string>(context, '--checksums');
+    const tag = optionValue<string>(context, '--tag');
+    const latest = flagValue(context, '--latest');
+    const dryRun = flagValue(context, '--dry-run');
+
+    if (command === 'update') {
+      if (!source && !archive && !tag && !latest) {
+        throw new Error('E_UPDATE_SOURCE_REQUIRED: specify an explicit update source (--source <dir>, --archive <tar> --checksums <file>, --tag <tag>, or --latest)');
+      }
+    }
+
     const result = await installOrUpdate({
-      sourceRoot: optionValue<string>(context, '--source') ?? context.packageRoot,
+      ...(source ? { sourceRoot: source } : (command === 'setup' && !archive && !tag && !latest ? { sourceRoot: context.packageRoot } : {})),
       action: command === 'update' ? 'update' : 'install',
+      ...(archive ? { sourceArchive: archive } : {}),
+      ...(checksums ? { checksumsFile: checksums } : {}),
+      ...(tag ? { releaseTag: tag } : {}),
+      ...(latest ? { releaseLatest: true } : {}),
       homeDir: context.homeDir,
       stateRoot,
       projectRoot: context.cwd,
       initializeProjectState: flagValue(context, '--init-project-state'),
+      dryRun,
     });
     printJson(context.io, result);
     return installExitCode(result);
+  }
+  if (command === 'rollback') {
+    const receipt = optionValue<string>(context, '--receipt');
+    const dryRun = flagValue(context, '--dry-run');
+    const result = await rollbackInstallation({
+      receiptPathOrId: receipt ?? undefined,
+      homeDir: context.homeDir,
+      stateRoot,
+      projectRoot: context.cwd,
+      dryRun,
+    });
+    printJson(context.io, result);
+    return 0;
+  }
+  if (command === 'install') {
+    if (action === 'status') {
+      const result = await inspectInstallStatus({
+        homeDir: context.homeDir,
+        stateRoot,
+        projectRoot: context.cwd,
+      });
+      printJson(context.io, result);
+      return result.healthy ? 0 : 1;
+    }
+    if (action === 'list') {
+      const result = await listInstallations({
+        homeDir: context.homeDir,
+        stateRoot,
+        projectRoot: context.cwd,
+      });
+      printJson(context.io, result);
+      return 0;
+    }
+    if (action === 'verify') {
+      const all = flagValue(context, '--all');
+      const result = await verifyInstallations({
+        homeDir: context.homeDir,
+        stateRoot,
+        all,
+      });
+      printJson(context.io, result);
+      return result.ok ? 0 : 1;
+    }
+    if (action === 'prune') {
+      const dryRun = flagValue(context, '--dry-run') || !flagValue(context, '--apply');
+      const keep = optionValue<number>(context, '--keep') ?? 2;
+      const result = await pruneInstallations({
+        homeDir: context.homeDir,
+        stateRoot,
+        projectRoot: context.cwd,
+        keep,
+        dryRun,
+      });
+      printJson(context.io, result);
+      return 0;
+    }
+    if (action === 'repair') {
+      const result = await repairInstallation({
+        homeDir: context.homeDir,
+        stateRoot,
+        projectRoot: context.cwd,
+      });
+      printJson(context.io, result);
+      return result.repaired ? 0 : (result.doctor?.ok === false ? 1 : 0);
+    }
   }
   if (command === 'doctor') {
     const repairOwner = flagValue(context, '--repair-owner');

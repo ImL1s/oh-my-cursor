@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const help = fs.readFileSync(new URL('../src/cli/application.ts', import.meta.url), 'utf8');
-for (const command of ['setup', 'update', 'doctor', 'uninstall', 'capabilities', 'native-status', 'state', 'cancel', 'session', 'resume', 'recover', 'compact', 'memory', 'notify', 'tracker', 'wiki', 'mcp-server', 'mcp-install', 'workflow', 'ralplan', 'ralph', 'ulw', 'autopilot', 'pipeline', 'persist', 'team', 'review', 'qa', 'accept', 'integrate', 'ask']) assert.ok(help.includes(command), `missing help: ${command}`);
+for (const command of ['setup', 'update', 'install', 'rollback', 'doctor', 'uninstall', 'capabilities', 'native-status', 'state', 'cancel', 'session', 'resume', 'recover', 'compact', 'memory', 'notify', 'tracker', 'wiki', 'mcp-server', 'mcp-install', 'workflow', 'ralplan', 'ralph', 'ulw', 'autopilot', 'pipeline', 'persist', 'team', 'review', 'qa', 'accept', 'integrate', 'ask']) assert.ok(help.includes(command), `missing help: ${command}`);
 const { COMMAND_SCHEMAS, renderCommandHelp } = await import('../dist/src/cli/parser.js');
 const REFERENCE_START = '<!-- OMCU:CLI-REFERENCE:START -->';
 const REFERENCE_END = '<!-- OMCU:CLI-REFERENCE:END -->';

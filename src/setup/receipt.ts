@@ -9,17 +9,39 @@ export interface OwnedInstallPath {
   readonly identity: string;
 }
 
+export type InstallSourceKind =
+  | 'source'
+  | 'archive'
+  | 'verified_archive'
+  | 'github_release'
+  | 'package_manager'
+  | 'unknown_legacy';
+
+export interface InstallSourceInfo {
+  readonly kind: InstallSourceKind;
+  readonly realpath: string;
+  readonly sha256: string;
+  readonly version?: string;
+  readonly tag?: string;
+  readonly commit?: string;
+  readonly archive_sha256?: string;
+  readonly attestation_identity?: string;
+}
+
 export interface InstallReceipt {
   readonly store_kind: 'omcu_install_receipt';
   readonly schema_version: 1;
   readonly transaction_id: string;
-  readonly action: 'install' | 'update';
+  readonly action: 'install' | 'update' | 'rollback';
   readonly version: string;
-  readonly source: { readonly kind: 'source' | 'archive'; readonly realpath: string; readonly sha256: string };
+  readonly source: InstallSourceInfo;
   readonly installed: { readonly stage: string; readonly sha256: string; readonly cli: string };
   readonly previous_cli_target: string | null;
   readonly owned_inventory: readonly OwnedInstallPath[];
   readonly created_at: string;
+  readonly rollback_from_receipt_sha256?: string | null;
+  readonly rollback_reason?: string | null;
+  readonly installer_version?: string;
   readonly receipt_sha256: string;
 }
 
@@ -40,8 +62,11 @@ export function createInstallReceipt(material: ReceiptMaterial): InstallReceipt 
 export function validateInstallReceipt(value: unknown): InstallReceipt {
   if (value === null || typeof value !== 'object') throw new Error('E_INSTALL_RECEIPT_INVALID');
   const receipt = value as InstallReceipt;
+  const validActions = ['install', 'update', 'rollback'];
+  const validSourceKinds = ['source', 'archive', 'verified_archive', 'github_release', 'package_manager', 'unknown_legacy'];
   if (receipt.store_kind !== 'omcu_install_receipt' || receipt.schema_version !== 1
-    || !['install', 'update'].includes(receipt.action)
+    || !validActions.includes(receipt.action)
+    || !validSourceKinds.includes(receipt.source?.kind ?? '')
     || !/^[a-f0-9]{64}$/.test(receipt.source?.sha256 ?? '')
     || !/^[a-f0-9]{64}$/.test(receipt.installed?.sha256 ?? '')
     || !Array.isArray(receipt.owned_inventory)) throw new Error('E_INSTALL_RECEIPT_INVALID');
