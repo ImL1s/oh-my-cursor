@@ -11,7 +11,9 @@ import {
   resolveTeamApiOperation,
   TEAM_API_OPERATIONS,
   listTasks,
+  readTask,
   readTeamConfig,
+  TeamManifestStore,
   teamWorkerInboxPath,
   validateTeamApiOperationInput,
 } from '../../src/team/index.js';
@@ -478,12 +480,23 @@ describe('team api interop (P0)', () => {
     }, root);
     expect(complete.ok).toBe(true);
 
-    // Reopen task
-    const reopened = await executeTeamApiOperation('reopen-task', {
+    // Reopen task fails without supervisor authority
+    const unauthReopen = await executeTeamApiOperation('reopen-task', {
       team_name: teamName,
       task_id: taskId,
       reason: 're-evaluating results',
     }, root);
+    expect(unauthReopen.ok).toBe(false);
+    if (!unauthReopen.ok) {
+      expect(unauthReopen.error.code).toBe('unauthorized');
+    }
+
+    // Reopen task succeeds with supervisor authority
+    const reopened = await executeTeamApiOperation('reopen-task', {
+      team_name: teamName,
+      task_id: taskId,
+      reason: 're-evaluating results',
+    }, root, { isSupervisor: true });
     expect(reopened.ok).toBe(true);
     if (!reopened.ok) return;
     const taskReopened = reopened.data.task as { status: string; last_claim_generation?: number };
@@ -544,5 +557,153 @@ describe('team api interop (P0)', () => {
     }, root);
     expect(badReclaim.ok).toBe(false);
     if (!badReclaim.ok) expect(badReclaim.error.code).toBe('invalid_input');
+  });
+
+  it('requires supervisor authority to reopen tasks', async () => {
+    const { root, teamName } = workspace();
+    await executeTeamApiOperation('create-task', {
+      team_name: teamName,
+      subject: 'Reopen Auth',
+      description: 'Check authority',
+    }, root);
+
+    const claimed = await executeTeamApiOperation('claim-task', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'one',
+    }, root);
+    expect(claimed.ok).toBe(true);
+    const token = (claimed.data as { claimToken: string }).claimToken;
+
+    const completed = await executeTeamApiOperation('transition-task-status', {
+      team_name: teamName,
+      task_id: '1',
+      from: 'in_progress',
+      to: 'completed',
+      claim_token: token,
+      result: 'finished',
+    }, root);
+    expect(completed.ok).toBe(true);
+
+    // Call reopen without supervisor authority -> rejected
+    const unauth = await executeTeamApiOperation('reopen-task', {
+      team_name: teamName,
+      task_id: '1',
+      reason: 'need rework',
+    }, root);
+    expect(unauth.ok).toBe(false);
+    if (!unauth.ok) {
+      expect(unauth.error.code).toBe('unauthorized');
+      expect(unauth.error.message).toContain('supervisor');
+    }
+
+    // Call reopen with supervisor authority -> succeeded
+    const auth = await executeTeamApiOperation('reopen-task', {
+      team_name: teamName,
+      task_id: '1',
+      reason: 'supervisor approval for rework',
+    }, root, { isSupervisor: true });
+    expect(auth.ok).toBe(true);
+    const task = await readTask(root, teamName, '1');
+    expect(task.status).toBe('pending');
+  });
+
+  it('resolves long-lived worker identity from manifest or args and hashes process nonce', async () => {
+    const { dir, root, teamName } = workspace();
+
+    // 1. Without manifest or args: claim has no process identity (does NOT bind short-lived CLI process)
+    await executeTeamApiOperation('create-task', {
+      team_name: teamName,
+      subject: 'CLI Task',
+      description: 'Check worker identity resolution',
+    }, root);
+
+    const claimWithoutManifest = await executeTeamApiOperation('claim-task', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'one',
+    }, root);
+    expect(claimWithoutManifest.ok).toBe(true);
+    const taskWithout = await readTask(root, teamName, '1');
+    expect(taskWithout?.claim?.worker_process_identity).toBeUndefined();
+
+    // Release for next test
+    const token1 = (claimWithoutManifest.data as { claimToken: string }).claimToken;
+    await executeTeamApiOperation('release-task-claim', {
+      team_name: teamName,
+      task_id: '1',
+      claim_token: token1,
+      worker: 'one',
+    }, root);
+
+    // 2. With manifest: claim automatically attaches long-lived pane process identity
+    const store = new TeamManifestStore(root);
+    store.write({
+      schema_version: 2,
+      team_id: teamName,
+      capability_tier: 'experimental-local',
+      native_cursor_team: false,
+      tmux_session: `omcu-${teamName}`,
+      workers: [
+        {
+          id: 'one',
+          role: 'worker',
+          cwd: dir,
+          owned_paths: ['src/one'],
+          pane_target: '%1',
+          pane_pid: 12345,
+          pane_start_identity: 'worker-pane-start-12345',
+          pane_start_identity_proven: true,
+          process_group_id: 12345,
+          argv: ['omcu', 'worker'],
+        },
+      ],
+      created_at: '2026-07-31T00:00:00.000Z',
+      stopping_at: null,
+      stopping_worker_ids: null,
+      stopped_at: null,
+    });
+
+    const claimWithManifest = await executeTeamApiOperation('claim-task', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'one',
+    }, root);
+    expect(claimWithManifest.ok).toBe(true);
+    const taskWith = await readTask(root, teamName, '1');
+    expect(taskWith?.claim?.worker_process_identity).toEqual({
+      pid: 12345,
+      start_identity: 'worker-pane-start-12345',
+      start_identity_proven: true,
+    });
+
+    // 3. Reclaim with explicit process_identity in args (containing raw nonce):
+    // Hashes nonce into nonce_sha256 and never exposes raw nonce
+    const rawNonce = crypto.randomBytes(32).toString('hex');
+    const expectedHash = crypto.createHash('sha256').update(rawNonce).digest('hex');
+
+    const reclaimWithArgs = await executeTeamApiOperation('reclaim-task', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'one',
+      force: true,
+      process_identity: {
+        pid: 67890,
+        start_identity: 'custom-start-id',
+        nonce: rawNonce,
+        start_identity_proven: true,
+      },
+    }, root, { isSupervisor: true });
+    expect(reclaimWithArgs.ok).toBe(true);
+
+    const taskReclaimed = await readTask(root, teamName, '1');
+    expect(taskReclaimed?.claim?.worker_process_identity).toEqual({
+      pid: 67890,
+      start_identity: 'custom-start-id',
+      start_identity_proven: true,
+      nonce_sha256: expectedHash,
+    });
+    // Verify raw nonce is not saved
+    expect((taskReclaimed?.claim?.worker_process_identity as Record<string, unknown>).nonce).toBeUndefined();
   });
 });

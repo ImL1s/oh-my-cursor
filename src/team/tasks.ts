@@ -5,6 +5,8 @@ import { atomicCreateJson, atomicWriteJson, withDirectoryLock, type AtomicWriteO
 import { Journal, type JournalRecord } from '../runtime/journal.js';
 import {
   classifyProcessLiveness,
+  processNonceSha256,
+  type ProcessIdentity,
   type ProcessIdentityRuntime,
 } from '../runtime/process-identity.js';
 import type { StateRoot } from '../runtime/state-root.js';
@@ -20,6 +22,8 @@ import {
 
 export const TEAM_TASK_STATUSES = ['pending', 'blocked', 'in_progress', 'completed', 'failed'] as const;
 export type TeamTaskStatus = (typeof TEAM_TASK_STATUSES)[number];
+
+export const MAX_TERMINAL_PAYLOAD_BYTES = 48 * 1024;
 
 const TERMINAL = new Set<TeamTaskStatus>(['completed', 'failed']);
 const TRANSITIONS: Readonly<Record<TeamTaskStatus, readonly TeamTaskStatus[]>> = {
@@ -38,6 +42,21 @@ export interface WorkerProcessIdentityClaim {
   readonly start_identity: string;
   readonly start_identity_proven?: boolean;
   readonly nonce_sha256?: string;
+}
+
+export function toWorkerProcessIdentityClaim(
+  identity: WorkerProcessIdentityClaim | ProcessIdentity | (Pick<WorkerProcessIdentityClaim, 'pid' | 'start_identity'> & { start_identity_proven?: boolean; nonce?: string; nonce_sha256?: string }),
+): WorkerProcessIdentityClaim {
+  let nonceSha256 = 'nonce_sha256' in identity ? identity.nonce_sha256 : undefined;
+  if ('nonce' in identity && typeof (identity as { nonce?: unknown }).nonce === 'string') {
+    nonceSha256 = processNonceSha256((identity as { nonce: string }).nonce);
+  }
+  return {
+    pid: identity.pid,
+    start_identity: identity.start_identity,
+    ...(identity.start_identity_proven !== undefined ? { start_identity_proven: identity.start_identity_proven } : {}),
+    ...(nonceSha256 !== undefined ? { nonce_sha256: nonceSha256 } : {}),
+  };
 }
 
 export interface TeamTaskClaim {
@@ -623,6 +642,16 @@ export async function listTasks(root: StateRoot, teamName: string): Promise<read
   return tasks;
 }
 
+export async function readTask(root: StateRoot, teamName: string, taskId: string): Promise<TeamTask | null> {
+  let id: string;
+  try {
+    id = assertTaskId(taskId);
+  } catch {
+    return null;
+  }
+  return readTaskUnlocked(root, teamName, id);
+}
+
 export async function createTask(
   root: StateRoot,
   teamName: string,
@@ -933,7 +962,7 @@ export async function claimTask(
       leased_until: leasedUntil,
       heartbeat_sequence: 0,
       workspace_generation: newGeneration,
-      ...(actualOptions.processIdentity ? { worker_process_identity: actualOptions.processIdentity } : {}),
+      ...(actualOptions.processIdentity ? { worker_process_identity: toWorkerProcessIdentityClaim(actualOptions.processIdentity) } : {}),
     };
 
     const updated: TeamTask = {
@@ -949,12 +978,12 @@ export async function claimTask(
       claim,
       ...(working.blocked_by !== undefined ? { blocked_by: working.blocked_by } : {}),
     };
-    writeTaskUnlocked(root, teamName, updated);
     appendTaskJournalEvent(root, teamName, updated.id, {
       kind: 'claimed',
       task: updated,
       claim,
     }, nowFn);
+    writeTaskUnlocked(root, teamName, updated);
     return { ok: true as const, task: updated, claimToken };
   });
 }
@@ -1023,12 +1052,12 @@ export async function renewTaskClaim(
       version: current.version + 1,
       claim: updatedClaim,
     };
-    writeTaskUnlocked(root, teamName, updated);
     appendTaskJournalEvent(root, teamName, updated.id, {
       kind: 'renewed',
       task: updated,
       claim: updatedClaim,
     }, now);
+    writeTaskUnlocked(root, teamName, updated);
     return { ok: true as const, task: updated };
   });
 }
@@ -1105,7 +1134,7 @@ export async function reclaimTask(
       leased_until: new Date(now().getTime() + leaseMs).toISOString(),
       heartbeat_sequence: 0,
       workspace_generation: newGeneration,
-      ...(options.newProcessIdentity ? { worker_process_identity: options.newProcessIdentity } : {}),
+      ...(options.newProcessIdentity ? { worker_process_identity: toWorkerProcessIdentityClaim(options.newProcessIdentity) } : {}),
     };
 
     const updated: TeamTask = {
@@ -1115,7 +1144,6 @@ export async function reclaimTask(
       last_claim_generation: newGeneration,
       claim,
     };
-    writeTaskUnlocked(root, teamName, updated);
     appendTaskJournalEvent(root, teamName, updated.id, {
       kind: 'reclaimed',
       task: updated,
@@ -1123,6 +1151,7 @@ export async function reclaimTask(
       new_generation: newGeneration,
       ...(options.reason !== undefined ? { reason: options.reason } : {}),
     }, now);
+    writeTaskUnlocked(root, teamName, updated);
     return {
       ok: true as const,
       task: updated,
@@ -1148,10 +1177,10 @@ export async function transitionTaskStatus(
   const token = claimToken.trim();
   if (token === '') return { ok: false, error: 'claim_conflict' };
   const nowFn = terminalData.now ?? now;
-  if (terminalData.result !== undefined && (typeof terminalData.result !== 'string' || terminalData.result.length > 64 * 1024)) {
+  if (terminalData.result !== undefined && (typeof terminalData.result !== 'string' || Buffer.byteLength(terminalData.result, 'utf8') > MAX_TERMINAL_PAYLOAD_BYTES)) {
     return { ok: false, error: 'invalid_transition' };
   }
-  if (terminalData.error !== undefined && (typeof terminalData.error !== 'string' || terminalData.error.length > 64 * 1024)) {
+  if (terminalData.error !== undefined && (typeof terminalData.error !== 'string' || Buffer.byteLength(terminalData.error, 'utf8') > MAX_TERMINAL_PAYLOAD_BYTES)) {
     return { ok: false, error: 'invalid_transition' };
   }
 
@@ -1199,13 +1228,24 @@ export async function transitionTaskStatus(
       ...(to === 'completed' && terminalData.result !== undefined ? { result: terminalData.result } : {}),
       ...(to === 'failed' && terminalData.error !== undefined ? { error: terminalData.error } : {}),
     };
-    writeTaskUnlocked(root, teamName, updated);
-    appendTaskJournalEvent(root, teamName, updated.id, {
+
+    const event: TeamTaskJournalEvent = {
       kind: 'transitioned',
       task: updated,
       from,
       to,
-    }, nowFn);
+    };
+    const serializedProbe = JSON.stringify({
+      kind: event.kind,
+      payload: event,
+      at: nowFn().toISOString(),
+    });
+    if (Buffer.byteLength(serializedProbe, 'utf8') > 60 * 1024) {
+      return { ok: false, error: 'invalid_transition' as const };
+    }
+
+    appendTaskJournalEvent(root, teamName, updated.id, event, nowFn);
+    writeTaskUnlocked(root, teamName, updated);
     return { ok: true as const, task: updated };
   });
 
@@ -1267,11 +1307,11 @@ export async function releaseTaskClaim(
       ...requestMetadata(current),
       ...(current.blocked_by !== undefined ? { blocked_by: current.blocked_by } : {}),
     };
-    writeTaskUnlocked(root, teamName, updated);
     appendTaskJournalEvent(root, teamName, updated.id, {
       kind: 'released',
       task: updated,
     }, nowFn);
+    writeTaskUnlocked(root, teamName, updated);
     return { ok: true as const, task: updated };
   });
 }
@@ -1311,12 +1351,12 @@ export async function reopenTask(
       ...requestMetadata(current),
       ...(current.blocked_by !== undefined ? { blocked_by: current.blocked_by } : {}),
     };
-    writeTaskUnlocked(root, teamName, updated);
     appendTaskJournalEvent(root, teamName, updated.id, {
       kind: 'reopened',
       task: updated,
       ...(options.reason !== undefined ? { reason: options.reason } : {}),
     }, now);
+    writeTaskUnlocked(root, teamName, updated);
     return { ok: true as const, task: updated };
   });
 

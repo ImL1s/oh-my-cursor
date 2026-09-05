@@ -1,11 +1,13 @@
-import { currentProcessIdentity } from '../runtime/process-identity.js';
+import { processNonceSha256 } from '../runtime/process-identity.js';
 import type { StateRoot } from '../runtime/state-root.js';
 import { listMailboxMessages, markMessageDelivered, sendDirectMessage } from './mailbox.js';
+import { TeamManifestStore } from './manifest.js';
 import {
   claimTask,
   createTask,
   getTeamSummary,
   listTasks,
+  MAX_TERMINAL_PAYLOAD_BYTES,
   MAX_TOTAL_LEASE_MS,
   reclaimTask,
   releaseTaskClaim,
@@ -14,6 +16,7 @@ import {
   TEAM_TASK_STATUSES,
   transitionTaskStatus,
   type TeamTaskStatus,
+  type WorkerProcessIdentityClaim,
 } from './tasks.js';
 import { readTeamConfig, teamExists, writeWorkerInboxFile } from './state-root.js';
 
@@ -60,6 +63,47 @@ Never stamps verified. native_cursor_team remains false.
 
 function isFiniteInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && Number.isFinite(value);
+}
+
+function resolveLongLivedWorkerIdentity(
+  root: StateRoot,
+  teamName: string,
+  worker: string,
+  args?: Record<string, unknown>,
+): WorkerProcessIdentityClaim | undefined {
+  if (args?.process_identity && typeof args.process_identity === 'object' && !Array.isArray(args.process_identity)) {
+    const p = args.process_identity as Record<string, unknown>;
+    if (typeof p.pid === 'number' && typeof p.start_identity === 'string') {
+      const nonceSha256 = typeof p.nonce === 'string'
+        ? processNonceSha256(p.nonce)
+        : (typeof p.nonce_sha256 === 'string' ? p.nonce_sha256 : undefined);
+      return {
+        pid: p.pid,
+        start_identity: p.start_identity,
+        start_identity_proven: p.start_identity_proven === true,
+        ...(nonceSha256 !== undefined ? { nonce_sha256: nonceSha256 } : {}),
+      };
+    }
+  }
+
+  try {
+    const store = new TeamManifestStore(root);
+    if (store.exists(teamName)) {
+      const manifest = store.read(teamName);
+      const entry = manifest.workers.find((w) => w.id === worker);
+      if (entry && typeof entry.pane_pid === 'number' && entry.pane_start_identity) {
+        return {
+          pid: entry.pane_pid,
+          start_identity: entry.pane_start_identity,
+          start_identity_proven: entry.pane_start_identity_proven ?? true,
+        };
+      }
+    }
+  } catch {
+    // Manifest lookup is best effort
+  }
+
+  return undefined;
 }
 
 const TEAM_TASK_ID_PATTERN = /^\d{1,20}$/;
@@ -157,6 +201,9 @@ export function validateTeamApiOperationInput(
       if (args.lease_ms !== undefined && (!isFiniteInteger(args.lease_ms) || args.lease_ms < 1 || args.lease_ms > MAX_TOTAL_LEASE_MS)) {
         invalidInput(`lease_ms must be a positive integer of at most ${MAX_TOTAL_LEASE_MS}`);
       }
+      if (args.process_identity !== undefined && (typeof args.process_identity !== 'object' || args.process_identity === null || Array.isArray(args.process_identity))) {
+        invalidInput('process_identity must be an object');
+      }
       break;
     case 'renew-task-claim':
       taskId(args);
@@ -184,6 +231,9 @@ export function validateTeamApiOperationInput(
       if (args.lease_ms !== undefined && (!isFiniteInteger(args.lease_ms) || args.lease_ms < 1 || args.lease_ms > MAX_TOTAL_LEASE_MS)) {
         invalidInput(`lease_ms must be a positive integer of at most ${MAX_TOTAL_LEASE_MS}`);
       }
+      if (args.process_identity !== undefined && (typeof args.process_identity !== 'object' || args.process_identity === null || Array.isArray(args.process_identity))) {
+        invalidInput('process_identity must be an object');
+      }
       break;
     case 'transition-task-status': {
       taskId(args);
@@ -192,11 +242,11 @@ export function validateTeamApiOperationInput(
       const to = requiredString(args, 'to', 32);
       if (!allowed.has(from) || !allowed.has(to)) invalidInput('from and to must be valid task statuses');
       requiredString(args, 'claim_token', 512);
-      if (args.result !== undefined && (typeof args.result !== 'string' || args.result.length > 64 * 1024)) {
-        invalidInput('result must be a string of at most 64 KiB');
+      if (args.result !== undefined && (typeof args.result !== 'string' || Buffer.byteLength(args.result, 'utf8') > MAX_TERMINAL_PAYLOAD_BYTES)) {
+        invalidInput(`result must be a string of at most ${MAX_TERMINAL_PAYLOAD_BYTES} bytes`);
       }
-      if (args.error !== undefined && (typeof args.error !== 'string' || args.error.length > 64 * 1024)) {
-        invalidInput('error must be a string of at most 64 KiB');
+      if (args.error !== undefined && (typeof args.error !== 'string' || Buffer.byteLength(args.error, 'utf8') > MAX_TERMINAL_PAYLOAD_BYTES)) {
+        invalidInput(`error must be a string of at most ${MAX_TERMINAL_PAYLOAD_BYTES} bytes`);
       }
       if (args.generation !== undefined && (!isFiniteInteger(args.generation) || args.generation < 1)) {
         invalidInput('generation must be a positive integer');
@@ -354,10 +404,11 @@ export async function executeTeamApiOperation(
           return fail(operation, 'invalid_input', 'expected_version must be a positive integer when provided');
         }
         const leaseMs = isFiniteInteger(args.lease_ms) ? (args.lease_ms as number) : undefined;
+        const processIdentity = resolveLongLivedWorkerIdentity(root, teamName, worker, args);
         const result = await claimTask(root, teamName, taskId, worker, {
           expectedVersion: (rawExpected as number | undefined) ?? null,
           ...(leaseMs !== undefined ? { leaseMs } : {}),
-          processIdentity: currentProcessIdentity(),
+          ...(processIdentity !== undefined ? { processIdentity } : {}),
         });
         return taskOpResult(operation, result as { ok: boolean; error?: string } & Record<string, unknown>);
       }
@@ -392,11 +443,12 @@ export async function executeTeamApiOperation(
           return fail(operation, 'unauthorized', 'Forced reclaim requires supervisor authority');
         }
         const leaseMs = isFiniteInteger(args.lease_ms) ? (args.lease_ms as number) : undefined;
+        const newProcessIdentity = resolveLongLivedWorkerIdentity(root, teamName, worker, args);
         const result = await reclaimTask(root, teamName, taskId, worker, {
           ...(reason !== undefined ? { reason } : {}),
           ...(force ? { force: true } : {}),
           ...(leaseMs !== undefined ? { leaseMs } : {}),
-          newProcessIdentity: currentProcessIdentity(),
+          ...(newProcessIdentity !== undefined ? { newProcessIdentity } : {}),
         });
         return taskOpResult(operation, result as { ok: boolean; error?: string } & Record<string, unknown>);
       }
@@ -460,6 +512,9 @@ export async function executeTeamApiOperation(
         const taskId = String(args.task_id ?? '').trim();
         if (!teamName || !taskId) {
           return fail(operation, 'invalid_input', 'team_name and task_id are required');
+        }
+        if (!options?.isSupervisor) {
+          return fail(operation, 'unauthorized', 'reopen-task requires supervisor authority');
         }
         const reason = typeof args.reason === 'string' ? args.reason : undefined;
         const result = await reopenTask(root, teamName, taskId, {
