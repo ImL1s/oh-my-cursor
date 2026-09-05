@@ -48,6 +48,16 @@ describe('ProjectMemoryStore transactional, conflict-aware, and schema-validated
     const hugeMetadata: Record<string, string> = {};
     for (let i = 0; i < 2000; i++) hugeMetadata[`key_${i}`] = 'val_' + 'x'.repeat(40);
     await expect(store.put('valid text', hugeMetadata, 'huge-meta')).rejects.toThrow('E_MEMORY_METADATA_INVALID');
+
+    // 5. Reject metadata that expands beyond 64 KiB after redaction
+    const expandingMeta: Record<string, boolean> = {};
+    for (let i = 0; i < 80; i++) {
+      expandingMeta['secret_' + String(i).padStart(2, '0') + '_' + 'a'.repeat(800)] = false;
+    }
+    expect(Buffer.byteLength(JSON.stringify(expandingMeta))).toBeLessThan(64 * 1024);
+    await expect(store.put('valid text', expandingMeta, 'expanding-meta')).rejects.toThrow('E_MEMORY_METADATA_INVALID');
+    expect(() => store.show('expanding-meta')).toThrow();
+    expect(store.list()).toHaveLength(1);
   });
 
   it('detects duplicate IDs and existing conflicts with default reject policy', async () => {

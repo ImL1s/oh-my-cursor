@@ -98,7 +98,11 @@ export function cleanMemoryText(value: unknown): string {
   if (typeof value !== 'string' || value.trim() === '' || Buffer.byteLength(value) > MAX_RECORD_TEXT_BYTES) {
     throw new Error('E_MEMORY_TEXT_INVALID');
   }
-  return String(redact(value, { maxStringLength: MAX_RECORD_TEXT_BYTES }));
+  const redacted = String(redact(value, { maxStringLength: MAX_RECORD_TEXT_BYTES }));
+  if (Buffer.byteLength(redacted) > MAX_RECORD_TEXT_BYTES) {
+    throw new Error('E_MEMORY_TEXT_INVALID');
+  }
+  return redacted;
 }
 
 export function cleanMemoryMetadata(value: unknown): unknown {
@@ -109,11 +113,16 @@ export function cleanMemoryMetadata(value: unknown): unknown {
     if (Buffer.byteLength(serialized) > MAX_RECORD_METADATA_BYTES) {
       throw new Error('E_MEMORY_METADATA_INVALID');
     }
+    const redacted = redact(value);
+    const redactedSerialized = JSON.stringify(redacted);
+    if (redactedSerialized !== undefined && Buffer.byteLength(redactedSerialized) > MAX_RECORD_METADATA_BYTES) {
+      throw new Error('E_MEMORY_METADATA_INVALID');
+    }
+    return redacted;
   } catch (error) {
     if ((error as Error).message === 'E_MEMORY_METADATA_INVALID') throw error;
     throw new Error('E_MEMORY_METADATA_INVALID', { cause: error });
   }
-  return redact(value);
 }
 
 export function validateMemoryRecord(parsed: unknown, expectedId?: string): ProjectMemory {
