@@ -866,6 +866,26 @@ describe('team api interop (P0)', { timeout: 20_000 }, () => {
     });
     expect(claimStopped.ok).toBe(false);
     expect((claimStopped as { error?: { code: string } }).error?.code).toBe('worker_process_identity_required');
+
+    // 6. Stopping team (stopping_at set, stopped_at null) is also rejected
+    store.write({
+      ...store.read(teamName),
+      stopping_at: '2026-07-31T00:59:00.000Z',
+      stopping_worker_ids: ['worker-a'],
+      stopped_at: null,
+    });
+    const claimStopping = await executeTeamApiOperation('claim-task', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'worker-a',
+    }, root, {
+      processRuntime: makeMockProcessRuntime({
+        alivePids: new Set([24680]),
+        startTimes: new Map([[24680, 'start-pane-24680']]),
+      }),
+    });
+    expect(claimStopping.ok).toBe(false);
+    expect((claimStopping as { error?: { code: string } }).error?.code).toBe('worker_process_identity_required');
   });
 
   it('rejects reopen-task via CLI without --supervisor flag and succeeds with --supervisor', async () => {

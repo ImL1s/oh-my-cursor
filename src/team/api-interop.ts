@@ -95,7 +95,10 @@ function resolveLongLivedWorkerIdentity(
     const store = new TeamManifestStore(root);
     if (store.exists(teamName)) {
       const manifest = store.read(teamName);
-      if (manifest.stopped_at !== null) {
+      if (manifest.stopped_at !== null || manifest.stopping_at !== null) {
+        return undefined;
+      }
+      if (manifest.stopping_worker_ids && manifest.stopping_worker_ids.includes(worker)) {
         return undefined;
       }
       const entry = manifest.workers.find((w) => w.id === worker);

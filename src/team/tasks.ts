@@ -302,15 +302,15 @@ function isClaim(value: unknown): value is TeamTaskClaim {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const c = value as Record<string, unknown>;
   if (!isValidWorkerName(c.owner)) return false;
-  if (c.generation !== undefined && (!Number.isInteger(c.generation) || (c.generation as number) < 1)) return false;
+  if (c.generation !== undefined && (!Number.isSafeInteger(c.generation) || (c.generation as number) < 1)) return false;
   if (c.token_sha256 !== undefined && (typeof c.token_sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(c.token_sha256))) return false;
   if (c.token !== undefined && (typeof c.token !== 'string' || c.token.trim() === '')) return false;
   if (c.token_sha256 === undefined && c.token === undefined) return false;
   if (!isValidIsoTimestamp(c.leased_until)) return false;
   if (c.acquired_at !== undefined && !isValidIsoTimestamp(c.acquired_at)) return false;
   if (c.renewed_at !== undefined && !isValidIsoTimestamp(c.renewed_at)) return false;
-  if (c.heartbeat_sequence !== undefined && (!Number.isInteger(c.heartbeat_sequence) || (c.heartbeat_sequence as number) < 0)) return false;
-  if (c.workspace_generation !== undefined && (!Number.isInteger(c.workspace_generation) || (c.workspace_generation as number) < 1)) return false;
+  if (c.heartbeat_sequence !== undefined && (!Number.isSafeInteger(c.heartbeat_sequence) || (c.heartbeat_sequence as number) < 0)) return false;
+  if (c.workspace_generation !== undefined && (!Number.isSafeInteger(c.workspace_generation) || (c.workspace_generation as number) < 1)) return false;
   if (c.worker_process_identity !== undefined) {
     if (!c.worker_process_identity || typeof c.worker_process_identity !== 'object' || Array.isArray(c.worker_process_identity)) return false;
     const wpi = c.worker_process_identity as Record<string, unknown>;
@@ -330,8 +330,8 @@ function isTeamTask(value: unknown): value is TeamTask {
   if (typeof task.description !== 'string' || task.description.length > 64 * 1024) return false;
   if (typeof task.status !== 'string' || !(TEAM_TASK_STATUSES as readonly string[]).includes(task.status)) return false;
   if (!isValidIsoTimestamp(task.created_at)) return false;
-  if (typeof task.version !== 'number' || !Number.isInteger(task.version) || task.version < 1) return false;
-  if (task.last_claim_generation !== undefined && (!Number.isInteger(task.last_claim_generation) || (task.last_claim_generation as number) < 0)) return false;
+  if (typeof task.version !== 'number' || !Number.isSafeInteger(task.version) || task.version < 1) return false;
+  if (task.last_claim_generation !== undefined && (!Number.isSafeInteger(task.last_claim_generation) || (task.last_claim_generation as number) < 0)) return false;
 
   if (task.request_id !== undefined && (typeof task.request_id !== 'string' || !isRequestId(task.request_id))) return false;
   if (task.request_payload_sha256 !== undefined && (typeof task.request_payload_sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(task.request_payload_sha256))) return false;
@@ -348,7 +348,12 @@ function isTeamTask(value: unknown): value is TeamTask {
     }
   }
 
-  if (task.claim !== undefined && !isClaim(task.claim)) return false;
+  if (task.claim !== undefined) {
+    if (!isClaim(task.claim)) return false;
+    if (typeof task.last_claim_generation === 'number' && typeof task.claim.generation === 'number') {
+      if (task.claim.generation > task.last_claim_generation) return false;
+    }
+  }
 
   if (task.completed_at !== undefined && !isValidIsoTimestamp(task.completed_at)) return false;
   if (task.result !== undefined && (typeof task.result !== 'string' || task.result.length > 64 * 1024)) return false;
@@ -1108,6 +1113,7 @@ export async function claimTask(
     if (working.owner && working.owner !== worker) return { ok: false, error: 'claim_conflict' as const };
 
     const newGeneration = Math.max(working.last_claim_generation ?? 0, working.claim?.generation ?? 0) + 1;
+    if (!Number.isSafeInteger(newGeneration)) throw new Error('E_TEAM_TASK_GENERATION_OVERFLOW');
     const claimToken = crypto.randomUUID();
     const tokenSha256 = crypto.createHash('sha256').update(claimToken).digest('hex');
     const leaseMs = Math.min(Math.max(1, actualOptions.leaseMs ?? CLAIM_LEASE_MS), MAX_TOTAL_LEASE_MS);
@@ -1329,6 +1335,7 @@ export async function reclaimTask(
 
     const priorGeneration = current.claim.generation;
     const newGeneration = Math.max(current.last_claim_generation ?? 0, priorGeneration) + 1;
+    if (!Number.isSafeInteger(newGeneration)) throw new Error('E_TEAM_TASK_GENERATION_OVERFLOW');
     const claimToken = crypto.randomUUID();
     const tokenSha256 = crypto.createHash('sha256').update(claimToken).digest('hex');
     const leaseMs = Math.min(Math.max(1, options.leaseMs ?? CLAIM_LEASE_MS), MAX_TOTAL_LEASE_MS);

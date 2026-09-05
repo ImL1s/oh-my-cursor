@@ -1696,5 +1696,61 @@ describe('team tasks lifecycle & generation fencing', { timeout: 20_000 }, () =>
       expect(nextClaim.task.claim?.generation).toBe(2);
       expect(nextClaim.task.last_claim_generation).toBe(2);
     });
+
+    it('rejects unsafe integer claim generations and recovers from journal', async () => {
+      const { root, teamName } = workspace();
+      const task = await createTask(root, teamName, { subject: 'Unsafe generation test', description: 'desc' });
+
+      // Corrupt snapshot with unsafe integer watermark (1e100)
+      const unsafeTask = {
+        schema_version: 1,
+        id: task.id,
+        version: 1,
+        subject: task.subject,
+        description: task.description,
+        status: 'pending',
+        created_at: '2026-07-31T00:00:00.000Z',
+        last_claim_generation: 1e100,
+      };
+      fs.writeFileSync(
+        path.join(teamTasksDir(root, teamName), `task-${task.id}.json`),
+        JSON.stringify(unsafeTask, null, 2),
+        'utf8',
+      );
+
+      // readTask should reject corrupt snapshot and recover from authoritative journal
+      const recovered = await readTask(root, teamName, task.id);
+      expect(recovered).not.toBeNull();
+      expect(recovered?.last_claim_generation).toBe(0);
+
+      // Active claim exceeding watermark is also rejected as corrupt and recovered from journal
+      const claimExceeding = {
+        schema_version: 1,
+        id: task.id,
+        version: 1,
+        subject: task.subject,
+        description: task.description,
+        status: 'in_progress',
+        owner: 'worker-1',
+        created_at: '2026-07-31T00:00:00.000Z',
+        last_claim_generation: 1,
+        claim: {
+          owner: 'worker-1',
+          generation: 5,
+          token_sha256: crypto.createHash('sha256').update('tok').digest('hex'),
+          leased_until: new Date(Date.now() + 300_000).toISOString(),
+        },
+      };
+      fs.writeFileSync(
+        path.join(teamTasksDir(root, teamName), `task-${task.id}.json`),
+        JSON.stringify(claimExceeding, null, 2),
+        'utf8',
+      );
+
+      const recovered2 = await readTask(root, teamName, task.id);
+      expect(recovered2).not.toBeNull();
+      expect(recovered2?.status).toBe('pending');
+      expect(recovered2?.claim).toBeUndefined();
+    });
   });
 });
