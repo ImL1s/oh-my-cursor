@@ -120,6 +120,39 @@ export function persistFollowup(rawInputText, env = process.env, runner = spawnS
   return {};
 }
 
+/**
+ * Synchronously evaluate preToolUse through the omcu safety gate.
+ * Returns { safe: false, reason: string } when the action is denied,
+ * or { safe: true } otherwise.
+ */
+export function preToolAudit(rawInputText, env = process.env, runner = spawnSync) {
+  const entry = resolveOmcuEntrypoint(env);
+  if (entry === null) return { safe: true };
+  let result;
+  try {
+    result = runner(process.execPath, [entry, 'hooks', 'test', 'preToolUse', '--fixture', rawInputText], {
+      encoding: 'utf8',
+      timeout: 5_000,
+      maxBuffer: 1024 * 1024,
+    });
+  } catch {
+    return { safe: true };
+  }
+  if (!result || typeof result.stdout !== 'string') return { safe: true };
+  try {
+    const parsed = JSON.parse(result.stdout);
+    if (parsed && parsed.ok === false) {
+      return {
+        safe: false,
+        reason: parsed.dispatchResult?.reason ?? 'Destructive or unsafe action blocked by OMCU pre-step safety gate',
+      };
+    }
+  } catch {
+    return { safe: true };
+  }
+  return { safe: true };
+}
+
 async function readStdin() {
   const chunks = [];
   let bytes = 0;
@@ -153,7 +186,16 @@ export async function runHook(event, inputText, env = process.env, runner = spaw
 async function main() {
   const event = process.argv[2] ?? '';
   try {
-    const result = await runHook(event, await readStdin());
+    const rawInput = await readStdin();
+    if (event === 'preToolUse') {
+      const audit = preToolAudit(rawInput, process.env);
+      if (!audit.safe) {
+        process.stderr.write(`OMCU_HOOK_SAFETY_DENY reason="${audit.reason}"\n`);
+        process.exitCode = 1;
+        return;
+      }
+    }
+    const result = await runHook(event, rawInput);
     process.stdout.write(`${JSON.stringify(result)}\n`);
   } catch (error) {
     const code = error instanceof Error && /^E_[A-Z_]+$/.test(error.message) ? error.message : 'E_HOOK_FAILED';

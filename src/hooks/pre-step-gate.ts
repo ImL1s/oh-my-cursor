@@ -9,12 +9,12 @@ export interface SafetyEvaluation {
 
 const DESTRUCTIVE_COMMAND_PATTERNS: readonly { readonly pattern: RegExp; readonly violation: string }[] = [
   {
-    pattern: /\brm\s+.*(-[a-zA-Z]*[rf][a-zA-Z]*|-r|-f).*\s+(\/|~|\$HOME|\.\.)/i,
-    violation: 'Destructive recursive deletion of root, home, system, or parent directory',
+    pattern: /\brm\s+.*(-[a-zA-Z]*[rf][a-zA-Z]*|-r|-f).*\s+(\/|~|\$HOME|\.\.|\$PWD|\$\{PWD\}|\.git(?:\/|\s|$)|(?:\.|\.\/|\*|\.\/\*|\.\*)(?:\s|$))/i,
+    violation: 'Destructive recursive deletion of root, home, system, parent directory, workspace, or git repository',
   },
   {
-    pattern: /\brm\s+(-[a-zA-Z]*[rf][a-zA-Z]*|-r|-f)*\s*(\/|~|\$HOME|\/\*|\.\.)(\s|$)/i,
-    violation: 'Destructive recursive deletion of root, home, system, or parent directory',
+    pattern: /\brm\s+(-[a-zA-Z]*[rf][a-zA-Z]*|-r|-f)*\s*(\/|~|\$HOME|\$PWD|\$\{PWD\}|\/\*|\.\.|\.git(?:\/|\s|$)|(?:\.|\.\/|\*|\.\/\*|\.\*)(?:\s|$))/i,
+    violation: 'Destructive recursive deletion of root, home, system, parent directory, workspace, or git repository',
   },
   {
     pattern: /\b(mkfs(\.[a-z0-9]+)?|fdisk|parted)\b/,
@@ -95,7 +95,7 @@ export function evaluatePreStepSafety(
           violations.push(`File access outside workspace root is disallowed: ${p}`);
         }
         // Disallow direct writes to .git internal structures
-        if (relative.startsWith('.git/') || relative.startsWith(`.git${path.sep}`)) {
+        if (relative === '.git' || relative.startsWith('.git/') || relative.startsWith(`.git${path.sep}`)) {
           if (toolName.toLowerCase().includes('write') || toolName.toLowerCase().includes('edit')) {
             violations.push(`Direct modification of git internal directory is disallowed: ${p}`);
           }

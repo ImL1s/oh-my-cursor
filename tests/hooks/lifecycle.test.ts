@@ -151,4 +151,22 @@ describe('Lifecycle Event Hooks (omcu-hook-lifecycle / omc_hooks / omx_subagent_
       });
     }).toThrow(/E_HOOK_TIER_VIOLATION/);
   });
+
+  it('rejects unknown or unsupported hook events with E_HOOK_UNKNOWN_EVENT', async () => {
+    const result = await dispatchHook('unsupported_custom_event', {});
+    expect(result.success).toBe(false);
+    expect(result.denied).toBe(true);
+    expect(result.errorCode).toBe('E_HOOK_UNKNOWN_EVENT');
+    expect(result.reason).toContain('Unknown or unsupported hook event');
+  });
+
+  it('rejects hook input exceeding MAX_INPUT_BYTES whether string or object', async () => {
+    // String exceeding 1MB
+    const largeString = JSON.stringify({ data: 'x'.repeat(1024 * 1024 + 10) });
+    await expect(dispatchHook('preToolUse', largeString)).rejects.toThrow('E_HOOK_INPUT_TOO_LARGE');
+
+    // Object exceeding 1MB
+    const largeObject = { data: 'x'.repeat(1024 * 1024 + 10) };
+    await expect(dispatchHook('preToolUse', largeObject)).rejects.toThrow('E_HOOK_INPUT_TOO_LARGE');
+  });
 });

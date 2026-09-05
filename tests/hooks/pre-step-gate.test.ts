@@ -31,6 +31,15 @@ describe('Pre-Step Safety Gate Hook (omcu-hook-pre-step-gate / omo_pre_step_gate
       'rm -rf $HOME',
       'rm -rf /*',
       'rm -rf ..',
+      'rm -rf .',
+      'rm -rf ./',
+      'rm -rf *',
+      'rm -rf ./*',
+      'rm -rf .*',
+      'rm -rf $PWD',
+      'rm -rf ${PWD}',
+      'rm -rf .git',
+      'rm -rf .git/',
     ];
 
     for (const command of destructiveCommands) {
@@ -96,6 +105,16 @@ describe('Pre-Step Safety Gate Hook (omcu-hook-pre-step-gate / omo_pre_step_gate
       const evaluation = evaluatePreStepSafety('write_to_file', { targetFile: p }, cwd);
       expect(evaluation.safe).toBe(false);
       expect(evaluation.errorCode).toBe('E_SAFETY_DENY');
+    }
+  });
+
+  it('blocks direct modification of .git directory and internal files', () => {
+    const gitTargets = ['.git', '.git/config', '.git/HEAD'];
+    for (const targetFile of gitTargets) {
+      const evaluation = evaluatePreStepSafety('write_to_file', { targetFile }, cwd);
+      expect(evaluation.safe).toBe(false);
+      expect(evaluation.errorCode).toBe('E_SAFETY_DENY');
+      expect(evaluation.reason).toContain('Direct modification of git internal directory is disallowed');
     }
   });
 
