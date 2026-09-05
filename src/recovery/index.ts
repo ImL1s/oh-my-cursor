@@ -68,22 +68,30 @@ function privateDirectory(directory: string): void {
 }
 
 class LineRingBuffer {
-  private readonly buffer: Array<{ raw: string; unterminated: boolean }>;
+  private readonly buffer: Array<{ raw: string; unterminated: boolean; bytes: number }>;
   private head = 0;
   private count = 0;
+  private _totalBytes = 0;
 
-  constructor(public readonly capacity: number) {
+  constructor(public readonly capacity: number, public readonly maxBytes: number = MAX_TAIL_BYTES) {
     this.buffer = new Array(capacity);
   }
 
   push(raw: string, unterminated: boolean): void {
+    const bytes = Buffer.byteLength(raw);
     const index = (this.head + this.count) % this.capacity;
     if (this.count < this.capacity) {
-      this.buffer[index] = { raw, unterminated };
+      this.buffer[index] = { raw, unterminated, bytes };
       this.count++;
+      this._totalBytes += bytes;
     } else {
-      this.buffer[this.head] = { raw, unterminated };
+      this._totalBytes -= this.buffer[this.head]!.bytes;
+      this.buffer[this.head] = { raw, unterminated, bytes };
       this.head = (this.head + 1) % this.capacity;
+      this._totalBytes += bytes;
+    }
+    if (this._totalBytes > this.maxBytes) {
+      throw new Error('E_RECOVERY_TAIL_TOO_LARGE');
     }
   }
 
@@ -97,6 +105,10 @@ class LineRingBuffer {
 
   get length(): number {
     return this.count;
+  }
+
+  get totalBytes(): number {
+    return this._totalBytes;
   }
 }
 
@@ -256,6 +268,7 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
     const copiedLines: string[] = [];
     const tailIds = new Set<string>();
     const parentRefs: Array<{ parent: string; line: number }> = [];
+    const malformedTailLines: string[] = [];
 
     if (truncated) {
       warnings.push({
@@ -290,6 +303,7 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
           warnings.push({ code: 'W_UNKNOWN_RECORD', line, detail: 'unrecognized record shape preserved' });
         }
       } catch {
+        malformedTailLines.push(raw);
         const redacted = { raw: redact(raw) };
         records.push(redacted);
         copiedLines.push(JSON.stringify(redacted));
@@ -314,6 +328,22 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
     for (const ref of parentRefs) {
       if (ref.parent.length > 0 && !tailIds.has(ref.parent)) {
         missingTailParents.add(ref.parent);
+      }
+    }
+
+    const unverifiedInTail = new Set<string>();
+    if (missingTailParents.size > 0 && malformedTailLines.length > 0) {
+      const searchRegex = buildCandidatesRegex(missingTailParents);
+      if (searchRegex !== null) {
+        for (const malformedLine of malformedTailLines) {
+          if (searchRegex.test(malformedLine)) {
+            for (const parent of missingTailParents) {
+              if (malformedLine.includes(parent)) {
+                unverifiedInTail.add(parent);
+              }
+            }
+          }
+        }
       }
     }
 
@@ -419,29 +449,29 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
 
     for (const ref of parentRefs) {
       if (!tailIds.has(ref.parent)) {
-        if (!truncated) {
-          warnings.push({
-            code: 'W_BROKEN_CHAIN',
-            line: ref.line,
-            detail: `missing parent ${ref.parent}`,
-          });
-        } else if (chainScanError) {
-          warnings.push({
-            code: 'W_CHAIN_UNVERIFIED',
-            line: ref.line,
-            detail: `parent ${ref.parent} verification incomplete due to scan error`,
-          });
-        } else if (foundInPrefix.has(ref.parent)) {
+        if (foundInPrefix.has(ref.parent)) {
           warnings.push({
             code: 'W_PARENT_OUTSIDE_RETAINED_TAIL',
             line: ref.line,
             detail: `parent ${ref.parent} located outside retained tail in omitted prefix`,
+          });
+        } else if (unverifiedInTail.has(ref.parent)) {
+          warnings.push({
+            code: 'W_CHAIN_UNVERIFIED',
+            line: ref.line,
+            detail: `parent ${ref.parent} unverified due to malformed retained record`,
           });
         } else if (unverifiedInPrefix.has(ref.parent)) {
           warnings.push({
             code: 'W_CHAIN_UNVERIFIED',
             line: ref.line,
             detail: `parent ${ref.parent} unverified due to malformed prefix record`,
+          });
+        } else if (chainScanError) {
+          warnings.push({
+            code: 'W_CHAIN_UNVERIFIED',
+            line: ref.line,
+            detail: `parent ${ref.parent} verification incomplete due to scan error`,
           });
         } else {
           warnings.push({

@@ -677,4 +677,53 @@ describe('Recovery streaming and truthful chain validation (#21)', () => {
     expect(snapshot.source_lines).toBe(2);
     expect(snapshot.copied_lines).toBe(2);
   });
+
+  it('marks candidate parent IDs in malformed retained records as W_CHAIN_UNVERIFIED', () => {
+    const cwd = workspace();
+    const root = projectStateRoot(cwd);
+    const transcript = path.join(cwd, 'tail-malformed-parent.jsonl');
+
+    // Line 1: malformed line containing "tail-parent-corrupt"
+    // Line 2: valid record referencing parent_id "tail-parent-corrupt"
+    fs.writeFileSync(
+      transcript,
+      '{"id":"tail-parent-corrupt", invalid_json_syntax}\n{"id":"child-1","parent_id":"tail-parent-corrupt","role":"user"}\n',
+    );
+
+    const snapshot = recoverCursorSession(root, {
+      transcriptPath: transcript,
+      recoveryId: 'tail-malformed-check',
+      now: fixedNow,
+    });
+
+    const unverified = snapshot.warnings.filter((w) => w.code === 'W_CHAIN_UNVERIFIED');
+    expect(unverified).toHaveLength(1);
+    expect(unverified[0]!.detail).toContain('tail-parent-corrupt');
+    expect(unverified[0]!.detail).toContain('malformed retained record');
+
+    const broken = snapshot.warnings.filter((w) => w.code === 'W_BROKEN_CHAIN');
+    expect(broken).toHaveLength(0);
+  });
+
+  it('rejects with E_RECOVERY_TAIL_TOO_LARGE when aggregate retained bytes exceed MAX_TAIL_BYTES', () => {
+    const cwd = workspace();
+    const root = projectStateRoot(cwd);
+    const transcript = path.join(cwd, 'tail-too-large.jsonl');
+
+    // Write 17 lines of 1 MiB each (17 MiB > MAX_TAIL_BYTES of 16 MiB)
+    const fd = fs.openSync(transcript, 'w');
+    const lineChunk = `${'a'.repeat(MAX_LINE_BYTES - 100)}\n`;
+    for (let i = 0; i < 17; i++) {
+      fs.writeSync(fd, lineChunk);
+    }
+    fs.closeSync(fd);
+
+    expect(() =>
+      recoverCursorSession(root, {
+        transcriptPath: transcript,
+        recoveryId: 'tail-overflow',
+        now: fixedNow,
+      }),
+    ).toThrow('E_RECOVERY_TAIL_TOO_LARGE');
+  });
 });
