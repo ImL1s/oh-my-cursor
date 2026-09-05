@@ -553,4 +553,37 @@ describe('Recovery streaming and truthful chain validation (#21)', () => {
     expect(outsideWarnings).toHaveLength(2);
     expect(snapshot.warnings.some((w) => w.code === 'W_BROKEN_CHAIN')).toBe(false);
   });
+
+  it('does not treat malformed text in prefix as confirmed parent', () => {
+    const cwd = workspace();
+    const root = projectStateRoot(cwd);
+    const transcript = path.join(cwd, 'malformed-prefix.jsonl');
+
+    // Total 1000 lines. Line 10 is invalid JSON containing {"id":"corrupt-parent"
+    // Tail has line 950 referencing 'corrupt-parent'
+    const lines: string[] = [];
+    for (let i = 1; i <= 1000; i++) {
+      if (i === 10) {
+        lines.push('{"id":"corrupt-parent", broken json');
+      } else if (i === 950) {
+        lines.push(JSON.stringify({ id: 'child-c', parent_id: 'corrupt-parent', type: 'message' }));
+      } else {
+        lines.push(JSON.stringify({ id: `item-${i}`, type: 'message' }));
+      }
+    }
+    fs.writeFileSync(transcript, `${lines.join('\n')}\n`);
+
+    const snapshot = recoverCursorSession(root, {
+      transcriptPath: transcript,
+      recoveryId: 'malformed-prefix-snap',
+      now: fixedNow,
+    });
+
+    // child-c must NOT be treated as W_PARENT_OUTSIDE_RETAINED_TAIL
+    expect(snapshot.warnings.some((w) => w.code === 'W_PARENT_OUTSIDE_RETAINED_TAIL')).toBe(false);
+    // Instead it must be marked W_CHAIN_UNVERIFIED
+    const unverified = snapshot.warnings.filter((w) => w.code === 'W_CHAIN_UNVERIFIED');
+    expect(unverified).toHaveLength(1);
+    expect(unverified[0]!.detail).toContain('corrupt-parent');
+  });
 });

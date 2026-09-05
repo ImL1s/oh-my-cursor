@@ -100,20 +100,18 @@ class LineRingBuffer {
   }
 }
 
-function extractIdFromLine(line: string): string | undefined {
+function extractIdFromLine(line: string): { validId: string | null; malformed: boolean } {
   try {
     const parsed = JSON.parse(line) as unknown;
     if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
       const record = parsed as Record<string, unknown>;
       const id = [record.id, record.uuid, record.message_id].find((v): v is string => typeof v === 'string');
-      if (id !== undefined) return id;
+      return { validId: id ?? null, malformed: false };
     }
+    return { validId: null, malformed: true };
   } catch {
-    // Fast regex fallback for lines with slight syntax quirks
-    const match = /(?:"id"|"uuid"|"message_id")\s*:\s*"([^"\\]+)"/.exec(line);
-    if (match) return match[1];
+    return { validId: null, malformed: true };
   }
-  return undefined;
 }
 
 /** Copies only the bounded tail of an explicitly supplied JSONL file into immutable project state. */
@@ -265,6 +263,7 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
     }
 
     const foundInPrefix = new Set<string>();
+    const unverifiedInPrefix = new Set<string>();
     let chainScanError = false;
 
     if (missingTailParents.size > 0 && truncated) {
@@ -289,10 +288,16 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
             prefixRemainder = prefixRemainder.slice(newlineIndex + 1);
             prefixLinesRead++;
 
-            const id = extractIdFromLine(lineStr);
-            if (id !== undefined && missingTailParents.has(id)) {
-              foundInPrefix.add(id);
+            const { validId, malformed } = extractIdFromLine(lineStr);
+            if (validId !== null && missingTailParents.has(validId)) {
+              foundInPrefix.add(validId);
               if (foundInPrefix.size === missingTailParents.size) break;
+            } else if (malformed) {
+              for (const parent of missingTailParents) {
+                if (!foundInPrefix.has(parent) && lineStr.includes(parent)) {
+                  unverifiedInPrefix.add(parent);
+                }
+              }
             }
             if (prefixLinesRead >= prefixLinesCount) break;
           }
@@ -321,6 +326,12 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
             code: 'W_PARENT_OUTSIDE_RETAINED_TAIL',
             line: ref.line,
             detail: `parent ${ref.parent} located outside retained tail in omitted prefix`,
+          });
+        } else if (unverifiedInPrefix.has(ref.parent)) {
+          warnings.push({
+            code: 'W_CHAIN_UNVERIFIED',
+            line: ref.line,
+            detail: `parent ${ref.parent} unverified due to malformed prefix record`,
           });
         } else {
           warnings.push({
