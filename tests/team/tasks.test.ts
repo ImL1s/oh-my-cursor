@@ -1650,5 +1650,51 @@ describe('team tasks lifecycle & generation fencing', { timeout: 20_000 }, () =>
       if (!retry.ok) return;
       expect(retry.task.claim?.generation).toBe(3);
     });
+
+    it('normalizes legacy active claim with absent generation and assigns next claim generation 2', async () => {
+      const { root, teamName } = workspace();
+      const task = await createTask(root, teamName, { subject: 'Legacy active claim', description: 'desc' });
+
+      // Directly write legacy un-upgraded snapshot: active claim with no generation and no last_claim_generation
+      const legacyTask = {
+        schema_version: 1,
+        id: task.id,
+        version: 1,
+        subject: task.subject,
+        description: task.description,
+        status: 'in_progress',
+        owner: 'worker-1',
+        created_at: '2026-07-31T00:00:00.000Z',
+        claim: {
+          owner: 'worker-1',
+          token: 'legacy-token',
+          leased_until: new Date(Date.now() + 300_000).toISOString(),
+        },
+      };
+      fs.writeFileSync(
+        path.join(teamTasksDir(root, teamName), `task-${task.id}.json`),
+        JSON.stringify(legacyTask, null, 2),
+        'utf8',
+      );
+
+      // Read task: should be normalized with generation 1 AND last_claim_generation 1
+      const read = await readTask(root, teamName, task.id);
+      expect(read).not.toBeNull();
+      expect(read?.claim?.generation).toBe(1);
+      expect(read?.last_claim_generation).toBe(1);
+
+      // Release the claim back to pending
+      const released = await releaseTaskClaim(root, teamName, task.id, 'legacy-token', 'worker-1');
+      expect(released.ok).toBe(true);
+      if (!released.ok) return;
+      expect(released.task.last_claim_generation).toBe(1);
+
+      // Next claim MUST allocate generation 2, preserving monotonic generation fence
+      const nextClaim = await claimTask(root, teamName, task.id, 'worker-2');
+      expect(nextClaim.ok).toBe(true);
+      if (!nextClaim.ok) return;
+      expect(nextClaim.task.claim?.generation).toBe(2);
+      expect(nextClaim.task.last_claim_generation).toBe(2);
+    });
   });
 });

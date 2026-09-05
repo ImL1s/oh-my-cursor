@@ -22,6 +22,40 @@ import {
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 
+function makeMockProcessRuntime(options: {
+  alivePids?: Set<number>;
+  startTimes?: Map<number, string>;
+  ambiguousPids?: Map<number, string>;
+  platform?: NodeJS.Platform;
+}) {
+  const alive = options.alivePids ?? new Set<number>();
+  const startTimes = options.startTimes ?? new Map<number, string>();
+  const ambiguous = options.ambiguousPids ?? new Map<number, string>();
+  const platform = options.platform ?? 'darwin';
+  return {
+    platform,
+    readFile: () => '',
+    execFile: (_file: string, args: readonly string[]) => {
+      const pidStr = args[args.indexOf('-p') + 1];
+      const pid = Number(pidStr);
+      const customTime = startTimes.get(pid);
+      if (customTime !== undefined) {
+        return `${customTime}\n`;
+      }
+      return 'Mon Sep  5 00:00:00 2026\n';
+    },
+    probePid: (pid: number) => {
+      if (ambiguous.has(pid)) {
+        return { status: 'ambiguous' as const, reason: ambiguous.get(pid)! };
+      }
+      if (alive.has(pid)) {
+        return { status: 'alive' as const };
+      }
+      return { status: 'dead' as const };
+    },
+  };
+}
+
 function workspace(teamName = 'api-team') {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-api-'));
   roots.push(dir);
@@ -655,7 +689,7 @@ describe('team api interop (P0)', () => {
           owned_paths: ['src/one'],
           pane_target: '%1',
           pane_pid: 12345,
-          pane_start_identity: 'worker-pane-start-12345',
+          pane_start_identity: 'darwin:worker-pane-start-12345',
           pane_start_identity_proven: true,
           process_group_id: 12345,
           argv: ['omcu', 'worker'],
@@ -671,12 +705,17 @@ describe('team api interop (P0)', () => {
       team_name: teamName,
       task_id: '1',
       worker: 'one',
-    }, root);
+    }, root, {
+      processRuntime: makeMockProcessRuntime({
+        alivePids: new Set([12345]),
+        startTimes: new Map([[12345, 'worker-pane-start-12345']]),
+      }),
+    });
     expect(claimWithManifest.ok).toBe(true);
     const taskWith = await readTask(root, teamName, '1');
     expect(taskWith?.claim?.worker_process_identity).toEqual({
       pid: 12345,
-      start_identity: 'worker-pane-start-12345',
+      start_identity: 'darwin:worker-pane-start-12345',
       start_identity_proven: true,
     });
 
@@ -757,7 +796,7 @@ describe('team api interop (P0)', () => {
           owned_paths: ['src/a'],
           pane_target: '%1',
           pane_pid: 24680,
-          pane_start_identity: 'start-pane-24680',
+          pane_start_identity: 'darwin:start-pane-24680',
           pane_start_identity_proven: true,
           process_group_id: 24680,
           argv: ['omcu', 'worker'],
@@ -774,14 +813,59 @@ describe('team api interop (P0)', () => {
       team_name: teamName,
       task_id: '1',
       worker: 'worker-a',
-    }, root);
+    }, root, {
+      processRuntime: makeMockProcessRuntime({
+        alivePids: new Set([24680]),
+        startTimes: new Map([[24680, 'start-pane-24680']]),
+      }),
+    });
     expect(claimAfter.ok).toBe(true);
     const task = await readTask(root, teamName, '1');
     expect(task?.claim?.worker_process_identity).toEqual({
       pid: 24680,
-      start_identity: 'start-pane-24680',
+      start_identity: 'darwin:start-pane-24680',
       start_identity_proven: true,
     });
+
+    // 4. Dead worker identity is rejected
+    await executeTeamApiOperation('release-task-claim', {
+      team_name: teamName,
+      task_id: '1',
+      claim_token: (claimAfter.data as { claimToken: string }).claimToken,
+      worker: 'worker-a',
+    }, root);
+
+    const claimDead = await executeTeamApiOperation('claim-task', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'worker-a',
+    }, root, {
+      processRuntime: makeMockProcessRuntime({
+        alivePids: new Set(),
+      }),
+    });
+    expect(claimDead.ok).toBe(false);
+    expect((claimDead as { error?: { code: string } }).error?.code).toBe('worker_process_identity_required');
+
+    // 5. Stopped team is rejected
+    store.write({
+      ...store.read(teamName),
+      stopping_at: '2026-07-31T00:59:00.000Z',
+      stopping_worker_ids: ['worker-a'],
+      stopped_at: '2026-07-31T01:00:00.000Z',
+    });
+    const claimStopped = await executeTeamApiOperation('claim-task', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'worker-a',
+    }, root, {
+      processRuntime: makeMockProcessRuntime({
+        alivePids: new Set([24680]),
+        startTimes: new Map([[24680, 'start-pane-24680']]),
+      }),
+    });
+    expect(claimStopped.ok).toBe(false);
+    expect((claimStopped as { error?: { code: string } }).error?.code).toBe('worker_process_identity_required');
   });
 
   it('rejects reopen-task via CLI without --supervisor flag and succeeds with --supervisor', async () => {

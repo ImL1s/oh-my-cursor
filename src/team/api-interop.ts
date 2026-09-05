@@ -1,4 +1,4 @@
-import { processNonceSha256 } from '../runtime/process-identity.js';
+import { classifyProcessLiveness, processNonceSha256, type ProcessIdentityRuntime } from '../runtime/process-identity.js';
 import type { StateRoot } from '../runtime/state-root.js';
 import { listMailboxMessages, markMessageDelivered, sendDirectMessage } from './mailbox.js';
 import { TeamManifestStore } from './manifest.js';
@@ -41,6 +41,7 @@ export type TeamApiOperation = (typeof TEAM_API_OPERATIONS)[number];
 
 export interface TeamApiExecutionOptions {
   readonly isSupervisor?: boolean;
+  readonly processRuntime?: ProcessIdentityRuntime;
 }
 
 export type TeamApiEnvelope =
@@ -73,6 +74,7 @@ function resolveLongLivedWorkerIdentity(
   teamName: string,
   worker: string,
   args?: Record<string, unknown>,
+  runtime?: ProcessIdentityRuntime,
 ): WorkerProcessIdentityClaim | undefined {
   if (args?.process_identity && typeof args.process_identity === 'object' && !Array.isArray(args.process_identity)) {
     const p = args.process_identity as Record<string, unknown>;
@@ -93,13 +95,25 @@ function resolveLongLivedWorkerIdentity(
     const store = new TeamManifestStore(root);
     if (store.exists(teamName)) {
       const manifest = store.read(teamName);
+      if (manifest.stopped_at !== null) {
+        return undefined;
+      }
       const entry = manifest.workers.find((w) => w.id === worker);
       if (entry && typeof entry.pane_pid === 'number' && entry.pane_start_identity) {
-        return {
+        const candidate: WorkerProcessIdentityClaim = {
           pid: entry.pane_pid,
           start_identity: entry.pane_start_identity,
           start_identity_proven: entry.pane_start_identity_proven ?? true,
         };
+        const liveness = classifyProcessLiveness({
+          pid: candidate.pid,
+          start_identity: candidate.start_identity,
+          start_identity_proven: candidate.start_identity_proven ?? false,
+        }, runtime);
+        if (liveness.status !== 'active') {
+          return undefined;
+        }
+        return candidate;
       }
     }
   } catch {
@@ -408,7 +422,7 @@ export async function executeTeamApiOperation(
         }
         const leaseMs = isFiniteInteger(args.lease_ms) ? (args.lease_ms as number) : undefined;
         const config = readTeamConfig(root, teamName);
-        const processIdentity = resolveLongLivedWorkerIdentity(root, teamName, worker, args);
+        const processIdentity = resolveLongLivedWorkerIdentity(root, teamName, worker, args, options?.processRuntime);
         if (config?.tmux_session && processIdentity === undefined) {
           return fail(operation, 'worker_process_identity_required', 'Worker process identity must be published via supervisor manifest or provided in arguments before claiming tasks');
         }
@@ -416,6 +430,7 @@ export async function executeTeamApiOperation(
           expectedVersion: (rawExpected as number | undefined) ?? null,
           ...(leaseMs !== undefined ? { leaseMs } : {}),
           ...(processIdentity !== undefined ? { processIdentity } : {}),
+          ...(options?.processRuntime !== undefined ? { processRuntime: options.processRuntime } : {}),
         });
         return taskOpResult(operation, result as { ok: boolean; error?: string } & Record<string, unknown>);
       }
@@ -434,6 +449,7 @@ export async function executeTeamApiOperation(
           ...(generation !== undefined ? { generation } : {}),
           ...(leaseMs !== undefined ? { leaseMs } : {}),
           ...(heartbeatSequence !== undefined ? { heartbeatSequence } : {}),
+          ...(options?.processRuntime !== undefined ? { processRuntime: options.processRuntime } : {}),
         });
         return taskOpResult(operation, result as { ok: boolean; error?: string } & Record<string, unknown>);
       }
@@ -460,7 +476,7 @@ export async function executeTeamApiOperation(
         }
         const leaseMs = isFiniteInteger(args.lease_ms) ? (args.lease_ms as number) : undefined;
         const config = readTeamConfig(root, teamName);
-        const newProcessIdentity = resolveLongLivedWorkerIdentity(root, teamName, worker, args);
+        const newProcessIdentity = resolveLongLivedWorkerIdentity(root, teamName, worker, args, options?.processRuntime);
         if (!options?.isSupervisor && config?.tmux_session && newProcessIdentity === undefined) {
           return fail(operation, 'worker_process_identity_required', 'Worker process identity must be published via supervisor manifest or provided in arguments before reclaiming tasks');
         }
@@ -471,6 +487,7 @@ export async function executeTeamApiOperation(
           ...(expectedVersion !== undefined ? { expectedVersion } : {}),
           ...(leaseMs !== undefined ? { leaseMs } : {}),
           ...(newProcessIdentity !== undefined ? { newProcessIdentity } : {}),
+          ...(options?.processRuntime !== undefined ? { processRuntime: options.processRuntime } : {}),
         });
         return taskOpResult(operation, result as { ok: boolean; error?: string } & Record<string, unknown>);
       }

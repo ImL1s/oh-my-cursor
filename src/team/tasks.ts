@@ -380,19 +380,13 @@ function isTeamTask(value: unknown): value is TeamTask {
 
 function normalizeTask(task: TeamTask): TeamTask {
   let normalized = task;
-  if (task.last_claim_generation === undefined) {
-    normalized = {
-      ...normalized,
-      last_claim_generation: task.claim ? task.claim.generation : 0,
-    };
-  }
-  if (normalized.claim) {
-    const claim = normalized.claim;
-    let updatedClaim = claim;
-    if (!claim.token_sha256 && claim.token) {
+  let normalizedClaim = task.claim;
+  if (normalizedClaim) {
+    let updatedClaim = normalizedClaim;
+    if (!normalizedClaim.token_sha256 && normalizedClaim.token) {
       updatedClaim = {
         ...updatedClaim,
-        token_sha256: crypto.createHash('sha256').update(claim.token).digest('hex'),
+        token_sha256: crypto.createHash('sha256').update(normalizedClaim.token).digest('hex'),
       };
     }
     if (updatedClaim.generation === undefined) {
@@ -423,9 +417,17 @@ function normalizeTask(task: TeamTask): TeamTask {
         acquired_at: new Date(derivedMs).toISOString(),
       };
     }
+    normalizedClaim = updatedClaim;
     normalized = {
       ...normalized,
-      claim: updatedClaim,
+      claim: normalizedClaim,
+    };
+  }
+
+  if (normalized.last_claim_generation === undefined) {
+    normalized = {
+      ...normalized,
+      last_claim_generation: normalizedClaim ? normalizedClaim.generation : 0,
     };
   }
   return normalized;
