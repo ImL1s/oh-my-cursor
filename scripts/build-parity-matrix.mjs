@@ -822,13 +822,18 @@ const omoItems = [
   }
 ];
 
-// Helper to convert array to SourceItem objects
+// Helper to convert array to SourceItem objects with collision detection
 function buildSourceItems(items, sourceProject, commit, defaultLicenseClass, prefix) {
+  const seenIds = new Set();
   return items.map((item) => {
     const rawContent = `${sourceProject}:${commit}:${item.path}:${item.name}:${item.family}`;
     const hash = sha256(rawContent);
     const cleanName = item.name.replace(/^(omc|omx|omo)-/, '');
     const id = `${prefix}_${cleanName.replace(/[^a-z0-9]/g, '_')}`;
+    if (seenIds.has(id)) {
+      throw new Error(`Upstream ID collision in ${sourceProject}: duplicate ID '${id}' generated for item '${item.name}'`);
+    }
+    seenIds.add(id);
     return {
       id,
       source_project: sourceProject,
@@ -854,6 +859,15 @@ function buildSourceItems(items, sourceProject, commit, defaultLicenseClass, pre
 const omcSourceItems = buildSourceItems(omcItems, 'Yeachan-Heo/oh-my-claudecode', '41a4c0f77144c5beb5f5f000a89cff379c680606', 'mit', 'omc');
 const omxSourceItems = buildSourceItems(omxItems, 'Yeachan-Heo/oh-my-codex', 'f43034aad68ed08dd886bf7f209a0415b8a7adb4', 'mit', 'omx');
 const omoSourceItems = buildSourceItems(omoItems, 'code-yeongyu/oh-my-openagent', '888a26b6182ffbc5369cda3d35bd3eafb389dd96', 'clean_room_required', 'omo');
+
+// Global uniqueness check across all upstream locks
+const globalUpstreamIds = new Set();
+for (const item of [...omcSourceItems, ...omxSourceItems, ...omoSourceItems]) {
+  if (globalUpstreamIds.has(item.id)) {
+    throw new Error(`Global upstream ID collision across projects: duplicate ID '${item.id}'`);
+  }
+  globalUpstreamIds.add(item.id);
+}
 
 const omcLock = {
   schema_version: 1,

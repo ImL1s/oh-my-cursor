@@ -109,8 +109,15 @@ export function validateParityLocks(locks: ParityLocks): ParityValidationResult 
   const totalUpstream = locks.omc.items.length + locks.omx.items.length + locks.omo.items.length;
   const allUpstreamItems = [...locks.omc.items, ...locks.omx.items, ...locks.omo.items];
 
+  const seenUpstreamIds = new Set<string>();
   for (const item of allUpstreamItems) {
-    if (!item.id) errors.push(`Missing id on upstream item: ${JSON.stringify(item)}`);
+    if (!item.id) {
+      errors.push(`Missing id on upstream item: ${JSON.stringify(item)}`);
+    } else if (seenUpstreamIds.has(item.id)) {
+      errors.push(`Duplicate upstream item id detected: '${item.id}' in ${item.source_project}`);
+    } else {
+      seenUpstreamIds.add(item.id);
+    }
     if (!item.hash_sha256 || item.hash_sha256.length !== 64) {
       errors.push(`Invalid sha256 hash on upstream item ${item.id}`);
     }
@@ -120,7 +127,15 @@ export function validateParityLocks(locks: ParityLocks): ParityValidationResult 
 
   // 3. 100% Upstream Source Coverage Check
   const mappedAnalogIds = new Set<string>();
+  const seenContractIds = new Set<string>();
   for (const contract of locks.contract.contracts) {
+    if (!contract.canonical_id) {
+      errors.push(`Missing canonical_id on contract: ${JSON.stringify(contract)}`);
+    } else if (seenContractIds.has(contract.canonical_id)) {
+      errors.push(`Duplicate contract canonical_id detected: '${contract.canonical_id}'`);
+    } else {
+      seenContractIds.add(contract.canonical_id);
+    }
     for (const [key, analogId] of Object.entries(contract.source_analogs)) {
       if (analogId && typeof analogId === 'string') {
         mappedAnalogIds.add(analogId);

@@ -341,6 +341,45 @@ describe('Parity Contract Matrix & Clean-Room Provenance Lock (Issue #25)', () =
       expect(result.errors.some((e) => e.includes('Unknown contract disposition: \'extra_unknown_disp\''))).toBe(true);
     });
 
+    it('detects duplicate upstream item ID collision in upstream locks', () => {
+      const locks = loadParityLocks(REPO_ROOT);
+      const duplicateItem = {
+        ...locks.omc.items[0],
+        path: 'different/path/to/item.md'
+      };
+      const clonedLocks: ParityLocks = {
+        ...locks,
+        omc: {
+          ...locks.omc,
+          items: [...locks.omc.items, duplicateItem],
+          total_items: locks.omc.items.length + 1
+        }
+      };
+
+      const result = validateParityLocks(clonedLocks);
+      expect(result.valid).toBe(false);
+      expect(result.errors.some((e) => e.includes(`Duplicate upstream item id detected: '${locks.omc.items[0].id}'`))).toBe(true);
+    });
+
+    it('detects duplicate contract canonical_id in contract lock', () => {
+      const locks = loadParityLocks(REPO_ROOT);
+      const duplicateContract = {
+        ...locks.contract.contracts[0],
+        name: 'Duplicate Contract Name'
+      };
+      const clonedLocks: ParityLocks = {
+        ...locks,
+        contract: {
+          ...locks.contract,
+          contracts: [...locks.contract.contracts, duplicateContract]
+        }
+      };
+
+      const result = validateParityLocks(clonedLocks);
+      expect(result.valid).toBe(false);
+      expect(result.errors.some((e) => e.includes(`Duplicate contract canonical_id detected: '${locks.contract.contracts[0].canonical_id}'`))).toBe(true);
+    });
+
     it('detects malformed SDK package integrity digest', () => {
       const locks = loadParityLocks(REPO_ROOT);
       const clonedLocksPrefix: ParityLocks = {
