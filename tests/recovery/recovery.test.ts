@@ -844,6 +844,53 @@ describe('Recovery streaming and truthful chain validation (#21)', () => {
     expect(summaryBroken!.detail).not.toContain('super-secret-12345');
     expect(summaryBroken!.detail).toContain('<redacted>');
   });
+
+  it('rejects warnings in readRecovery when source_lines is 0', () => {
+    const cwd = workspace();
+    const root = projectStateRoot(cwd);
+    const emptyTranscript = path.join(cwd, 'empty.jsonl');
+    fs.writeFileSync(emptyTranscript, '');
+
+    const snapshot = recoverCursorSession(root, {
+      transcriptPath: emptyTranscript,
+      recoveryId: 'empty-test',
+      now: fixedNow,
+    });
+
+    // Tamper snapshot to inject a warning on line 1 when source_lines is 0
+    const snapshotPath = path.join(root.path, 'recovery', 'empty-test', 'snapshot.json');
+    const tampered = {
+      ...snapshot,
+      warnings: [{ code: 'W_BROKEN_CHAIN', line: 1, detail: 'missing parent ghost' }],
+    };
+    fs.chmodSync(snapshotPath, 0o600);
+    fs.writeFileSync(snapshotPath, JSON.stringify(tampered, null, 2));
+    fs.chmodSync(snapshotPath, 0o400);
+
+    expect(() => readRecovery(root, 'empty-test')).toThrow('E_RECOVERY_INVALID');
+  });
+
+  it('bounds lines exceeding MAX_LINE_BYTES by UTF-8 bytes for multibyte characters', () => {
+    const cwd = workspace();
+    const root = projectStateRoot(cwd);
+    const transcript = path.join(cwd, 'multibyte-oversized.jsonl');
+
+    // 500,000 Chinese characters: length is 500,000 (< 1 MiB in chars), but 1.5 MiB in UTF-8 bytes (> MAX_LINE_BYTES)
+    const longMultibyte = '你'.repeat(500000);
+    fs.writeFileSync(transcript, `${longMultibyte}\n`);
+
+    const snapshot = recoverCursorSession(root, {
+      transcriptPath: transcript,
+      recoveryId: 'multibyte-test',
+      now: fixedNow,
+    });
+
+    expect(snapshot.source_lines).toBe(1);
+    expect(snapshot.copied_lines).toBe(1);
+    const rawRecord = (snapshot.records[0] as { raw: string }).raw;
+    expect(Buffer.byteLength(rawRecord, 'utf8')).toBeLessThanOrEqual(MAX_LINE_BYTES);
+  });
 });
+
 
 

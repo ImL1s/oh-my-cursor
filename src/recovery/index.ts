@@ -166,6 +166,26 @@ function lineMatchesParent(lineStr: string, parent: string): boolean {
   }
 }
 
+function truncateToUtf8Bytes(str: string, maxBytes: number): string {
+  const buf = Buffer.from(str, 'utf8');
+  if (buf.length <= maxBytes) return str;
+  let end = maxBytes;
+  while (end > 0 && (buf[end]! & 0xc0) === 0x80) {
+    end--;
+  }
+  if (end < maxBytes) {
+    const lead = buf[end]!;
+    let seqLen = 1;
+    if ((lead & 0xe0) === 0xc0) seqLen = 2;
+    else if ((lead & 0xf0) === 0xe0) seqLen = 3;
+    else if ((lead & 0xf8) === 0xf0) seqLen = 4;
+    if (end + seqLen > maxBytes) {
+      return buf.toString('utf8', 0, end);
+    }
+  }
+  return buf.toString('utf8', 0, maxBytes);
+}
+
 function buildCandidatesRegex(candidates: Set<string>): RegExp | null {
   const list = Array.from(candidates).flatMap(candidateRepresentations).filter((c) => c.length > 0);
   if (list.length === 0) return null;
@@ -248,12 +268,14 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
         if (lineStr.endsWith('\r')) lineStr = lineStr.slice(0, -1);
         remainder = remainder.slice(newlineIndex + 1);
         sourceLines++;
-        if (lineStr.length > MAX_LINE_BYTES) lineStr = lineStr.slice(0, MAX_LINE_BYTES);
+        if (Buffer.byteLength(lineStr, 'utf8') > MAX_LINE_BYTES) {
+          lineStr = truncateToUtf8Bytes(lineStr, MAX_LINE_BYTES);
+        }
         ringBuffer.push(lineStr, false);
       }
 
-      if (remainder.length > MAX_LINE_BYTES) {
-        remainder = remainder.slice(0, MAX_LINE_BYTES);
+      if (Buffer.byteLength(remainder, 'utf8') > MAX_LINE_BYTES) {
+        remainder = truncateToUtf8Bytes(remainder, MAX_LINE_BYTES);
         discardingOversized = true;
       }
     }
@@ -278,7 +300,9 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
       if (lineStr.endsWith('\r')) lineStr = lineStr.slice(0, -1);
       remainder = remainder.slice(newlineIndex + 1);
       sourceLines++;
-      if (lineStr.length > MAX_LINE_BYTES) lineStr = lineStr.slice(0, MAX_LINE_BYTES);
+      if (Buffer.byteLength(lineStr, 'utf8') > MAX_LINE_BYTES) {
+        lineStr = truncateToUtf8Bytes(lineStr, MAX_LINE_BYTES);
+      }
       ringBuffer.push(lineStr, false);
     }
 
@@ -289,7 +313,9 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
       let lineStr = remainder;
       if (lineStr.endsWith('\r')) lineStr = lineStr.slice(0, -1);
       sourceLines++;
-      if (lineStr.length > MAX_LINE_BYTES) lineStr = lineStr.slice(0, MAX_LINE_BYTES);
+      if (Buffer.byteLength(lineStr, 'utf8') > MAX_LINE_BYTES) {
+        lineStr = truncateToUtf8Bytes(lineStr, MAX_LINE_BYTES);
+      }
       ringBuffer.push(lineStr, true);
     }
 
@@ -468,13 +494,15 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
             prefixRemainder = prefixRemainder.slice(newlineIndex + 1);
             prefixLinesRead++;
 
-            if (lineStr.length > MAX_LINE_BYTES) lineStr = lineStr.slice(0, MAX_LINE_BYTES);
+            if (Buffer.byteLength(lineStr, 'utf8') > MAX_LINE_BYTES) {
+              lineStr = truncateToUtf8Bytes(lineStr, MAX_LINE_BYTES);
+            }
             if (checkPrefixLine(lineStr)) break;
             if (prefixLinesRead >= prefixLinesCount) break;
           }
 
-          if (prefixRemainder.length > MAX_LINE_BYTES) {
-            prefixOversizedLine = prefixRemainder.slice(0, MAX_LINE_BYTES);
+          if (Buffer.byteLength(prefixRemainder, 'utf8') > MAX_LINE_BYTES) {
+            prefixOversizedLine = truncateToUtf8Bytes(prefixRemainder, MAX_LINE_BYTES);
             prefixRemainder = '';
             prefixDiscardingOversized = true;
           }

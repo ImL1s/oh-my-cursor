@@ -133,8 +133,7 @@ export function validateRecoveryWarning(
   if (typeof warning.line !== 'number' || !Number.isSafeInteger(warning.line)) {
     throw new Error('E_RECOVERY_INVALID');
   }
-  const maxLine = Math.max(1, sourceLines);
-  if (warning.line < 1 || warning.line > maxLine) {
+  if (sourceLines <= 0 || warning.line < 1 || warning.line > sourceLines) {
     throw new Error('E_RECOVERY_INVALID');
   }
   if (typeof warning.detail !== 'string') {
