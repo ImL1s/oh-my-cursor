@@ -102,6 +102,22 @@
       "types": "./dist/src/tools/index.d.ts",
       "import": "./dist/src/tools/index.js"
     },
+    "./tasks": {
+      "types": "./dist/src/tasks/index.d.ts",
+      "import": "./dist/src/tasks/index.js"
+    },
+    "./dag": {
+      "types": "./dist/src/dag/index.d.ts",
+      "import": "./dist/src/dag/index.js"
+    },
+    "./cloud-orchestration": {
+      "types": "./dist/src/cloud-orchestration/index.d.ts",
+      "import": "./dist/src/cloud-orchestration/index.js"
+    },
+    "./automations": {
+      "types": "./dist/src/automations/index.d.ts",
+      "import": "./dist/src/automations/index.js"
+    },
     "./package.json": "./package.json"
   },
   "bin": {

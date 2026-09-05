@@ -26,3 +26,40 @@ export interface TeamCollection { readonly team_id: string; readonly outputs: Re
 export interface TeamCommandResult { readonly code: number; readonly stdout: string; readonly stderr: string }
 export type TeamCommandRunner = (executable: string, argv: readonly string[], cwd: string) => Promise<TeamCommandResult>;
 export type ProcessGroupKiller = (processGroupId: number, signal: NodeJS.Signals) => void;
+
+export interface NativeTeamWorkerManifest {
+  readonly id: string;
+  readonly role?: string | undefined;
+  readonly cwd: string;
+  readonly owned_paths: readonly string[];
+  readonly agent_id: string;
+  readonly run_id: string;
+  readonly status: string;
+  readonly runtime: 'local' | 'cloud';
+}
+
+export interface NativeTeamManifest {
+  readonly schema_version: 2;
+  readonly team_id: string;
+  readonly capability_tier: 'native-cursor-team';
+  readonly native_cursor_team: true;
+  readonly workers: readonly NativeTeamWorkerManifest[];
+  readonly created_at: string;
+  readonly updated_at: string;
+  readonly stopped_at: string | null;
+}
+
+export interface NativeTeamStatus {
+  readonly team_id: string;
+  readonly capability_tier: 'native-cursor-team';
+  readonly native_cursor_team: true;
+  readonly active: boolean;
+  readonly workers: readonly {
+    readonly id: string;
+    readonly agent_id: string;
+    readonly run_id: string;
+    readonly status: string;
+    readonly runtime: 'local' | 'cloud';
+  }[];
+}
+

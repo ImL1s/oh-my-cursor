@@ -538,11 +538,36 @@ export const COMMAND_SCHEMAS: Readonly<Record<string, CommandSchema>> = Object.f
   team: {
     requireAction: true,
     actions: {
-      start: { stateAccess: 'write-ensure', options: [{ name: '--id', kind: 'string', required: true, pattern: TEAM_ID_PATTERN }, workersJson('team-workers')] },
-      run: { stateAccess: 'write-ensure', options: [{ name: '--id', kind: 'string', required: true, pattern: TEAM_ID_PATTERN }, workersJson('team-workers')] },
-      status: { stateAccess: 'read-existing', options: [{ name: '--id', kind: 'string', required: true, pattern: TEAM_ID_PATTERN }] },
+      start: {
+        stateAccess: 'write-ensure',
+        options: [
+          { name: '--id', kind: 'string', required: true, pattern: TEAM_ID_PATTERN },
+          workersJson('team-workers'),
+          { name: '--native', kind: 'flag' },
+          { name: '--runtime', kind: 'string', enum: ['local', 'cloud'] },
+        ],
+      },
+      run: {
+        stateAccess: 'write-ensure',
+        options: [
+          { name: '--id', kind: 'string', required: true, pattern: TEAM_ID_PATTERN },
+          workersJson('team-workers'),
+          { name: '--native', kind: 'flag' },
+          { name: '--runtime', kind: 'string', enum: ['local', 'cloud'] },
+        ],
+      },
+      status: {
+        stateAccess: 'read-existing',
+        options: [
+          { name: '--id', kind: 'string', required: true, pattern: TEAM_ID_PATTERN },
+          { name: '--native', kind: 'flag' },
+        ],
+      },
       collect: { stateAccess: 'read-existing', options: [{ name: '--id', kind: 'string', required: true, pattern: TEAM_ID_PATTERN }] },
       stop: { stateAccess: 'write-ensure', options: [{ name: '--id', kind: 'string', required: true, pattern: TEAM_ID_PATTERN }] },
+      monitor: { stateAccess: 'read-existing', options: [{ name: '--id', kind: 'string', required: true, pattern: TEAM_ID_PATTERN }] },
+      resume: { stateAccess: 'write-existing', options: [{ name: '--id', kind: 'string', required: true, pattern: TEAM_ID_PATTERN }] },
+      shutdown: { stateAccess: 'write-existing', options: [{ name: '--id', kind: 'string', required: true, pattern: TEAM_ID_PATTERN }] },
       api: {
         stateAccess: 'write-ensure',
         options: [
@@ -553,6 +578,96 @@ export const COMMAND_SCHEMAS: Readonly<Record<string, CommandSchema>> = Object.f
         ],
         positionals: [{ name: 'operation' }],
         exactlyOneOf: [['--op', 'operation']],
+      },
+    },
+  },
+  task: {
+    requireAction: true,
+    actions: {
+      start: {
+        stateAccess: 'write-ensure',
+        options: [
+          { name: '--agent', kind: 'string', required: true },
+          { name: '--runtime', kind: 'string', enum: ['local', 'cloud'], default: 'local' },
+          { name: '--prompt', kind: 'string', required: true },
+          { name: '--background', kind: 'flag' },
+          { name: '--id', kind: 'string', pattern: SAFE_KEY_PATTERN },
+          { name: '--worktree', kind: 'string' },
+          { name: '--workflow', kind: 'string', pattern: SAFE_KEY_PATTERN },
+        ],
+      },
+      list: {
+        stateAccess: 'read-existing',
+        options: [
+          { name: '--workflow', kind: 'string', pattern: SAFE_KEY_PATTERN },
+          { name: '--status', kind: 'string' },
+        ],
+      },
+      status: {
+        stateAccess: 'read-existing',
+        options: [{ name: '--id', kind: 'string', pattern: SAFE_KEY_PATTERN }],
+        positionals: [{ name: 'id', pattern: SAFE_KEY_PATTERN }],
+        exactlyOneOf: [['--id', 'id']],
+      },
+      output: {
+        stateAccess: 'read-existing',
+        options: [{ name: '--id', kind: 'string', pattern: SAFE_KEY_PATTERN }],
+        positionals: [{ name: 'id', pattern: SAFE_KEY_PATTERN }],
+        exactlyOneOf: [['--id', 'id']],
+      },
+      cancel: {
+        stateAccess: 'write-existing',
+        options: [{ name: '--id', kind: 'string', pattern: SAFE_KEY_PATTERN }],
+        positionals: [{ name: 'id', pattern: SAFE_KEY_PATTERN }],
+        exactlyOneOf: [['--id', 'id']],
+      },
+      resume: {
+        stateAccess: 'write-existing',
+        options: [{ name: '--id', kind: 'string', pattern: SAFE_KEY_PATTERN }],
+        positionals: [{ name: 'id', pattern: SAFE_KEY_PATTERN }],
+        exactlyOneOf: [['--id', 'id']],
+      },
+    },
+  },
+  dag: {
+    requireAction: true,
+    actions: {
+      run: {
+        stateAccess: 'write-ensure',
+        options: [
+          { name: '--file', kind: 'string', required: true },
+          { name: '--canvas', kind: 'flag' },
+          { name: '--workspace', kind: 'string' },
+        ],
+      },
+    },
+  },
+  automation: {
+    requireAction: true,
+    actions: {
+      plan: {
+        stateAccess: 'write-ensure',
+        options: [
+          { name: '--name', kind: 'string', required: true },
+          { name: '--cron', kind: 'string' },
+          { name: '--event', kind: 'string' },
+          { name: '--prompt', kind: 'string', required: true },
+          { name: '--agent', kind: 'string', default: 'omcu-worker' },
+          { name: '--runtime', kind: 'string', enum: ['local', 'cloud'], default: 'local' },
+          { name: '--id', kind: 'string', pattern: SAFE_KEY_PATTERN },
+        ],
+      },
+      status: {
+        stateAccess: 'read-existing',
+        options: [{ name: '--id', kind: 'string', pattern: SAFE_KEY_PATTERN }],
+      },
+      install: {
+        stateAccess: 'write-ensure',
+        options: [{ name: '--id', kind: 'string', required: true, pattern: SAFE_KEY_PATTERN }],
+      },
+      remove: {
+        stateAccess: 'write-ensure',
+        options: [{ name: '--id', kind: 'string', required: true, pattern: SAFE_KEY_PATTERN }],
       },
     },
   },
