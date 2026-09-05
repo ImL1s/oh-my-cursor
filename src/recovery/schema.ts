@@ -182,7 +182,10 @@ export function validateRecovery(
     if (typeof value.source_bytes !== 'number' || !Number.isSafeInteger(value.source_bytes) || value.source_bytes < 0 || value.source_bytes > MAX_SOURCE_BYTES) {
       throw new Error('E_RECOVERY_INVALID');
     }
-    if (typeof value.source_lines !== 'number' || !Number.isSafeInteger(value.source_lines) || value.source_lines < 0) {
+    if (typeof value.source_lines !== 'number' || !Number.isSafeInteger(value.source_lines) || value.source_lines < 0 || value.source_lines > value.source_bytes) {
+      throw new Error('E_RECOVERY_INVALID');
+    }
+    if ((value.source_lines === 0) !== (value.source_bytes === 0)) {
       throw new Error('E_RECOVERY_INVALID');
     }
     if (typeof value.copied_sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(value.copied_sha256)) throw new Error('E_RECOVERY_INVALID');

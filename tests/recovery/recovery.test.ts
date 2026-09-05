@@ -586,4 +586,37 @@ describe('Recovery streaming and truthful chain validation (#21)', () => {
     expect(unverified).toHaveLength(1);
     expect(unverified[0]!.detail).toContain('corrupt-parent');
   });
+
+  it('rejects snapshots with impossible source_lines and source_bytes combinations', () => {
+    const cwd = workspace();
+    const root = projectStateRoot(cwd);
+    const transcript = path.join(cwd, 'valid.jsonl');
+    fs.writeFileSync(transcript, '{"id":"m1"}\n');
+
+    const snap = recoverCursorSession(root, {
+      transcriptPath: transcript,
+      recoveryId: 'line-byte-check',
+      now: fixedNow,
+    });
+
+    const metadataPath = path.join(root.path, 'recovery', 'line-byte-check', 'snapshot.json');
+
+    // Case 1: positive line count with source_bytes: 0
+    fs.chmodSync(metadataPath, 0o600);
+    fs.writeFileSync(metadataPath, JSON.stringify({ ...snap, source_bytes: 0 }));
+    fs.chmodSync(metadataPath, 0o400);
+    expect(() => readRecovery(root, 'line-byte-check')).toThrow('E_RECOVERY_INVALID');
+
+    // Case 2: source_lines > source_bytes
+    fs.chmodSync(metadataPath, 0o600);
+    fs.writeFileSync(metadataPath, JSON.stringify({ ...snap, source_lines: 50, source_bytes: 10 }));
+    fs.chmodSync(metadataPath, 0o400);
+    expect(() => readRecovery(root, 'line-byte-check')).toThrow('E_RECOVERY_INVALID');
+
+    // Case 3: 0 lines with positive source_bytes
+    fs.chmodSync(metadataPath, 0o600);
+    fs.writeFileSync(metadataPath, JSON.stringify({ ...snap, source_lines: 0, source_bytes: 100 }));
+    fs.chmodSync(metadataPath, 0o400);
+    expect(() => readRecovery(root, 'line-byte-check')).toThrow('E_RECOVERY_INVALID');
+  });
 });
