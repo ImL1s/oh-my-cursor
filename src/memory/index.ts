@@ -8,6 +8,7 @@ import {
   cleanMemoryText,
   MAX_SEARCH_QUERY_LENGTH,
   safeMemoryId,
+  validateConflictPolicy,
   validateMemoryRecord,
   validateRawImportBundle,
   validIsoDate,
@@ -52,13 +53,26 @@ function readMemoryRecordFile(file: string, expectedId: string): ProjectMemory {
 
 function safeQuarantineFilename(originalName: string, nonce: string, timestamp: number): string {
   const suffix = `.corrupt-${timestamp}-${nonce}`;
-  const maxTotalLength = 200;
-  const maxBaseLength = maxTotalLength - suffix.length;
-  let base = originalName;
-  if (base.length > maxBaseLength) {
-    const hash = crypto.createHash('sha256').update(originalName).digest('hex').slice(0, 16);
-    base = `${originalName.slice(0, maxBaseLength - 17)}-${hash}`;
+  const suffixBytes = Buffer.byteLength(suffix, 'utf8');
+  const maxTotalBytes = 200;
+  const maxBaseBytes = maxTotalBytes - suffixBytes;
+
+  if (Buffer.byteLength(originalName, 'utf8') <= maxBaseBytes) {
+    return `${originalName}${suffix}`;
   }
+
+  const hash = crypto.createHash('sha256').update(originalName).digest('hex').slice(0, 16);
+  const hashSuffix = `-${hash}`;
+  const hashSuffixBytes = Buffer.byteLength(hashSuffix, 'utf8');
+  const allowedPrefixBytes = maxBaseBytes - hashSuffixBytes;
+
+  const buf = Buffer.from(originalName, 'utf8');
+  let prefix = buf.subarray(0, allowedPrefixBytes).toString('utf8');
+  while (Buffer.byteLength(prefix, 'utf8') > allowedPrefixBytes || prefix.endsWith('\uFFFD')) {
+    prefix = prefix.slice(0, -1);
+  }
+
+  const base = `${prefix}${hashSuffix}`;
   return `${base}${suffix}`;
 }
 
@@ -228,7 +242,7 @@ export class ProjectMemoryStore {
     readonly resolvedRecords: Map<string, ProjectMemory>;
   } {
     const validatedBundle = validateRawImportBundle(bundle);
-    const conflictPolicy: MemoryConflictPolicy = options.conflict ?? 'reject';
+    const conflictPolicy: MemoryConflictPolicy = validateConflictPolicy(options.conflict);
 
     // 1. Validate each record in bundle
     const validatedIncoming: ProjectMemory[] = [];

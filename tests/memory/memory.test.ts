@@ -661,9 +661,51 @@ describe('ProjectMemoryStore transactional, conflict-aware, and schema-validated
     const quarantinedTo = report.corrupt_records[0]?.quarantined_to;
     expect(quarantinedTo).toBeDefined();
     expect(fs.existsSync(quarantinedTo!)).toBe(true);
-    expect(path.basename(quarantinedTo!).length).toBeLessThanOrEqual(200);
+    expect(Buffer.byteLength(path.basename(quarantinedTo!), 'utf8')).toBeLessThanOrEqual(200);
 
     // Corrupt file was successfully moved out of records/
     expect(fs.existsSync(longFilePath)).toBe(false);
+
+    // Multibyte CJK filename (80 Chinese characters = 240 bytes near NAME_MAX)
+    const cjkFileName = `${'繁'.repeat(78)}.json`;
+    expect(Buffer.byteLength(cjkFileName, 'utf8')).toBeGreaterThan(230);
+    const cjkFilePath = path.join(recordsDir, cjkFileName);
+    fs.writeFileSync(cjkFilePath, 'cjk-corrupt\n');
+
+    const cjkReport = await store.doctor({ repair: true });
+    expect(cjkReport.ok).toBe(false);
+    expect(cjkReport.corrupt_records).toHaveLength(1);
+    expect(cjkReport.corrupt_records[0]?.file).toBe(cjkFileName);
+
+    const cjkQuarantinedTo = cjkReport.corrupt_records[0]?.quarantined_to;
+    expect(cjkQuarantinedTo).toBeDefined();
+    expect(fs.existsSync(cjkQuarantinedTo!)).toBe(true);
+    expect(Buffer.byteLength(path.basename(cjkQuarantinedTo!), 'utf8')).toBeLessThanOrEqual(200);
+    expect(fs.existsSync(cjkFilePath)).toBe(false);
+  });
+
+  it('rejects unsupported conflict policy with E_MEMORY_CONFLICT_POLICY_INVALID', async () => {
+    const root = projectStateRoot(tempDir);
+    const store = new ProjectMemoryStore(root, now);
+
+    const validBundle = {
+      schema_version: 1,
+      memories: [
+        {
+          schema_version: 1,
+          id: 'test-rec',
+          text: 'sample',
+          metadata: {},
+          updated_at: '2026-09-01T00:00:00.000Z',
+        },
+      ],
+    };
+
+    expect(() => store.planImport(validBundle, { conflict: 'unsupported' as any })).toThrow(
+      'E_MEMORY_CONFLICT_POLICY_INVALID',
+    );
+    await expect(store.import(validBundle, { conflict: 'unsupported' as any })).rejects.toThrow(
+      'E_MEMORY_CONFLICT_POLICY_INVALID',
+    );
   });
 });

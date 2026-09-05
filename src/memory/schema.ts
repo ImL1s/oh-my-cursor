@@ -19,7 +19,16 @@ export interface MemoryExport {
   readonly memories: readonly ProjectMemory[];
 }
 
-export type MemoryConflictPolicy = 'reject' | 'skip' | 'replace' | 'newer-wins';
+export const SUPPORTED_CONFLICT_POLICIES = ['reject', 'skip', 'replace', 'newer-wins'] as const;
+export type MemoryConflictPolicy = (typeof SUPPORTED_CONFLICT_POLICIES)[number];
+
+export function validateConflictPolicy(value: unknown): MemoryConflictPolicy {
+  if (value === undefined || value === null) return 'reject';
+  if (typeof value === 'string' && (SUPPORTED_CONFLICT_POLICIES as readonly string[]).includes(value)) {
+    return value as MemoryConflictPolicy;
+  }
+  throw new Error('E_MEMORY_CONFLICT_POLICY_INVALID');
+}
 
 export interface MemoryImportOptions {
   readonly conflict?: MemoryConflictPolicy | undefined;
