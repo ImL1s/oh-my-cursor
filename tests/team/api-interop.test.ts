@@ -789,6 +789,114 @@ describe('team api interop (P0)', { timeout: 20_000 }, () => {
     expect((taskReclaimed?.claim?.worker_process_identity as Record<string, unknown>).nonce).toBeUndefined();
   });
 
+  it('requires a live target identity for supervisor reclaims in tmux teams', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-reclaim-dead-'));
+    roots.push(dir);
+    const root = projectStateRoot(dir);
+    const teamName = 'reclaim-dead-team';
+    initializeTeamState(root, {
+      teamName,
+      task: 'dead worker reclaim test',
+      tmuxSession: `omcu-${teamName}`,
+      workers: [
+        { name: 'worker-1', owned_paths: ['src/w1'] },
+        { name: 'worker-2', owned_paths: ['src/w2'] },
+      ],
+    });
+
+    const store = new TeamManifestStore(root);
+    store.write({
+      schema_version: 2,
+      team_id: teamName,
+      capability_tier: 'experimental-local',
+      native_cursor_team: false,
+      tmux_session: `omcu-${teamName}`,
+      workers: [
+        {
+          id: 'worker-1',
+          role: 'worker',
+          cwd: dir,
+          owned_paths: ['src/w1'],
+          pane_target: '%1',
+          pane_pid: 11111,
+          pane_start_identity: 'darwin:start-11111',
+          pane_start_identity_proven: true,
+          process_group_id: 11111,
+          argv: ['omcu', 'worker'],
+        },
+        {
+          id: 'worker-2',
+          role: 'worker',
+          cwd: dir,
+          owned_paths: ['src/w2'],
+          pane_target: '%2',
+          pane_pid: 22222,
+          pane_start_identity: 'darwin:start-22222',
+          pane_start_identity_proven: true,
+          process_group_id: 22222,
+          argv: ['omcu', 'worker'],
+        },
+      ],
+      created_at: '2026-07-31T00:00:00.000Z',
+      stopping_at: null,
+      stopping_worker_ids: null,
+      stopped_at: null,
+    });
+
+    await executeTeamApiOperation('create-task', {
+      team_name: teamName,
+      subject: 'Task 1',
+      description: 'Desc 1',
+    }, root);
+
+    // Claim by worker-1
+    await executeTeamApiOperation('claim-task', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'worker-1',
+    }, root, {
+      processRuntime: makeMockProcessRuntime({
+        alivePids: new Set([11111]),
+        startTimes: new Map([[11111, 'start-11111']]),
+      }),
+    });
+
+    // Supervisor attempts to reclaim for worker-2, but worker-2 is dead (PID 22222 not alive)
+    const deadReclaim = await executeTeamApiOperation('reclaim-task', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'worker-2',
+      force: true,
+      expected_generation: 1,
+    }, root, {
+      isSupervisor: true,
+      processRuntime: makeMockProcessRuntime({
+        alivePids: new Set([]), // worker-1 and worker-2 are dead
+        startTimes: new Map([[11111, 'start-11111'], [22222, 'start-22222']]),
+      }),
+    });
+    expect(deadReclaim.ok).toBe(false);
+    if (!deadReclaim.ok) {
+      expect(deadReclaim.error.code).toBe('worker_process_identity_required');
+    }
+
+    // When worker-2 is alive, supervisor reclaim succeeds
+    const liveReclaim = await executeTeamApiOperation('reclaim-task', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'worker-2',
+      force: true,
+      expected_generation: 1,
+    }, root, {
+      isSupervisor: true,
+      processRuntime: makeMockProcessRuntime({
+        alivePids: new Set([22222]),
+        startTimes: new Map([[11111, 'start-11111'], [22222, 'start-22222']]),
+      }),
+    });
+    expect(liveReclaim.ok).toBe(true);
+  });
+
   it('rejects unprivileged caller attempting to override supervisor manifest with spoofed process_identity', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-spoof-guard-'));
     roots.push(dir);

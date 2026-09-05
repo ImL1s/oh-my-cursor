@@ -579,7 +579,7 @@ export async function executeTeamApiOperation(
         const leaseMs = args.lease_ms !== undefined ? (args.lease_ms as number) : undefined;
         const config = readTeamConfig(root, teamName);
         const newProcessIdentity = resolveLongLivedWorkerIdentity(root, teamName, worker, args, options?.processRuntime, options?.isSupervisor);
-        if (((!options?.isSupervisor && config?.tmux_session) || args.process_identity !== undefined) && newProcessIdentity === undefined) {
+        if ((config?.tmux_session || args.process_identity !== undefined) && newProcessIdentity === undefined) {
           return fail(operation, 'worker_process_identity_required', 'Worker process identity must be published via supervisor manifest or provided in arguments before reclaiming tasks');
         }
         const result = await reclaimTask(root, teamName, taskId, worker, {
