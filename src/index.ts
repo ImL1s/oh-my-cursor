@@ -41,6 +41,12 @@ export * as parity from './parity/index.js';
 export * as catalog from './catalog/index.js';
 export * as plugin from './plugin/index.js';
 export * as cursorSdk from './runtime/cursor-sdk/index.js';
+export * as tools from './tools/index.js';
+export {
+  ToolRegistry,
+  createToolRegistry,
+  createDefaultToolRegistry,
+} from './tools/index.js';
 export {
   createCursorRuntime,
   DefaultCursorRuntime,
@@ -53,5 +59,6 @@ export {
   PACKAGE_VERSION,
   SUPPORTED_MCP_PROTOCOL_VERSIONS,
 } from './version.js';
+
 
 

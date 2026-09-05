@@ -24,6 +24,11 @@ const packageRoot = path.resolve(import.meta.dirname, '../..');
 function harness(cwd: string) {
   const stdout: string[] = [];
   const stderr: string[] = [];
+  const adapter = new CursorAgentAdapter('cursor-agent', async () => ({
+    code: 0,
+    stdout: 'Cursor Agent (test harness)\n--help\n--plugin-dir',
+    stderr: '',
+  }));
   return {
     stdout,
     stderr,
@@ -35,6 +40,7 @@ function harness(cwd: string) {
       cwd,
       homeDir: path.join(cwd, 'home'),
       packageRoot,
+      adapter,
     },
   };
 }
