@@ -73,7 +73,7 @@ class LineRingBuffer {
   private count = 0;
   private _totalBytes = 0;
 
-  constructor(public readonly capacity: number, public readonly maxBytes: number = MAX_TAIL_BYTES) {
+  constructor(public readonly capacity: number) {
     this.buffer = new Array(capacity);
   }
 
@@ -89,9 +89,6 @@ class LineRingBuffer {
       this.buffer[this.head] = { raw, unterminated, bytes };
       this.head = (this.head + 1) % this.capacity;
       this._totalBytes += bytes;
-    }
-    if (this._totalBytes > this.maxBytes) {
-      throw new Error('E_RECOVERY_TAIL_TOO_LARGE');
     }
   }
 
@@ -258,6 +255,10 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
       throw new Error('E_RECOVERY_SOURCE_CHANGED');
     }
 
+    if (ringBuffer.totalBytes > MAX_TAIL_BYTES) {
+      throw new Error('E_RECOVERY_TAIL_TOO_LARGE');
+    }
+
     const tail = ringBuffer.toArray();
     const truncated = sourceLines > RECOVERY_LINE_LIMIT;
     const firstLine = sourceLines === 0 ? 0 : sourceLines - tail.length + 1;
@@ -333,16 +334,18 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
 
     const unverifiedInTail = new Set<string>();
     if (missingTailParents.size > 0 && malformedTailLines.length > 0) {
-      const searchRegex = buildCandidatesRegex(missingTailParents);
-      if (searchRegex !== null) {
-        for (const malformedLine of malformedTailLines) {
-          if (searchRegex.test(malformedLine)) {
-            for (const parent of missingTailParents) {
-              if (malformedLine.includes(parent)) {
-                unverifiedInTail.add(parent);
-              }
+      const candidateTailParents = new Set<string>(missingTailParents);
+      let searchRegex = buildCandidatesRegex(candidateTailParents);
+      for (const malformedLine of malformedTailLines) {
+        if (searchRegex === null) break;
+        if (searchRegex.test(malformedLine)) {
+          for (const parent of candidateTailParents) {
+            if (malformedLine.includes(parent)) {
+              unverifiedInTail.add(parent);
+              candidateTailParents.delete(parent);
             }
           }
+          searchRegex = buildCandidatesRegex(candidateTailParents);
         }
       }
     }

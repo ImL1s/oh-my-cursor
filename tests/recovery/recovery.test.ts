@@ -726,4 +726,31 @@ describe('Recovery streaming and truthful chain validation (#21)', () => {
       }),
     ).toThrow('E_RECOVERY_TAIL_TOO_LARGE');
   });
+
+  it('accepts transcript with 17 large prefix lines when evicted by 900 ordinary tail records', () => {
+    const cwd = workspace();
+    const root = projectStateRoot(cwd);
+    const transcript = path.join(cwd, 'prefix-large-evicted.jsonl');
+
+    // 17 lines of ~1 MiB followed by 900 ordinary lines
+    const fd = fs.openSync(transcript, 'w');
+    const lineChunk = `${'a'.repeat(MAX_LINE_BYTES - 100)}\n`;
+    for (let i = 0; i < 17; i++) {
+      fs.writeSync(fd, lineChunk);
+    }
+    for (let i = 0; i < 900; i++) {
+      fs.writeSync(fd, `{"id":"tail-${i}","role":"assistant"}\n`);
+    }
+    fs.closeSync(fd);
+
+    const snapshot = recoverCursorSession(root, {
+      transcriptPath: transcript,
+      recoveryId: 'prefix-evicted',
+      now: fixedNow,
+    });
+
+    expect(snapshot.source_lines).toBe(917);
+    expect(snapshot.copied_lines).toBe(900);
+    expect(snapshot.truncated).toBe(true);
+  });
 });
