@@ -1,7 +1,14 @@
+export type CapabilityStatus = 'native' | 'adapted' | 'fallback' | 'unsupported';
+export type VerificationMode = 'live' | 'static';
+
 export interface CapabilityClaim {
   readonly verified: boolean;
-  readonly argv?: readonly string[];
-  readonly reason?: string;
+  readonly status?: CapabilityStatus | undefined;
+  readonly version_or_source?: string | undefined;
+  readonly verification_mode?: VerificationMode | undefined;
+  readonly requirements?: readonly string[] | undefined;
+  readonly argv?: readonly string[] | undefined;
+  readonly reason?: string | undefined;
 }
 
 export interface CapabilityLock {

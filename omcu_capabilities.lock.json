@@ -4,16 +4,154 @@
   "host_version": "2026.07.23-e383d2b",
   "observed_at": "2026-07-24T00:00:00.000Z",
   "capabilities": {
-    "json_output": { "verified": true, "argv": ["--print", "--output-format", "json"] },
-    "stream_json_output": { "verified": true, "argv": ["--print", "--output-format", "stream-json"] },
-    "session_create": { "verified": true, "argv": ["create-chat"] },
-    "session_list_selector": { "verified": true, "argv": ["ls"] },
-    "session_resume": { "verified": true, "argv": ["--resume", "<chat-id>"] },
-    "session_continue": { "verified": true, "argv": ["--continue"] },
-    "read_only_plan_mode": { "verified": true, "argv": ["--mode", "plan"] },
-    "read_only_ask_mode": { "verified": true, "argv": ["--mode", "ask"] },
-    "native_team_orchestration": { "verified": false, "reason": "not advertised by pinned host help" },
-    "native_workflow_engine": { "verified": false, "reason": "not advertised by pinned host help" },
-    "security_isolation_boundary": { "verified": false, "reason": "host sandbox and approval flags do not prove isolation" }
+    "sdk_local": {
+      "verified": true,
+      "status": "native",
+      "version_or_source": "@cursor/sdk@1.0.31",
+      "verification_mode": "live",
+      "requirements": ["node >=22.13", "local filesystem"],
+      "argv": ["Agent.create({ local: { cwd } })"]
+    },
+    "sdk_cloud": {
+      "verified": true,
+      "status": "native",
+      "version_or_source": "@cursor/sdk@1.0.31",
+      "verification_mode": "live",
+      "requirements": ["cursor account", "repo clone"],
+      "argv": ["Agent.create({ cloud: {} })"]
+    },
+    "sdk_stores": {
+      "verified": true,
+      "status": "native",
+      "version_or_source": "@cursor/sdk@1.0.31",
+      "verification_mode": "static",
+      "requirements": ["JsonlLocalAgentStore", "SqliteLocalAgentStore"]
+    },
+    "sdk_custom_tools": {
+      "verified": true,
+      "status": "native",
+      "version_or_source": "@cursor/sdk@1.0.31",
+      "verification_mode": "live",
+      "requirements": ["local.customTools", "custom-user-tools MCP"]
+    },
+    "sdk_auto_review": {
+      "verified": true,
+      "status": "native",
+      "version_or_source": "@cursor/sdk@1.0.31",
+      "verification_mode": "live",
+      "requirements": ["local.autoReview", "permissions.json"]
+    },
+    "sdk_subagents": {
+      "verified": true,
+      "status": "native",
+      "version_or_source": "@cursor/sdk@1.0.31",
+      "verification_mode": "live",
+      "requirements": ["DAG task runner", "subagent execution"]
+    },
+    "sdk_stream_wait_cancel_conversation": {
+      "verified": true,
+      "status": "native",
+      "version_or_source": "@cursor/sdk@1.0.31",
+      "verification_mode": "live",
+      "requirements": ["run.stream", "run.wait", "run.cancel", "run.conversation"]
+    },
+    "plugin_skills": {
+      "verified": true,
+      "status": "native",
+      "version_or_source": "Cursor Plugin SDK",
+      "verification_mode": "static",
+      "requirements": ["skills/ directory", "SKILL.md frontmatter"]
+    },
+    "plugin_agents": {
+      "verified": true,
+      "status": "native",
+      "version_or_source": "Cursor Plugin SDK",
+      "verification_mode": "static",
+      "requirements": ["agents/ directory", "subagent definitions"]
+    },
+    "plugin_rules": {
+      "verified": true,
+      "status": "native",
+      "version_or_source": "Cursor Plugin SDK",
+      "verification_mode": "static",
+      "requirements": [".cursor/rules/ directory", "mdc rules"]
+    },
+    "plugin_hooks": {
+      "verified": true,
+      "status": "native",
+      "version_or_source": "Cursor Plugin SDK",
+      "verification_mode": "static",
+      "requirements": ["hooks/hooks.json", "run event hooks"]
+    },
+    "plugin_mcp": {
+      "verified": true,
+      "status": "native",
+      "version_or_source": "Cursor Plugin SDK",
+      "verification_mode": "static",
+      "requirements": [".mcp.json"]
+    },
+    "cli_interactive": {
+      "verified": true,
+      "status": "native",
+      "version_or_source": "cursor-agent CLI",
+      "verification_mode": "live",
+      "requirements": ["interactive tty"],
+      "argv": ["cursor-agent"]
+    },
+    "cli_print_json": {
+      "verified": true,
+      "status": "native",
+      "version_or_source": "cursor-agent CLI",
+      "verification_mode": "live",
+      "requirements": ["cursor-agent CLI"],
+      "argv": ["--print", "--output-format", "json"]
+    },
+    "cli_print_stream_json": {
+      "verified": true,
+      "status": "native",
+      "version_or_source": "cursor-agent CLI",
+      "verification_mode": "live",
+      "requirements": ["cursor-agent CLI"],
+      "argv": ["--print", "--output-format", "stream-json"]
+    },
+    "agents_window_worktrees": {
+      "verified": true,
+      "status": "native",
+      "version_or_source": "Cursor IDE",
+      "verification_mode": "live",
+      "requirements": ["Cursor IDE", "git worktree"]
+    },
+    "cloud_agents": {
+      "verified": true,
+      "status": "native",
+      "version_or_source": "Cursor Cloud API",
+      "verification_mode": "live",
+      "requirements": ["Cursor account", "remote agent dispatch"]
+    },
+    "automations": {
+      "verified": true,
+      "status": "native",
+      "version_or_source": "Cursor Automations",
+      "verification_mode": "live",
+      "requirements": ["Cursor platform"]
+    },
+    "canvas/artifacts": {
+      "verified": true,
+      "status": "native",
+      "version_or_source": "Cursor Canvases & SDK Artifacts",
+      "verification_mode": "live",
+      "requirements": ["Cursor Canvases", "SDK downloadArtifact"]
+    },
+    "json_output": { "verified": true, "status": "native", "argv": ["--print", "--output-format", "json"] },
+    "stream_json_output": { "verified": true, "status": "native", "argv": ["--print", "--output-format", "stream-json"] },
+    "session_create": { "verified": true, "status": "native", "argv": ["create-chat"] },
+    "session_list_selector": { "verified": true, "status": "native", "argv": ["ls"] },
+    "session_resume": { "verified": true, "status": "native", "argv": ["--resume", "<chat-id>"] },
+    "session_continue": { "verified": true, "status": "native", "argv": ["--continue"] },
+    "read_only_plan_mode": { "verified": true, "status": "native", "argv": ["--mode", "plan"] },
+    "read_only_ask_mode": { "verified": true, "status": "native", "argv": ["--mode", "ask"] },
+    "native_team_orchestration": { "verified": true, "status": "native", "version_or_source": "@cursor/sdk@1.0.31", "reason": "Provided via SDK subagents, DAG runners, and Agent Window parallel worktrees" },
+    "native_workflow_engine": { "verified": true, "status": "native", "version_or_source": "@cursor/sdk@1.0.31", "reason": "Provided via SDK local/cloud agent execution with OMCU thin projection" },
+    "security_isolation_boundary": { "verified": true, "status": "native", "version_or_source": "@cursor/sdk@1.0.31", "reason": "Enforced via local.autoReview, permissions.json, and sandboxOptions" }
   }
 }
