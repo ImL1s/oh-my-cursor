@@ -456,6 +456,12 @@ describe('team tasks lifecycle & generation fencing', { timeout: 20_000 }, () =>
       });
       expect(unsafeRenew.ok).toBe(false);
 
+      // Reject sequence that exhausts sequence headroom (Number.MAX_SAFE_INTEGER)
+      const maxSafeRenew = await renewTaskClaim(root, teamName, task.id, 'worker-1', claim.claimToken, {
+        heartbeatSequence: Number.MAX_SAFE_INTEGER,
+      });
+      expect(maxSafeRenew.ok).toBe(false);
+
       // Normal renew advances to 1
       const renew1 = await renewTaskClaim(root, teamName, task.id, 'worker-1', claim.claimToken, {
         heartbeatSequence: 1,

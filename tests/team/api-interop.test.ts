@@ -474,6 +474,17 @@ describe('team api interop (P0)', { timeout: 20_000 }, () => {
     }, root);
     expect(unsafeHeartbeat.ok).toBe(false);
 
+    // Reject sequence without increment headroom (Number.MAX_SAFE_INTEGER)
+    const maxSafeHeartbeat = await executeTeamApiOperation('renew-task-claim', {
+      team_name: teamName,
+      task_id: taskId,
+      worker: 'one',
+      claim_token: claimToken,
+      generation: 1,
+      heartbeat_sequence: Number.MAX_SAFE_INTEGER,
+    }, root);
+    expect(maxSafeHeartbeat.ok).toBe(false);
+
     // Reject non-monotonic heartbeat_sequence (<= current sequence)
     const nonMonotonic = await executeTeamApiOperation('renew-task-claim', {
       team_name: teamName,

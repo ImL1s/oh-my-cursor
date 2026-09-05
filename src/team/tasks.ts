@@ -327,7 +327,7 @@ function isClaim(value: unknown): value is TeamTaskClaim {
   if (!isValidIsoTimestamp(c.leased_until)) return false;
   if (c.acquired_at !== undefined && !isValidIsoTimestamp(c.acquired_at)) return false;
   if (c.renewed_at !== undefined && !isValidIsoTimestamp(c.renewed_at)) return false;
-  if (c.heartbeat_sequence !== undefined && (!Number.isSafeInteger(c.heartbeat_sequence) || (c.heartbeat_sequence as number) < 0)) return false;
+  if (c.heartbeat_sequence !== undefined && (!Number.isSafeInteger(c.heartbeat_sequence) || (c.heartbeat_sequence as number) < 0 || (c.heartbeat_sequence as number) >= Number.MAX_SAFE_INTEGER)) return false;
   if (c.workspace_generation !== undefined && (!Number.isSafeInteger(c.workspace_generation) || (c.workspace_generation as number) < 1)) return false;
   if (c.worker_process_identity !== undefined) {
     if (!c.worker_process_identity || typeof c.worker_process_identity !== 'object' || Array.isArray(c.worker_process_identity)) return false;
@@ -1293,13 +1293,20 @@ export async function renewTaskClaim(
     const currentHeartbeat = current.claim.heartbeat_sequence ?? 0;
     let nextHeartbeat: number;
     if (options.heartbeatSequence !== undefined) {
-      if (!Number.isSafeInteger(options.heartbeatSequence) || options.heartbeatSequence <= currentHeartbeat) {
+      if (
+        !Number.isSafeInteger(options.heartbeatSequence) ||
+        options.heartbeatSequence <= currentHeartbeat ||
+        options.heartbeatSequence >= Number.MAX_SAFE_INTEGER
+      ) {
         return { ok: false, error: 'claim_conflict' as const };
       }
       nextHeartbeat = options.heartbeatSequence;
     } else {
+      if (currentHeartbeat >= Number.MAX_SAFE_INTEGER - 1) {
+        throw new Error('E_TEAM_TASK_HEARTBEAT_OVERFLOW');
+      }
       nextHeartbeat = currentHeartbeat + 1;
-      if (!Number.isSafeInteger(nextHeartbeat)) {
+      if (!Number.isSafeInteger(nextHeartbeat) || nextHeartbeat >= Number.MAX_SAFE_INTEGER) {
         throw new Error('E_TEAM_TASK_HEARTBEAT_OVERFLOW');
       }
     }

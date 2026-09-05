@@ -316,8 +316,8 @@ export function validateTeamApiOperationInput(
       if (args.lease_ms !== undefined && (!isFiniteInteger(args.lease_ms) || args.lease_ms < 1 || args.lease_ms > MAX_TOTAL_LEASE_MS)) {
         invalidInput(`lease_ms must be a positive integer of at most ${MAX_TOTAL_LEASE_MS}`);
       }
-      if (args.heartbeat_sequence !== undefined && (!isFiniteInteger(args.heartbeat_sequence) || args.heartbeat_sequence < 0)) {
-        invalidInput('heartbeat_sequence must be a non-negative integer');
+      if (args.heartbeat_sequence !== undefined && (!isFiniteInteger(args.heartbeat_sequence) || args.heartbeat_sequence < 0 || args.heartbeat_sequence >= Number.MAX_SAFE_INTEGER)) {
+        invalidInput(`heartbeat_sequence must be a non-negative integer below ${Number.MAX_SAFE_INTEGER}`);
       }
       break;
     case 'reclaim-task':
