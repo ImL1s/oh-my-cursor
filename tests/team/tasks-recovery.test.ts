@@ -457,5 +457,75 @@ describe('Team Tasks Journal Recovery and Reconciliation', () => {
       expect(recovered2?.status).toBe('pending');
       expect(recovered2?.claim).toBeUndefined();
     });
+
+    it('recovers cascade and reblocks remaining dependents after partial reopen failure and retry', async () => {
+      const { root, teamName } = workspace();
+      const task1 = await createTask(root, teamName, { subject: 'Prerequisite task 1', description: 'prereq' });
+      const claim1 = await claimTask(root, teamName, task1.id, 'worker-1');
+      expect(claim1.ok).toBe(true);
+      if (!claim1.ok) return;
+      const comp1 = await transitionTaskStatus(root, teamName, task1.id, 'in_progress', 'completed', claim1.claimToken, { result: 'done 1' });
+      expect(comp1.ok).toBe(true);
+
+      const task2 = await createTask(root, teamName, { subject: 'Dependent task 2', description: 'dep2', blocked_by: [task1.id] });
+      const task3 = await createTask(root, teamName, { subject: 'Dependent task 3', description: 'dep3', blocked_by: [task1.id] });
+
+      const claim2 = await claimTask(root, teamName, task2.id, 'worker-1');
+      expect(claim2.ok).toBe(true);
+      if (!claim2.ok) return;
+      const comp2 = await transitionTaskStatus(root, teamName, task2.id, 'in_progress', 'completed', claim2.claimToken, { result: 'done 2' });
+      expect(comp2.ok).toBe(true);
+
+      const claim3 = await claimTask(root, teamName, task3.id, 'worker-2');
+      expect(claim3.ok).toBe(true);
+      if (!claim3.ok) return;
+      const comp3 = await transitionTaskStatus(root, teamName, task3.id, 'in_progress', 'completed', claim3.claimToken, { result: 'done 3' });
+      expect(comp3.ok).toBe(true);
+
+      expect((await readTask(root, teamName, task1.id))?.status).toBe('completed');
+      expect((await readTask(root, teamName, task2.id))?.status).toBe('completed');
+      expect((await readTask(root, teamName, task3.id))?.status).toBe('completed');
+
+      let writeCount = 0;
+      await expect(
+        reopenTask(root, teamName, task1.id, {
+          reason: 'prerequisite needs revision',
+          taskWriteOptions: {
+            faultInjector: (point) => {
+              if (point === 'write') {
+                writeCount += 1;
+                // write 1: intent file
+                // write 2: task 1 snapshot
+                // write 3: task 2 snapshot
+                // write 4: task 3 snapshot
+                if (writeCount === 4) {
+                  throw new Error('E_CASCADE_SIMULATED_FAILURE');
+                }
+              }
+            },
+          },
+        }),
+      ).rejects.toThrow('E_CASCADE_SIMULATED_FAILURE');
+
+      const t1AfterFail = await readTask(root, teamName, task1.id);
+      expect(t1AfterFail?.status).toBe('pending');
+      const t2AfterFail = await readTask(root, teamName, task2.id);
+      expect(t2AfterFail?.status).toBe('blocked');
+      const t3AfterFail = await readTask(root, teamName, task3.id);
+      expect(t3AfterFail?.status).toBe('completed');
+
+      const retryReopen = await reopenTask(root, teamName, task1.id, { reason: 'prerequisite needs revision' });
+      expect(retryReopen.ok).toBe(true);
+      if (!retryReopen.ok) return;
+      expect(retryReopen.task.status).toBe('pending');
+
+      const t2Final = await readTask(root, teamName, task2.id);
+      expect(t2Final?.status).toBe('blocked');
+      const t3Final = await readTask(root, teamName, task3.id);
+      expect(t3Final?.status).toBe('blocked');
+
+      const retryAgain = await reopenTask(root, teamName, task1.id);
+      expect(retryAgain.ok).toBe(true);
+    });
   });
 });

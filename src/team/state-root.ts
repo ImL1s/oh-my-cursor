@@ -86,6 +86,14 @@ export function teamTaskJournalDir(root: StateRoot, teamName: string, taskId: st
   return path.join(teamStateDir(root, teamName), 'task-journals', taskId);
 }
 
+export function teamTaskCascadeIntentsDir(root: StateRoot, teamName: string): string {
+  return path.join(teamStateDir(root, teamName), 'task-cascade-intents');
+}
+
+export function teamTaskCascadeIntentPath(root: StateRoot, teamName: string, taskId: string): string {
+  return path.join(teamTaskCascadeIntentsDir(root, teamName), `reopen-${taskId}.intent.json`);
+}
+
 export function teamMailboxDir(root: StateRoot, teamName: string): string {
   return path.join(teamStateDir(root, teamName), 'mailbox');
 }

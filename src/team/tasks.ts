@@ -15,6 +15,8 @@ import {
   readTeamConfig,
   teamConfigPath,
   teamStateDir,
+  teamTaskCascadeIntentPath,
+  teamTaskCascadeIntentsDir,
   teamTaskJournalDir,
   teamTasksDir,
   writeTeamConfig,
@@ -303,7 +305,10 @@ function teamDependencyCoordinationPath(root: StateRoot, teamName: string): stri
 }
 
 async function withDependencyCoordinationLock<T>(root: StateRoot, teamName: string, fn: () => Promise<T> | T): Promise<T> {
-  return withDirectoryLock(teamDependencyCoordinationPath(root, teamName), fn);
+  return withDirectoryLock(teamDependencyCoordinationPath(root, teamName), async () => {
+    await reconcilePendingCascadeIntents(root, teamName);
+    return fn();
+  });
 }
 
 function isValidIsoTimestamp(value: unknown): value is string {
@@ -812,10 +817,12 @@ async function reblockDependentTasks(
           const preservedOwner = (other.request_owner !== undefined && other.request_owner !== null)
             ? other.request_owner
             : (priorStatus === 'pending' && other.claim === undefined && other.owner !== undefined ? other.owner : undefined);
+          const lastClaimGen = Math.max(other.last_claim_generation ?? 0, other.claim?.generation ?? 0);
           const reblocked: TeamTask = {
             ...rest,
             status: 'blocked',
             version: other.version + 1,
+            ...(lastClaimGen > 0 ? { last_claim_generation: lastClaimGen } : {}),
             ...(preservedOwner !== undefined ? { owner: preservedOwner } : {}),
           };
           const event: TeamTaskJournalEvent = (priorStatus === 'completed' || priorStatus === 'failed')
@@ -843,6 +850,121 @@ async function reblockDependentTasks(
           toCheck.add(otherId);
         }
       });
+    }
+  }
+}
+
+export interface ReopenCascadeIntent {
+  readonly schema_version: 1;
+  readonly team_name: string;
+  readonly task_id: string;
+  readonly created_at: string;
+  readonly reason?: string;
+}
+
+function recordReopenCascadeIntent(
+  root: StateRoot,
+  teamName: string,
+  taskId: string,
+  options: ReopenTaskOptions = {},
+  now: () => Date = () => new Date(),
+): void {
+  const filePath = teamTaskCascadeIntentPath(root, teamName, taskId);
+  const intent: ReopenCascadeIntent = {
+    schema_version: 1,
+    team_name: teamName,
+    task_id: taskId,
+    created_at: now().toISOString(),
+    ...(options.reason !== undefined ? { reason: options.reason } : {}),
+  };
+  atomicWriteJson(filePath, intent, options.taskWriteOptions);
+}
+
+function removeReopenCascadeIntent(root: StateRoot, teamName: string, taskId: string): void {
+  const filePath = teamTaskCascadeIntentPath(root, teamName, taskId);
+  try {
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+  } catch {
+    // Best-effort removal
+  }
+}
+
+function hasReopenCascadeIntent(root: StateRoot, teamName: string, taskId: string): boolean {
+  const filePath = teamTaskCascadeIntentPath(root, teamName, taskId);
+  return fs.existsSync(filePath);
+}
+
+function hasUnreconciledDependents(root: StateRoot, teamName: string, uncompletedTaskId: string): boolean {
+  const toCheck = new Set<string>([uncompletedTaskId]);
+  const visited = new Set<string>();
+  while (toCheck.size > 0) {
+    const currentId = toCheck.values().next().value as string;
+    toCheck.delete(currentId);
+    if (visited.has(currentId)) continue;
+    visited.add(currentId);
+
+    const taskIds = enumerateAllTaskIds(root, teamName);
+    for (const otherId of taskIds) {
+      if (otherId === currentId) continue;
+      const other = readTaskUnlocked(root, teamName, otherId);
+      if (other && other.blocked_by && other.blocked_by.includes(currentId)) {
+        if (other.status !== 'blocked') {
+          return true;
+        }
+        toCheck.add(otherId);
+      }
+    }
+  }
+  return false;
+}
+
+function wasTaskReopened(root: StateRoot, teamName: string, taskId: string): boolean {
+  const journalDir = teamTaskJournalDir(root, teamName, taskId);
+  if (!fs.existsSync(journalDir)) return false;
+  try {
+    const journal = taskJournal(root, teamName, taskId, () => new Date());
+    const records = journal.readRange();
+    for (let i = records.length - 1; i >= 0; i--) {
+      const p = (records[i] as JournalRecord<TeamTaskJournalEvent>).payload;
+      if (p && p.kind === 'reopened') {
+        return true;
+      }
+    }
+  } catch {
+    // Best-effort inspection
+  }
+  return false;
+}
+
+async function reconcilePendingCascadeIntents(
+  root: StateRoot,
+  teamName: string,
+  now: () => Date = () => new Date(),
+  writeOptions?: AtomicWriteOptions,
+): Promise<void> {
+  const dir = teamTaskCascadeIntentsDir(root, teamName);
+  if (!fs.existsSync(dir)) return;
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const match = /^reopen-(\d{1,20})\.intent\.json$/.exec(entry.name);
+    if (!match) continue;
+    const taskId = match[1]!;
+    try {
+      const task = readTaskUnlocked(root, teamName, taskId);
+      if (task && task.status !== 'completed') {
+        await reblockDependentTasks(root, teamName, taskId, now, writeOptions);
+      }
+      removeReopenCascadeIntent(root, teamName, taskId);
+    } catch {
+      // Keep intent for subsequent reconciliation attempts
     }
   }
 }
@@ -1681,7 +1803,18 @@ export async function reopenTask(
     const result = await withDirectoryLock(taskFilePath(root, teamName, id), async (): Promise<ReopenTaskResult> => {
       const current = readTaskUnlocked(root, teamName, id);
       if (current === null) return { ok: false, error: 'task_not_found' as const };
-      if (!TERMINAL.has(current.status)) return { ok: false, error: 'not_terminal' as const };
+
+      if (!TERMINAL.has(current.status)) {
+        const isRecoverableCascade = hasReopenCascadeIntent(root, teamName, id) || hasUnreconciledDependents(root, teamName, id);
+        const isIdempotentReopen = (current.status === 'pending' || current.status === 'blocked') && wasTaskReopened(root, teamName, id);
+        if (isRecoverableCascade || isIdempotentReopen) {
+          if (!hasReopenCascadeIntent(root, teamName, id)) {
+            recordReopenCascadeIntent(root, teamName, id, options, now);
+          }
+          return { ok: true as const, task: current };
+        }
+        return { ok: false, error: 'not_terminal' as const };
+      }
 
       let newStatus: TeamTaskStatus = 'pending';
       if (current.blocked_by && current.blocked_by.length > 0) {
@@ -1706,6 +1839,9 @@ export async function reopenTask(
         ...(current.request_owner !== undefined && current.request_owner !== null ? { owner: current.request_owner } : {}),
         ...(current.blocked_by !== undefined ? { blocked_by: current.blocked_by } : {}),
       };
+
+      recordReopenCascadeIntent(root, teamName, id, options, now);
+
       await commitTaskWithJournal(
         root,
         teamName,
@@ -1725,6 +1861,7 @@ export async function reopenTask(
 
     if (result.ok) {
       await reblockDependentTasks(root, teamName, id, now, options.taskWriteOptions);
+      removeReopenCascadeIntent(root, teamName, id);
     }
     return result;
   });
