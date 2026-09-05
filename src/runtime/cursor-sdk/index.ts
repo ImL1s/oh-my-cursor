@@ -29,6 +29,11 @@ export {
   type CursorPermissionsConfig,
 } from './tools.js';
 
+export {
+  createSdkAgentProfile,
+  type SdkAgentProfile,
+} from './agents.js';
+
 export type {
   AutoReviewArgs,
   AutoReviewDecision,
@@ -42,3 +47,4 @@ export type {
   RuntimeTarget,
   SupportedOperation,
 } from './types.js';
+
