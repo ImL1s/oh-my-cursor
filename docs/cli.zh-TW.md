@@ -342,12 +342,29 @@ Do not edit this block manually; it is generated from `COMMAND_SCHEMAS`.
 - `omcu workflow lease-status` | options: --id:string required | positionals: none
 - `omcu workflow lease-reconcile` | options: --id:string required; --revision:integer required; --credential-json:json required | positionals: none
 - `omcu team` | options: none | positionals: none
-- `omcu team start` | options: --id:string required; --workers-json:json required | positionals: none
-- `omcu team run` | options: --id:string required; --workers-json:json required | positionals: none
-- `omcu team status` | options: --id:string required | positionals: none
+- `omcu team start` | options: --id:string required; --workers-json:json required; --native:flag; --runtime:string | positionals: none
+- `omcu team run` | options: --id:string required; --workers-json:json required; --native:flag; --runtime:string | positionals: none
+- `omcu team status` | options: --id:string required; --native:flag | positionals: none
 - `omcu team collect` | options: --id:string required | positionals: none
 - `omcu team stop` | options: --id:string required | positionals: none
+- `omcu team monitor` | options: --id:string required | positionals: none
+- `omcu team resume` | options: --id:string required | positionals: none
+- `omcu team shutdown` | options: --id:string required | positionals: none
 - `omcu team api` | options: --op:string; --input:json default={}; --supervisor:flag; --help:flag aliases=-h | positionals: operation
+- `omcu task` | options: none | positionals: none
+- `omcu task start` | options: --agent:string required; --runtime:string default="local"; --prompt:string required; --background:flag; --id:string; --worktree:string; --workflow:string | positionals: none
+- `omcu task list` | options: --workflow:string; --status:string | positionals: none
+- `omcu task status` | options: --id:string | positionals: id
+- `omcu task output` | options: --id:string | positionals: id
+- `omcu task cancel` | options: --id:string | positionals: id
+- `omcu task resume` | options: --id:string | positionals: id
+- `omcu dag` | options: none | positionals: none
+- `omcu dag run` | options: --file:string required; --canvas:flag; --workspace:string | positionals: none
+- `omcu automation` | options: none | positionals: none
+- `omcu automation plan` | options: --name:string required; --cron:string; --event:string; --prompt:string required; --agent:string default="omcu-worker"; --runtime:string default="local"; --id:string | positionals: none
+- `omcu automation status` | options: --id:string | positionals: none
+- `omcu automation install` | options: --id:string required | positionals: none
+- `omcu automation remove` | options: --id:string required | positionals: none
 - `omcu persist` | options: none | positionals: none
 - `omcu persist start` | options: --goal:string required; --max-loops:integer default=25; --deadline-min:integer default=120 | positionals: none
 - `omcu persist stop` | options: none | positionals: none

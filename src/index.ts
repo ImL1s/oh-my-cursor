@@ -42,11 +42,33 @@ export * as catalog from './catalog/index.js';
 export * as plugin from './plugin/index.js';
 export * as cursorSdk from './runtime/cursor-sdk/index.js';
 export * as tools from './tools/index.js';
+export * as tasks from './tasks/index.js';
+export * as dag from './dag/index.js';
+export * as cloudOrchestration from './cloud-orchestration/index.js';
+export * as automations from './automations/index.js';
 export {
   ToolRegistry,
   createToolRegistry,
   createDefaultToolRegistry,
 } from './tools/index.js';
+export {
+  TaskRunner,
+  TaskStore,
+} from './tasks/index.js';
+export {
+  DagRunner,
+  validateDag,
+  renderDagCanvas,
+} from './dag/index.js';
+export {
+  CloudOrchestrator,
+} from './cloud-orchestration/index.js';
+export {
+  AutomationManager,
+} from './automations/index.js';
+export {
+  CursorNativeTeamSupervisor,
+} from './team/index.js';
 export {
   createCursorRuntime,
   DefaultCursorRuntime,
@@ -59,6 +81,7 @@ export {
   PACKAGE_VERSION,
   SUPPORTED_MCP_PROTOCOL_VERSIONS,
 } from './version.js';
+
 
 
 
