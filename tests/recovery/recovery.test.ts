@@ -918,6 +918,62 @@ describe('Recovery streaming and truthful chain validation (#21)', () => {
     expect(loaded.copied_lines).toBe(80);
     expect(loaded.source_bytes).toBeGreaterThan(9 * 1024 * 1024);
   });
+
+  it('rejects warnings that contradict snapshot truncation or retained range', () => {
+    const cwd = workspace();
+    const root = projectStateRoot(cwd);
+    const transcript = path.join(cwd, 'single-line.jsonl');
+    fs.writeFileSync(transcript, '{"id":"m1","role":"user"}\n');
+
+    const snap = recoverCursorSession(root, {
+      transcriptPath: transcript,
+      recoveryId: 'truncation-contradiction',
+      now: fixedNow,
+    });
+    expect(snap.truncated).toBe(false);
+
+    const snapshotPath = path.join(root.path, 'recovery', 'truncation-contradiction', 'snapshot.json');
+
+    // Tamper 1: inject W_TRUNCATED_PREFIX when truncated is false
+    fs.chmodSync(snapshotPath, 0o600);
+    fs.writeFileSync(
+      snapshotPath,
+      JSON.stringify({
+        ...snap,
+        warnings: [{ code: 'W_TRUNCATED_PREFIX', line: 1, detail: 'omitted prefix' }],
+      }, null, 2),
+    );
+    fs.chmodSync(snapshotPath, 0o400);
+    expect(() => readRecovery(root, 'truncation-contradiction')).toThrow('E_RECOVERY_INVALID');
+
+    // Tamper 2: inject W_PARENT_OUTSIDE_RETAINED_TAIL when truncated is false
+    fs.chmodSync(snapshotPath, 0o600);
+    fs.writeFileSync(
+      snapshotPath,
+      JSON.stringify({
+        ...snap,
+        warnings: [{ code: 'W_PARENT_OUTSIDE_RETAINED_TAIL', line: 1, detail: 'parent ghost in prefix' }],
+      }, null, 2),
+    );
+    fs.chmodSync(snapshotPath, 0o400);
+    expect(() => readRecovery(root, 'truncation-contradiction')).toThrow('E_RECOVERY_INVALID');
+
+    // Tamper 3: inject warning with line outside retained range
+    fs.chmodSync(snapshotPath, 0o600);
+    fs.writeFileSync(
+      snapshotPath,
+      JSON.stringify({
+        ...snap,
+        retained_first_line: 2,
+        retained_last_line: 2,
+        source_lines: 2,
+        copied_lines: 1,
+        warnings: [{ code: 'W_BROKEN_CHAIN', line: 1, detail: 'missing parent' }],
+      }, null, 2),
+    );
+    fs.chmodSync(snapshotPath, 0o400);
+    expect(() => readRecovery(root, 'truncation-contradiction')).toThrow('E_RECOVERY_INVALID');
+  });
 });
 
 

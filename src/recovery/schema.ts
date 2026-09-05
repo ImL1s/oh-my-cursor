@@ -213,8 +213,34 @@ export function validateRecovery(
     if (typeof value.created_at !== 'string' || !Number.isFinite(Date.parse(value.created_at))) throw new Error('E_RECOVERY_INVALID');
     if (value.copy_path !== expectedCopy) throw new Error('E_RECOVERY_INVALID');
 
+    let truncatedPrefixCount = 0;
     for (const warning of value.warnings) {
       validateRecoveryWarning(warning, V2_WARNING_CODES, value.source_lines);
+      if (warning.code === 'W_TRUNCATED_PREFIX') {
+        truncatedPrefixCount++;
+        if (!value.truncated || warning.line !== 1) {
+          throw new Error('E_RECOVERY_INVALID');
+        }
+      } else {
+        if (warning.line < value.retained_first_line || warning.line > value.retained_last_line) {
+          throw new Error('E_RECOVERY_INVALID');
+        }
+        if (warning.code === 'W_PARENT_OUTSIDE_RETAINED_TAIL') {
+          if (!value.truncated) {
+            throw new Error('E_RECOVERY_INVALID');
+          }
+        } else if (warning.code === 'W_PARTIAL_FINAL_RECORD') {
+          if (warning.line !== value.retained_last_line) {
+            throw new Error('E_RECOVERY_INVALID');
+          }
+        }
+      }
+    }
+    if (value.truncated && truncatedPrefixCount !== 1) {
+      throw new Error('E_RECOVERY_INVALID');
+    }
+    if (!value.truncated && truncatedPrefixCount !== 0) {
+      throw new Error('E_RECOVERY_INVALID');
     }
     return value as unknown as RecoverySnapshotV2;
   }
