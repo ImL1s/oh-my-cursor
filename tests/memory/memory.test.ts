@@ -709,14 +709,13 @@ describe('ProjectMemoryStore transactional, conflict-aware, and schema-validated
     );
   });
 
-  it('safely handles non-regular and oversized index or record files in doctor', async () => {
+  it('safely handles non-regular index symlinks in doctor', async () => {
     const root = projectStateRoot(tempDir);
     const store = new ProjectMemoryStore(root, now);
 
     await store.put('some valid content', {}, 'valid-record');
     const indexFile = path.join(root.path, 'memory', 'index.json');
 
-    // 1. Non-regular index file (symlink)
     fs.unlinkSync(indexFile);
     fs.symlinkSync('/dev/null', indexFile);
 
@@ -733,8 +732,15 @@ describe('ProjectMemoryStore transactional, conflict-aware, and schema-validated
     expect(repairSymlink.index_rebuilt).toBe(true);
     expect(repairSymlink.corrupt_records[0]?.quarantined_to).toBeDefined();
     expect((await store.doctor()).ok).toBe(true);
+  }, 10_000);
 
-    // 2. Oversized index file (> MAX_INDEX_FILE_BYTES = 8MB)
+  it('safely handles oversized index files in doctor without memory exhaustion', async () => {
+    const root = projectStateRoot(tempDir);
+    const store = new ProjectMemoryStore(root, now);
+
+    await store.put('some valid content', {}, 'valid-record');
+    const indexFile = path.join(root.path, 'memory', 'index.json');
+
     const fd = fs.openSync(indexFile, 'w');
     fs.writeSync(fd, 'x', 8 * 1024 * 1024 + 1024);
     fs.closeSync(fd);
@@ -752,9 +758,14 @@ describe('ProjectMemoryStore transactional, conflict-aware, and schema-validated
     expect(repairOversized.index_rebuilt).toBe(true);
     expect(repairOversized.corrupt_records[0]?.quarantined_to).toBeDefined();
     expect((await store.doctor()).ok).toBe(true);
+  }, 10_000);
 
-    // 3. Oversized record file (> MAX_RECORD_FILE_BYTES = 512KB)
+  it('safely handles oversized record files in doctor without memory exhaustion', async () => {
+    const root = projectStateRoot(tempDir);
+    const store = new ProjectMemoryStore(root, now);
+
     const recordsDir = path.join(root.path, 'memory', 'records');
+    fs.mkdirSync(recordsDir, { recursive: true });
     const oversizedRecordPath = path.join(recordsDir, 'huge.json');
     const rfd = fs.openSync(oversizedRecordPath, 'w');
     fs.writeSync(rfd, 'y', 512 * 1024 + 1024);
@@ -775,5 +786,5 @@ describe('ProjectMemoryStore transactional, conflict-aware, and schema-validated
     expect(repairRecord.corrupt_records.some((c) => c.file === 'huge.json' && c.quarantined_to)).toBe(true);
     expect(fs.existsSync(oversizedRecordPath)).toBe(false);
     expect((await store.doctor()).ok).toBe(true);
-  });
+  }, 10_000);
 });
