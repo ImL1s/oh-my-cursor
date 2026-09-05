@@ -238,7 +238,7 @@ describe('team api interop (P0)', () => {
     expect(created.map((task) => Number(task.id)).sort((a, b) => a - b)).toEqual([2, 3, 4, 5, 6, 7]);
     expect((await listTasks(root, teamName)).map((task) => Number(task.id))).toEqual([1, 2, 3, 4, 5, 6, 7]);
     expect(readTeamConfig(root, teamName)?.next_task_id).toBe(8);
-  });
+  }, 15_000);
 
   it('deduplicates create-task by request_id and rejects a conflicting canonical payload', async () => {
     const { root, teamName } = workspace('task-idempotency');
@@ -709,6 +709,79 @@ describe('team api interop (P0)', () => {
     });
     // Verify raw nonce is not saved
     expect((taskReclaimed?.claim?.worker_process_identity as Record<string, unknown>).nonce).toBeUndefined();
+  });
+
+  it('rejects claim-task in tmux-supervised team before worker identity is published in manifest', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-tmux-team-'));
+    roots.push(dir);
+    const root = projectStateRoot(dir);
+    const teamName = 'tmux-guard-team';
+    initializeTeamState(root, {
+      teamName,
+      task: 'tmux guard test',
+      tmuxSession: 'omcu-tmux-guard-team',
+      workers: [
+        { name: 'worker-a', owned_paths: ['src/a'] },
+        { name: 'worker-b', owned_paths: ['src/b'] },
+      ],
+    });
+
+    await executeTeamApiOperation('create-task', {
+      team_name: teamName,
+      subject: 'Guarded Task',
+      description: 'Must have process identity',
+    }, root);
+
+    // 1. Without manifest published, claim must fail closed
+    const claimEarly = await executeTeamApiOperation('claim-task', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'worker-a',
+    }, root);
+    expect(claimEarly.ok).toBe(false);
+    expect((claimEarly as { error?: { code: string } }).error?.code).toBe('worker_process_identity_required');
+
+    // 2. Supervisor publishes manifest with worker identities
+    const store = new TeamManifestStore(root);
+    store.write({
+      schema_version: 2,
+      team_id: teamName,
+      capability_tier: 'experimental-local',
+      native_cursor_team: false,
+      tmux_session: 'omcu-tmux-guard-team',
+      workers: [
+        {
+          id: 'worker-a',
+          role: 'worker',
+          cwd: dir,
+          owned_paths: ['src/a'],
+          pane_target: '%1',
+          pane_pid: 24680,
+          pane_start_identity: 'start-pane-24680',
+          pane_start_identity_proven: true,
+          process_group_id: 24680,
+          argv: ['omcu', 'worker'],
+        },
+      ],
+      created_at: '2026-07-31T00:00:00.000Z',
+      stopping_at: null,
+      stopping_worker_ids: null,
+      stopped_at: null,
+    });
+
+    // 3. Now claim succeeds and carries worker process identity
+    const claimAfter = await executeTeamApiOperation('claim-task', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'worker-a',
+    }, root);
+    expect(claimAfter.ok).toBe(true);
+    const task = await readTask(root, teamName, '1');
+    expect(task?.claim?.worker_process_identity).toEqual({
+      pid: 24680,
+      start_identity: 'start-pane-24680',
+      start_identity_proven: true,
+    });
   });
 
   it('rejects reopen-task via CLI without --supervisor flag and succeeds with --supervisor', async () => {

@@ -75,9 +75,20 @@ export class ExperimentalTmuxTeamSupervisor {
         if (!paneIdentity.proven) throw new Error('E_TEAM_PROCESS_IDENTITY_UNPROVEN');
         const pgid = await this.observeProcessGroup(panePid, worker.cwd);
         workerManifests.push({ id: worker.id, cwd: worker.cwd, owned_paths: [...worker.owned_paths], pane_target: paneTarget, pane_pid: panePid, pane_start_identity: paneIdentity.value, pane_start_identity_proven: true, process_group_id: pgid, argv });
+        this.manifests.write({
+          schema_version: 2,
+          team_id: teamId,
+          tmux_session: session,
+          capability_tier: 'experimental-local',
+          native_cursor_team: false,
+          workers: [...workerManifests],
+          created_at: createdAt,
+          stopping_at: null,
+          stopping_worker_ids: null,
+          stopped_at: null,
+        });
       }
       const manifest: TeamManifest = { schema_version: 2, team_id: teamId, tmux_session: session, capability_tier: 'experimental-local', native_cursor_team: false, workers: workerManifests, created_at: createdAt, stopping_at: null, stopping_worker_ids: null, stopped_at: null };
-      this.manifests.write(manifest);
       return manifest;
     } catch (error) {
       if (coordinationInitialized && this.coordinationRoot !== null) {

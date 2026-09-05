@@ -826,7 +826,12 @@ export async function createTask(
   if (subject === '' || description === '') throw new Error('E_TEAM_TASK_FIELDS_REQUIRED');
   const requestId = input.request_id === undefined ? undefined : assertRequestId(input.request_id);
 
-  return withDependencyCoordinationLock(root, teamName, async () => {
+  const hasDependencies = Array.isArray(input.blocked_by) && input.blocked_by.length > 0;
+  const withCoordination = hasDependencies
+    ? (fn: () => Promise<TeamTask>) => withDependencyCoordinationLock(root, teamName, fn)
+    : (fn: () => Promise<TeamTask>) => fn();
+
+  return withCoordination(async () => {
     return withDirectoryLock(teamConfigPath(root, teamName), async () => {
       const config = readTeamConfig(root, teamName);
       if (config === null) throw new Error('E_TEAM_NOT_FOUND');

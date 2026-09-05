@@ -407,7 +407,11 @@ export async function executeTeamApiOperation(
           return fail(operation, 'invalid_input', 'expected_version must be a positive integer when provided');
         }
         const leaseMs = isFiniteInteger(args.lease_ms) ? (args.lease_ms as number) : undefined;
+        const config = readTeamConfig(root, teamName);
         const processIdentity = resolveLongLivedWorkerIdentity(root, teamName, worker, args);
+        if (config?.tmux_session && processIdentity === undefined) {
+          return fail(operation, 'worker_process_identity_required', 'Worker process identity must be published via supervisor manifest or provided in arguments before claiming tasks');
+        }
         const result = await claimTask(root, teamName, taskId, worker, {
           expectedVersion: (rawExpected as number | undefined) ?? null,
           ...(leaseMs !== undefined ? { leaseMs } : {}),
@@ -455,7 +459,11 @@ export async function executeTeamApiOperation(
           return fail(operation, 'invalid_input', 'Forced reclaim requires expected_generation or expected_version');
         }
         const leaseMs = isFiniteInteger(args.lease_ms) ? (args.lease_ms as number) : undefined;
+        const config = readTeamConfig(root, teamName);
         const newProcessIdentity = resolveLongLivedWorkerIdentity(root, teamName, worker, args);
+        if (!options?.isSupervisor && config?.tmux_session && newProcessIdentity === undefined) {
+          return fail(operation, 'worker_process_identity_required', 'Worker process identity must be published via supervisor manifest or provided in arguments before reclaiming tasks');
+        }
         const result = await reclaimTask(root, teamName, taskId, worker, {
           ...(reason !== undefined ? { reason } : {}),
           ...(force ? { force: true } : {}),
