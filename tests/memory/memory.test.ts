@@ -161,7 +161,32 @@ describe('ProjectMemoryStore transactional, conflict-aware, and schema-validated
 
     // Case 1: newer-wins where the NEWER record appears FIRST, and OLDER appears SECOND in bundle.
     // The newer record must NOT be overwritten by the later older record.
-    await store.import(
+    const newerFirstPlan = store.planImport(
+      {
+        schema_version: 1,
+        memories: [
+          {
+            schema_version: 1,
+            id: 'internal-dup',
+            text: 'newer text v1',
+            metadata: {},
+            updated_at: '2026-06-01T00:00:00.000Z',
+          },
+          {
+            schema_version: 1,
+            id: 'internal-dup',
+            text: 'older text v2',
+            metadata: {},
+            updated_at: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      },
+      { conflict: 'newer-wins' },
+    );
+    expect(newerFirstPlan.to_create).toEqual(['internal-dup']);
+    expect(newerFirstPlan.to_skip).toEqual(['internal-dup']);
+
+    const newerReceipt = await store.import(
       {
         schema_version: 1,
         memories: [
@@ -184,12 +209,40 @@ describe('ProjectMemoryStore transactional, conflict-aware, and schema-validated
       { conflict: 'newer-wins' },
     );
 
+    expect(newerReceipt.created).toEqual(['internal-dup']);
+    expect(newerReceipt.skipped).toEqual(['internal-dup']);
     expect(store.show('internal-dup').text).toBe('newer text v1');
     expect(store.show('internal-dup').updated_at).toBe('2026-06-01T00:00:00.000Z');
 
     // Case 2: skip where the FIRST record appears, and a SECOND record appears with different content.
     // Under skip, the first record must be kept and the second skipped, not overwriting the first.
-    await store.import(
+    // Both plan.to_skip and receipt.skipped must include the duplicate skipped record.
+    const skipPlan = store.planImport(
+      {
+        schema_version: 1,
+        memories: [
+          {
+            schema_version: 1,
+            id: 'internal-skip-dup',
+            text: 'first text',
+            metadata: {},
+            updated_at: '2026-01-01T00:00:00.000Z',
+          },
+          {
+            schema_version: 1,
+            id: 'internal-skip-dup',
+            text: 'second text (should be skipped)',
+            metadata: {},
+            updated_at: '2026-02-01T00:00:00.000Z',
+          },
+        ],
+      },
+      { conflict: 'skip' },
+    );
+    expect(skipPlan.to_create).toEqual(['internal-skip-dup']);
+    expect(skipPlan.to_skip).toEqual(['internal-skip-dup']);
+
+    const skipReceipt = await store.import(
       {
         schema_version: 1,
         memories: [
@@ -212,6 +265,8 @@ describe('ProjectMemoryStore transactional, conflict-aware, and schema-validated
       { conflict: 'skip' },
     );
 
+    expect(skipReceipt.created).toEqual(['internal-skip-dup']);
+    expect(skipReceipt.skipped).toEqual(['internal-skip-dup']);
     expect(store.show('internal-skip-dup').text).toBe('first text');
   });
 

@@ -254,6 +254,9 @@ export class ProjectMemoryStore {
     const seenInBundle = new Map<string, ProjectMemory>();
     const conflicts: { readonly id: string; readonly reason: string }[] = [];
     const items: MemoryImportPlanItem[] = [];
+    const toCreate: string[] = [];
+    const toReplace: string[] = [];
+    const toSkip: string[] = [];
 
     for (const incoming of validatedIncoming) {
       const priorInBundle = seenInBundle.get(incoming.id);
@@ -266,6 +269,7 @@ export class ProjectMemoryStore {
           });
           continue;
         } else if (conflictPolicy === 'skip') {
+          toSkip.push(incoming.id);
           items.push({
             id: incoming.id,
             action: 'skip',
@@ -274,13 +278,35 @@ export class ProjectMemoryStore {
           });
           continue;
         } else if (conflictPolicy === 'replace') {
+          toSkip.push(priorInBundle.id);
+          items.push({
+            id: priorInBundle.id,
+            action: 'skip',
+            reason: 'Prior duplicate ID in bundle replaced by later record',
+            incoming_updated_at: priorInBundle.updated_at,
+          });
           seenInBundle.set(incoming.id, incoming);
           continue;
         } else if (conflictPolicy === 'newer-wins') {
           const priorTime = Date.parse(priorInBundle.updated_at);
           const incomingTime = Date.parse(incoming.updated_at);
           if (incomingTime > priorTime) {
+            toSkip.push(priorInBundle.id);
+            items.push({
+              id: priorInBundle.id,
+              action: 'skip',
+              reason: `Older duplicate ID in bundle (${priorInBundle.updated_at}) superseded by newer (${incoming.updated_at})`,
+              incoming_updated_at: priorInBundle.updated_at,
+            });
             seenInBundle.set(incoming.id, incoming);
+          } else {
+            toSkip.push(incoming.id);
+            items.push({
+              id: incoming.id,
+              action: 'skip',
+              reason: `Older duplicate ID in bundle (${incoming.updated_at}) skipped in favor of (${priorInBundle.updated_at})`,
+              incoming_updated_at: incoming.updated_at,
+            });
           }
           continue;
         }
@@ -288,10 +314,6 @@ export class ProjectMemoryStore {
 
       seenInBundle.set(incoming.id, incoming);
     }
-
-    const toCreate: string[] = [];
-    const toReplace: string[] = [];
-    const toSkip: string[] = [];
 
     for (const incoming of seenInBundle.values()) {
       const existing = localMap.get(incoming.id);
