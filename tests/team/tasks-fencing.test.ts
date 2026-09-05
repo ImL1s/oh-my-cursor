@@ -1077,5 +1077,33 @@ describe('team tasks fencing & reconciliation', { timeout: 20_000 }, () => {
       if (!comp.ok) return;
       expect(comp.task.status).toBe('completed');
     });
+
+    it('rejects transition when journal envelope causes total record to exceed MAX_TASK_JOURNAL_RECORD_BYTES', async () => {
+      const { root, teamName } = workspace();
+      const task = await createTask(root, teamName, {
+        subject: 'Envelope Overflow Task',
+        description: 'x'.repeat(60 * 1024 - 1000),
+      });
+      const claim = await claimTask(root, teamName, task.id, 'worker-1');
+      expect(claim.ok).toBe(true);
+      if (!claim.ok) return;
+
+      // Result sized such that payload alone is < 64 KiB, but with journal envelope exceeds 64 KiB
+      const resultPayload = 'y'.repeat(4 * 1024 + 500);
+      const rejected = await transitionTaskStatus(
+        root,
+        teamName,
+        task.id,
+        'in_progress',
+        'completed',
+        claim.claimToken,
+        { result: resultPayload },
+      );
+      expect(rejected.ok).toBe(false);
+      if (!rejected.ok) {
+        expect(rejected.error).toBe('invalid_transition');
+      }
+    });
   });
 });
+

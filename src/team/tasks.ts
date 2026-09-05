@@ -1560,12 +1560,18 @@ export async function transitionTaskStatus(
         from,
         to,
       };
-      const serializedProbe = JSON.stringify({
+      const probeRecord = {
+        schema_version: 1,
+        stream_id: `team/${teamName}/task/${id}`,
+        sequence: Number.MAX_SAFE_INTEGER,
         kind: event.kind,
         payload: event,
         at: nowFn().toISOString(),
-      });
-      if (Buffer.byteLength(serializedProbe, 'utf8') > MAX_TASK_JOURNAL_RECORD_BYTES) {
+        previous_digest: '0'.repeat(64),
+        digest: '0'.repeat(64),
+      };
+      const probeLine = `${JSON.stringify(probeRecord)}\n`;
+      if (Buffer.byteLength(probeLine, 'utf8') > MAX_TASK_JOURNAL_RECORD_BYTES) {
         return { ok: false, error: 'invalid_transition' as const };
       }
 
