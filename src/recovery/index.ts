@@ -388,17 +388,18 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
     const unverifiedInTail = new Set<string>();
     if (missingTailParents.size > 0 && malformedTailLines.length > 0) {
       const candidateTailParents = new Set<string>(missingTailParents);
-      let searchRegex = buildCandidatesRegex(candidateTailParents);
-      for (const malformedLine of malformedTailLines) {
-        if (searchRegex === null) break;
-        if (searchRegex.test(malformedLine)) {
-          for (const parent of candidateTailParents) {
-            if (lineMatchesParent(malformedLine, parent)) {
-              unverifiedInTail.add(parent);
-              candidateTailParents.delete(parent);
+      const searchRegex = buildCandidatesRegex(candidateTailParents);
+      if (searchRegex !== null) {
+        for (const malformedLine of malformedTailLines) {
+          if (candidateTailParents.size === 0) break;
+          if (searchRegex.test(malformedLine)) {
+            for (const parent of candidateTailParents) {
+              if (lineMatchesParent(malformedLine, parent)) {
+                unverifiedInTail.add(parent);
+                candidateTailParents.delete(parent);
+              }
             }
           }
-          searchRegex = buildCandidatesRegex(candidateTailParents);
         }
       }
     }
@@ -419,17 +420,15 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
         let prefixOversizedLine = '';
 
         const candidatesNeedingMalformedCheck = new Set<string>(missingTailParents);
-        let searchRegex = buildCandidatesRegex(candidatesNeedingMalformedCheck);
+        const searchRegex = buildCandidatesRegex(candidatesNeedingMalformedCheck);
 
         const checkPrefixLine = (lineStr: string): boolean => {
           const { validId, malformed } = extractIdFromLine(lineStr);
           if (validId !== null && missingTailParents.has(validId)) {
             foundInPrefix.add(validId);
-            if (candidatesNeedingMalformedCheck.delete(validId)) {
-              searchRegex = buildCandidatesRegex(candidatesNeedingMalformedCheck);
-            }
+            candidatesNeedingMalformedCheck.delete(validId);
             if (foundInPrefix.size === missingTailParents.size) return true;
-          } else if (malformed && searchRegex !== null) {
+          } else if (malformed && searchRegex !== null && candidatesNeedingMalformedCheck.size > 0) {
             if (searchRegex.test(lineStr)) {
               for (const parent of candidatesNeedingMalformedCheck) {
                 if (lineMatchesParent(lineStr, parent)) {
@@ -437,7 +436,6 @@ export function recoverCursorSession(root: StateRoot, options: RecoveryOptions):
                   candidatesNeedingMalformedCheck.delete(parent);
                 }
               }
-              searchRegex = buildCandidatesRegex(candidatesNeedingMalformedCheck);
             }
           }
           return false;

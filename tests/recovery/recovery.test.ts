@@ -784,5 +784,33 @@ describe('Recovery streaming and truthful chain validation (#21)', () => {
     const broken = snapshot.warnings.filter((w) => w.code === 'W_BROKEN_CHAIN');
     expect(broken).toHaveLength(0);
   });
+
+  it('efficiently checks hundreds of candidate parents against malformed lines without quadratic regex rebuilding', () => {
+    const cwd = workspace();
+    const root = projectStateRoot(cwd);
+    const transcript = path.join(cwd, 'many-malformed-pairs.jsonl');
+
+    const lines: string[] = [];
+    const count = 200;
+    for (let i = 0; i < count; i++) {
+      lines.push(`{"broken-json": true, "raw_text": "corrupt prefix id parent-cand-${i} rest"`);
+      lines.push(JSON.stringify({ id: `child-${i}`, parent_id: `parent-cand-${i}`, type: 'message' }));
+    }
+    fs.writeFileSync(transcript, `${lines.join('\n')}\n`);
+
+    const start = Date.now();
+    const snapshot = recoverCursorSession(root, {
+      transcriptPath: transcript,
+      recoveryId: 'many-pairs',
+      now: fixedNow,
+    });
+    const duration = Date.now() - start;
+
+    expect(duration).toBeLessThan(5000);
+    const unverified = snapshot.warnings.filter((w) => w.code === 'W_CHAIN_UNVERIFIED');
+    expect(unverified).toHaveLength(count);
+    const broken = snapshot.warnings.filter((w) => w.code === 'W_BROKEN_CHAIN');
+    expect(broken).toHaveLength(0);
+  });
 });
 
