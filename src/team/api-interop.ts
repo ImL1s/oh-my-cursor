@@ -47,15 +47,18 @@ export type TeamApiEnvelope =
   | { readonly ok: true; readonly operation: TeamApiOperation; readonly data: Record<string, unknown> }
   | { readonly ok: false; readonly operation: TeamApiOperation | 'unknown'; readonly error: { readonly code: string; readonly message: string; readonly details?: Record<string, unknown> } };
 
-export const TEAM_API_HELP = `omcu team api <operation> --input '<json>'
+export const TEAM_API_HELP = `omcu team api <operation> --input '<json>' [--supervisor]
 
 P0 operations (OMX-shaped; experimental local; not a native Cursor team):
   ${TEAM_API_OPERATIONS.join('\n  ')}
+
+Privileged operations (reopen-task, forced reclaim-task) require --supervisor.
 
 Examples:
   omcu team api send-message --input '{"team_name":"t1","from_worker":"one","to_worker":"two","body":"hi"}'
   omcu team api mailbox-list --input '{"team_name":"t1","worker":"two"}'
   omcu team api create-task --input '{"team_name":"t1","subject":"x","description":"y","request_id":"client-request-1"}'
+  omcu team api reopen-task --input '{"team_name":"t1","task_id":"1"}' --supervisor
   omcu team api get-summary --input '{"team_name":"t1"}'
 
 Never stamps verified. native_cursor_team remains false.

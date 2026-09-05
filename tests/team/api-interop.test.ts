@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { runCli } from '../../src/cli/application.js';
 import { projectStateRoot } from '../../src/runtime/state-root.js';
 import {
   createTask,
@@ -705,5 +706,55 @@ describe('team api interop (P0)', () => {
     });
     // Verify raw nonce is not saved
     expect((taskReclaimed?.claim?.worker_process_identity as Record<string, unknown>).nonce).toBeUndefined();
+  });
+
+  it('rejects reopen-task via CLI without --supervisor flag and succeeds with --supervisor', async () => {
+    const { dir, root, teamName } = workspace();
+    await executeTeamApiOperation('create-task', {
+      team_name: teamName,
+      subject: 'CLI Reopen',
+      description: 'Check flag',
+    }, root);
+    const claim = await executeTeamApiOperation('claim-task', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'one',
+    }, root);
+    expect(claim.ok).toBe(true);
+    const token = (claim.data as { claimToken: string }).claimToken;
+    await executeTeamApiOperation('transition-task-status', {
+      team_name: teamName,
+      task_id: '1',
+      from: 'in_progress',
+      to: 'completed',
+      claim_token: token,
+      result: 'done',
+    }, root);
+
+    const stdout1: string[] = [];
+    const stderr1: string[] = [];
+    const exitWithout = await runCli([
+      'team', 'api', 'reopen-task',
+      '--input', JSON.stringify({ team_name: teamName, task_id: '1', reason: 'reopen without flag' }),
+    ], { cwd: dir, packageRoot: path.resolve('.') }, {
+      stdout: (text) => stdout1.push(text),
+      stderr: (text) => stderr1.push(text),
+    });
+    expect(exitWithout).toBe(1);
+    expect(stdout1.join('')).toContain('unauthorized');
+
+    const stdout2: string[] = [];
+    const stderr2: string[] = [];
+    const exitWith = await runCli([
+      'team', 'api', 'reopen-task',
+      '--input', JSON.stringify({ team_name: teamName, task_id: '1', reason: 'reopen with flag' }),
+      '--supervisor',
+    ], { cwd: dir, packageRoot: path.resolve('.') }, {
+      stdout: (text) => stdout2.push(text),
+      stderr: (text) => stderr2.push(text),
+    });
+    expect(exitWith).toBe(0);
+    const task = await readTask(root, teamName, '1');
+    expect(task?.status).toBe('pending');
   });
 });

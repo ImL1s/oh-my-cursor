@@ -400,6 +400,7 @@ export const COMMAND_SCHEMAS: Readonly<Record<string, CommandSchema>> = Object.f
         options: [
           { name: '--op', kind: 'string' },
           objectJson('--input', false, {}),
+          { name: '--supervisor', kind: 'flag' },
           { name: '--help', kind: 'flag', aliases: ['-h'] },
         ],
         positionals: [{ name: 'operation' }],

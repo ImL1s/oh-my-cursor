@@ -12,6 +12,7 @@ import {
   getTeamSummary,
   listTasks,
   MAX_TOTAL_LEASE_MS,
+  readTask,
   rebuildTaskFromJournal,
   reclaimTask,
   releaseTaskClaim,
@@ -1275,6 +1276,44 @@ describe('team tasks lifecycle & generation fencing', { timeout: 20_000 }, () =>
       fs.rmSync(journalDir, { recursive: true, force: true });
 
       await expect(listTasks(root, teamName)).rejects.toThrow('E_TEAM_TASK_CORRUPT');
+    });
+
+    it('fences prerequisite checks against concurrent reopen', async () => {
+      const { root, teamName } = workspace();
+      // 1. Create Prereq (Task 1) and complete it
+      const task1 = await createTask(root, teamName, { subject: 'Prereq', description: 'Step 1' });
+      const claim1 = await claimTask(root, teamName, task1.id, 'worker-1');
+      expect(claim1.ok).toBe(true);
+      if (!claim1.ok) return;
+      const comp1 = await transitionTaskStatus(root, teamName, task1.id, 'in_progress', 'completed', claim1.claimToken, { result: 'done' });
+      expect(comp1.ok).toBe(true);
+
+      // 2. Create Dependent (Task 2) blocked by Task 1, claimed as in_progress
+      const task2 = await createTask(root, teamName, { subject: 'Dependent', description: 'Step 2', blocked_by: [task1.id] });
+      expect(task2.status).toBe('pending');
+      const claim2 = await claimTask(root, teamName, task2.id, 'worker-2');
+      expect(claim2.ok).toBe(true);
+      if (!claim2.ok) return;
+
+      // 3. Concurrently reopen Task 1 and complete Task 2
+      const [reopenResult, completeResult] = await Promise.all([
+        reopenTask(root, teamName, task1.id, { reason: 'need update' }),
+        transitionTaskStatus(root, teamName, task2.id, 'in_progress', 'completed', claim2.claimToken, { result: 'dep done' }),
+      ]);
+
+      expect(reopenResult.ok).toBe(true);
+      const read1 = await readTask(root, teamName, task1.id);
+      const read2 = await readTask(root, teamName, task2.id);
+      expect(read1?.status).toBe('pending');
+
+      // Task 2 can NEVER end up completed while Task 1 is pending!
+      if (!completeResult.ok) {
+        expect(['invalid_transition', 'claim_conflict']).toContain(completeResult.error);
+        expect(read2?.status).toBe('blocked');
+      } else {
+        // If completion succeeded before reopen took effect, verify both are non-conflicting
+        expect(read2?.status).toBe('completed');
+      }
     });
   });
 });

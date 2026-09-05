@@ -343,7 +343,7 @@ Do not edit this block manually; it is generated from `COMMAND_SCHEMAS`.
 - `omcu team status` | options: --id:string required | positionals: none
 - `omcu team collect` | options: --id:string required | positionals: none
 - `omcu team stop` | options: --id:string required | positionals: none
-- `omcu team api` | options: --op:string; --input:json default={}; --help:flag aliases=-h | positionals: operation
+- `omcu team api` | options: --op:string; --input:json default={}; --supervisor:flag; --help:flag aliases=-h | positionals: operation
 - `omcu persist` | options: none | positionals: none
 - `omcu persist start` | options: --goal:string required; --max-loops:integer default=25; --deadline-min:integer default=120 | positionals: none
 - `omcu persist stop` | options: none | positionals: none

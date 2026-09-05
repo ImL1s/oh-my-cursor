@@ -275,6 +275,14 @@ function taskFilePath(root: StateRoot, teamName: string, taskId: string): string
   return path.join(teamTasksDir(root, teamName), `task-${assertTaskId(taskId)}.json`);
 }
 
+function teamDependencyCoordinationPath(root: StateRoot, teamName: string): string {
+  return path.join(teamTasksDir(root, teamName), '.dependency-lock');
+}
+
+async function withDependencyCoordinationLock<T>(root: StateRoot, teamName: string, fn: () => Promise<T> | T): Promise<T> {
+  return withDirectoryLock(teamDependencyCoordinationPath(root, teamName), fn);
+}
+
 function isValidIsoTimestamp(value: unknown): value is string {
   if (typeof value !== 'string' || value.length < 10 || value.length > 35) return false;
   const time = Date.parse(value);
@@ -1184,75 +1192,82 @@ export async function transitionTaskStatus(
     return { ok: false, error: 'invalid_transition' };
   }
 
-  const result = await withDirectoryLock(taskFilePath(root, teamName, id), (): TransitionTaskResult => {
-    const current = readTaskUnlocked(root, teamName, id);
-    if (current === null) return { ok: false, error: 'task_not_found' as const };
-    if (TERMINAL.has(current.status)) return { ok: false, error: 'already_terminal' as const };
-    if (current.status !== from || !canTransitionTaskStatus(current.status, to)) {
-      return { ok: false, error: 'invalid_transition' as const };
-    }
-    if (!current.owner || !current.claim || current.claim.owner !== current.owner || !verifyClaimToken(current.claim, token)) {
-      return { ok: false, error: 'claim_conflict' as const };
-    }
-    if (terminalData.generation !== undefined && current.claim.generation !== terminalData.generation) {
-      return { ok: false, error: 'claim_conflict' as const };
-    }
-    if (terminalData.workspaceGeneration !== undefined && current.claim.workspace_generation !== terminalData.workspaceGeneration) {
-      return { ok: false, error: 'claim_conflict' as const };
-    }
-    if (terminalData.expectedVersion !== undefined && current.version !== terminalData.expectedVersion) {
-      return { ok: false, error: 'claim_conflict' as const };
-    }
-    if (leaseExpired(current.claim, nowFn())) return { ok: false, error: 'lease_expired' as const };
-    if (to === 'completed' && current.blocked_by && current.blocked_by.length > 0) {
-      for (const depId of current.blocked_by) {
-        const dep = readTaskUnlocked(root, teamName, depId);
-        if (dep === null || dep.status !== 'completed') {
-          return { ok: false, error: 'invalid_transition' as const };
+  const executeTransition = async (): Promise<TransitionTaskResult> => {
+    const result = await withDirectoryLock(taskFilePath(root, teamName, id), (): TransitionTaskResult => {
+      const current = readTaskUnlocked(root, teamName, id);
+      if (current === null) return { ok: false, error: 'task_not_found' as const };
+      if (TERMINAL.has(current.status)) return { ok: false, error: 'already_terminal' as const };
+      if (current.status !== from || !canTransitionTaskStatus(current.status, to)) {
+        return { ok: false, error: 'invalid_transition' as const };
+      }
+      if (!current.owner || !current.claim || current.claim.owner !== current.owner || !verifyClaimToken(current.claim, token)) {
+        return { ok: false, error: 'claim_conflict' as const };
+      }
+      if (terminalData.generation !== undefined && current.claim.generation !== terminalData.generation) {
+        return { ok: false, error: 'claim_conflict' as const };
+      }
+      if (terminalData.workspaceGeneration !== undefined && current.claim.workspace_generation !== terminalData.workspaceGeneration) {
+        return { ok: false, error: 'claim_conflict' as const };
+      }
+      if (terminalData.expectedVersion !== undefined && current.version !== terminalData.expectedVersion) {
+        return { ok: false, error: 'claim_conflict' as const };
+      }
+      if (leaseExpired(current.claim, nowFn())) return { ok: false, error: 'lease_expired' as const };
+      if (to === 'completed' && current.blocked_by && current.blocked_by.length > 0) {
+        for (const depId of current.blocked_by) {
+          const dep = readTaskUnlocked(root, teamName, depId);
+          if (dep === null || dep.status !== 'completed') {
+            return { ok: false, error: 'invalid_transition' as const };
+          }
         }
       }
-    }
 
-    const updated: TeamTask = {
-      id: current.id,
-      subject: current.subject,
-      description: current.description,
-      status: to,
-      created_at: current.created_at,
-      version: current.version + 1,
-      ...(current.last_claim_generation !== undefined ? { last_claim_generation: current.last_claim_generation } : {}),
-      ...requestMetadata(current),
-      owner: current.owner,
-      ...(TERMINAL.has(to) ? { completed_at: nowFn().toISOString() } : {}),
-      ...(current.blocked_by !== undefined ? { blocked_by: current.blocked_by } : {}),
-      ...(to === 'completed' && terminalData.result !== undefined ? { result: terminalData.result } : {}),
-      ...(to === 'failed' && terminalData.error !== undefined ? { error: terminalData.error } : {}),
-    };
+      const updated: TeamTask = {
+        id: current.id,
+        subject: current.subject,
+        description: current.description,
+        status: to,
+        created_at: current.created_at,
+        version: current.version + 1,
+        ...(current.last_claim_generation !== undefined ? { last_claim_generation: current.last_claim_generation } : {}),
+        ...requestMetadata(current),
+        owner: current.owner,
+        ...(TERMINAL.has(to) ? { completed_at: nowFn().toISOString() } : {}),
+        ...(current.blocked_by !== undefined ? { blocked_by: current.blocked_by } : {}),
+        ...(to === 'completed' && terminalData.result !== undefined ? { result: terminalData.result } : {}),
+        ...(to === 'failed' && terminalData.error !== undefined ? { error: terminalData.error } : {}),
+      };
 
-    const event: TeamTaskJournalEvent = {
-      kind: 'transitioned',
-      task: updated,
-      from,
-      to,
-    };
-    const serializedProbe = JSON.stringify({
-      kind: event.kind,
-      payload: event,
-      at: nowFn().toISOString(),
+      const event: TeamTaskJournalEvent = {
+        kind: 'transitioned',
+        task: updated,
+        from,
+        to,
+      };
+      const serializedProbe = JSON.stringify({
+        kind: event.kind,
+        payload: event,
+        at: nowFn().toISOString(),
+      });
+      if (Buffer.byteLength(serializedProbe, 'utf8') > 60 * 1024) {
+        return { ok: false, error: 'invalid_transition' as const };
+      }
+
+      appendTaskJournalEvent(root, teamName, updated.id, event, nowFn);
+      writeTaskUnlocked(root, teamName, updated);
+      return { ok: true as const, task: updated };
     });
-    if (Buffer.byteLength(serializedProbe, 'utf8') > 60 * 1024) {
-      return { ok: false, error: 'invalid_transition' as const };
+
+    if (result.ok && to === 'completed') {
+      await unblockDependentTasks(root, teamName, id, nowFn);
     }
+    return result;
+  };
 
-    appendTaskJournalEvent(root, teamName, updated.id, event, nowFn);
-    writeTaskUnlocked(root, teamName, updated);
-    return { ok: true as const, task: updated };
-  });
-
-  if (result.ok && to === 'completed') {
-    await unblockDependentTasks(root, teamName, id, nowFn);
+  if (to === 'completed') {
+    return withDependencyCoordinationLock(root, teamName, () => executeTransition());
   }
-  return result;
+  return executeTransition();
 }
 
 export async function releaseTaskClaim(
@@ -1324,46 +1339,48 @@ export async function reopenTask(
   now: () => Date = options.now ?? (() => new Date()),
 ): Promise<ReopenTaskResult> {
   const id = assertTaskId(taskId);
-  const result = await withDirectoryLock(taskFilePath(root, teamName, id), (): ReopenTaskResult => {
-    const current = readTaskUnlocked(root, teamName, id);
-    if (current === null) return { ok: false, error: 'task_not_found' as const };
-    if (!TERMINAL.has(current.status)) return { ok: false, error: 'not_terminal' as const };
+  return withDependencyCoordinationLock(root, teamName, async (): Promise<ReopenTaskResult> => {
+    const result = await withDirectoryLock(taskFilePath(root, teamName, id), (): ReopenTaskResult => {
+      const current = readTaskUnlocked(root, teamName, id);
+      if (current === null) return { ok: false, error: 'task_not_found' as const };
+      if (!TERMINAL.has(current.status)) return { ok: false, error: 'not_terminal' as const };
 
-    let newStatus: TeamTaskStatus = 'pending';
-    if (current.blocked_by && current.blocked_by.length > 0) {
-      const incomplete = current.blocked_by.filter((depId) => {
-        const dep = readTaskUnlocked(root, teamName, depId);
-        return dep === null || dep.status !== 'completed';
-      });
-      if (incomplete.length > 0) {
-        newStatus = 'blocked';
+      let newStatus: TeamTaskStatus = 'pending';
+      if (current.blocked_by && current.blocked_by.length > 0) {
+        const incomplete = current.blocked_by.filter((depId) => {
+          const dep = readTaskUnlocked(root, teamName, depId);
+          return dep === null || dep.status !== 'completed';
+        });
+        if (incomplete.length > 0) {
+          newStatus = 'blocked';
+        }
       }
+
+      const updated: TeamTask = {
+        id: current.id,
+        subject: current.subject,
+        description: current.description,
+        status: newStatus,
+        created_at: current.created_at,
+        version: current.version + 1,
+        ...(current.last_claim_generation !== undefined ? { last_claim_generation: current.last_claim_generation } : {}),
+        ...requestMetadata(current),
+        ...(current.blocked_by !== undefined ? { blocked_by: current.blocked_by } : {}),
+      };
+      appendTaskJournalEvent(root, teamName, updated.id, {
+        kind: 'reopened',
+        task: updated,
+        ...(options.reason !== undefined ? { reason: options.reason } : {}),
+      }, now);
+      writeTaskUnlocked(root, teamName, updated);
+      return { ok: true as const, task: updated };
+    });
+
+    if (result.ok) {
+      await reblockDependentTasks(root, teamName, id, now);
     }
-
-    const updated: TeamTask = {
-      id: current.id,
-      subject: current.subject,
-      description: current.description,
-      status: newStatus,
-      created_at: current.created_at,
-      version: current.version + 1,
-      ...(current.last_claim_generation !== undefined ? { last_claim_generation: current.last_claim_generation } : {}),
-      ...requestMetadata(current),
-      ...(current.blocked_by !== undefined ? { blocked_by: current.blocked_by } : {}),
-    };
-    appendTaskJournalEvent(root, teamName, updated.id, {
-      kind: 'reopened',
-      task: updated,
-      ...(options.reason !== undefined ? { reason: options.reason } : {}),
-    }, now);
-    writeTaskUnlocked(root, teamName, updated);
-    return { ok: true as const, task: updated };
+    return result;
   });
-
-  if (result.ok) {
-    await reblockDependentTasks(root, teamName, id, now);
-  }
-  return result;
 }
 
 export async function getTeamSummary(root: StateRoot, teamName: string): Promise<TeamSummary | null> {
