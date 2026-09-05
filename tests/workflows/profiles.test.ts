@@ -41,7 +41,7 @@ describe('Workflow Profiles Catalog', () => {
     ]);
   });
 
-  it('retrieves profiles by both prefixed and short IDs', () => {
+  it('retrieves profiles by both prefixed and short IDs, and canonical aliases', () => {
     const p1 = getSourceProfile('omc-autopilot');
     const p2 = getSourceProfile('autopilot');
     expect(p1).toBeDefined();
@@ -52,6 +52,19 @@ describe('Workflow Profiles Catalog', () => {
     const b2 = getSourceProfile('boulder');
     expect(b1?.canonicalName).toBe('OMO Boulder');
     expect(b2?.id).toBe('omo-boulder');
+
+    // Canonical aliases from prompt requirements
+    expect(getSourceProfile('boulder/start-work')?.id).toBe('omo-boulder');
+    expect(getSourceProfile('start-work')?.id).toBe('omo-boulder');
+    expect(getSourceProfile('ralplan/prometheus handoff')?.id).toBe('omx-ralplan');
+    expect(getSourceProfile('prometheus')?.id).toBe('omx-ralplan');
+    expect(getSourceProfile('persistent todo continuation')?.id).toBe('omc-persistent-todo');
+    expect(getSourceProfile('team story execution')?.id).toBe('omx-team');
+    expect(getSourceProfile('research goals')?.id).toBe('omx-research-goal');
+    expect(getSourceProfile('Atlas-style todo discipline')?.id).toBe('omo-atlas-todo');
+    expect(getSourceProfile('ultrawork/ulw-loop')?.id).toBe('omo-ulw-loop');
+    expect(getSourceProfile('bounded steering excursions')?.id).toBe('omo-steering');
+    expect(getSourceProfile('closing briefing')?.id).toBe('omo-closing-briefing');
   });
 
   it('validates phase transitions accurately', () => {

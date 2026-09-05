@@ -440,7 +440,7 @@ export class HookRegistry {
       failurePolicy: 'fail_open',
       sourceAnalogs: { omc: 'omc_hooks' },
       canonicalContractId: 'omcu-hook-lifecycle',
-      stateAccess: 'none',
+      stateAccess: 'read',
       immutable: false,
       supportedRuntimes: ['local', 'cloud', 'interactive'],
       handler: async (ctx: HookExecutionContext): Promise<HookHandlerResult> => {
@@ -451,7 +451,7 @@ export class HookRegistry {
             : {};
           const targetRunId = typeof inputObj.run_id === 'string'
             ? inputObj.run_id
-            : (typeof inputObj.workflow_id === 'string' ? inputObj.workflow_id : undefined);
+            : (typeof inputObj.workflow_id === 'string' ? inputObj.workflow_id : ctx.runId);
 
           let workflow = targetRunId ? store.load(targetRunId) : null;
           if (!workflow && ctx.agentId) {
@@ -475,11 +475,51 @@ export class HookRegistry {
                   created_at: new Date().toISOString(),
                 },
               ];
-              store.save({
+              workflow = {
                 ...workflow,
                 evidence,
                 updated_at: new Date().toISOString(),
+              };
+              store.save(workflow);
+            }
+
+            // Continuation transaction delivery on afterAgentResponse
+            const shouldContinue =
+              inputObj.request_continuation === true ||
+              inputObj.continue === true ||
+              inputObj.trigger_continuation === true ||
+              inputObj.auto_continue === true ||
+              inputObj.deliver_continuation === true;
+
+            if (shouldContinue && workflow.status === 'active') {
+              const eventId = typeof inputObj.event_id === 'string' && inputObj.event_id
+                ? inputObj.event_id
+                : `aar-${workflow.run_id}-${ctx.turnId ?? Date.now()}`;
+              const epoch = typeof inputObj.epoch === 'number' ? inputObj.epoch : workflow.epoch;
+              const observedFailure = inputObj.error
+                ? { error: String(inputObj.error), output: typeof inputObj.output === 'string' ? inputObj.output : undefined }
+                : undefined;
+
+              const txResult = await executeContinuationTransaction({
+                cwd: ctx.cwd,
+                run_id: workflow.run_id,
+                cursor_agent_id: workflow.cursor_agent_id,
+                cursor_run_id: workflow.cursor_run_id ?? undefined,
+                epoch,
+                event_id: eventId,
+                hook_event: 'afterAgentResponse',
+                hook_status: typeof inputObj.status === 'string' ? inputObj.status : 'completed',
+                observed_failure: observedFailure,
               });
+
+              if (txResult.continue && txResult.followup_message) {
+                return {
+                  handled: true,
+                  action: 'continue',
+                  followupMessage: txResult.followup_message,
+                  outputPayload: { followup_message: txResult.followup_message },
+                };
+              }
             }
           }
         } catch {

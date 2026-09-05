@@ -184,7 +184,7 @@ export class WorkflowProjectionStore {
     try {
       const content = fs.readFileSync(file, 'utf8');
       const parsed = JSON.parse(content) as Record<string, any>;
-      if (parsed.schema_version !== 1) return null;
+      if (parsed.schema_version !== 1 && (parsed.schema_version !== undefined || (!parsed.workflowId && !parsed.run_id))) return null;
       return normalizeLoadedProjection(parsed);
     } catch {
       return null;

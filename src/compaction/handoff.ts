@@ -203,6 +203,11 @@ export async function resumeWorkflowFromHandoff(
     throw new Error(`E_WORKFLOW_NOT_FOUND: Workflow ${options.run_id} not found`);
   }
 
+  // Reject resuming cancelled workflow
+  if (projection.status === 'cancelled') {
+    throw new Error(`E_WORKFLOW_CANCELLED: Cannot resume cancelled workflow '${options.run_id}'`);
+  }
+
   // Enforce exact Cursor Agent identity match
   if (projection.cursor_agent_id !== options.cursor_agent_id) {
     throw new Error(
@@ -210,10 +215,13 @@ export async function resumeWorkflowFromHandoff(
     );
   }
 
-  // Load latest handoff artifact if present
+  // Load and validate handoff artifact if present
   let handoff: CompactHandoffArtifact | null = null;
   if (options.handoffId) {
     handoff = loadHandoffArtifact(options.baseDir, options.handoffId);
+    if (!handoff) {
+      throw new Error(`E_HANDOFF_NOT_FOUND: Handoff artifact '${options.handoffId}' not found`);
+    }
   } else if (projection.handoffs.length > 0) {
     const latestHandoffRef = projection.handoffs[projection.handoffs.length - 1];
     if (latestHandoffRef) {
@@ -221,19 +229,47 @@ export async function resumeWorkflowFromHandoff(
     }
   }
 
+  if (handoff) {
+    if (handoff.run_id !== projection.run_id || handoff.cursor_agent_id !== projection.cursor_agent_id) {
+      throw new Error(
+        `E_HANDOFF_MISMATCH: Handoff artifact belongs to run '${handoff.run_id}' / agent '${handoff.cursor_agent_id}', expected '${projection.run_id}' / '${projection.cursor_agent_id}'`
+      );
+    }
+    const { sha256, ...body } = handoff;
+    const expectedSha = crypto.createHash('sha256').update(JSON.stringify(body)).digest('hex');
+    if (sha256 !== expectedSha) {
+      throw new Error(`E_HANDOFF_CORRUPT: Handoff artifact '${handoff.id}' checksum mismatch`);
+    }
+  }
+
   // Advance epoch across process boundary restart
   const nextEpoch = projection.epoch + 1;
+  const updatedHandoffs = handoff && !projection.handoffs.some((h) => h.id === handoff!.id)
+    ? [
+        ...projection.handoffs,
+        {
+          id: handoff.id,
+          epoch: handoff.epoch,
+          phase: handoff.current_phase,
+          artifact_uri: `.omcu/artifacts/${handoff.id}.json`,
+          summary: `Handoff before resume: ${handoff.next_safe_action}`,
+          created_at: handoff.created_at,
+        },
+      ]
+    : projection.handoffs;
+
   const updatedProjection: WorkflowProjection = {
     ...projection,
     epoch: nextEpoch,
     revision: projection.revision + 1,
     status: 'active',
+    handoffs: updatedHandoffs,
     updated_at: new Date().toISOString(),
   };
-  store.save(updatedProjection);
 
-  // Resume the native Cursor agent via Cursor SDK
+  // Resume the native Cursor agent via Cursor SDK before committing projection update
   const managedAgent = await options.runtime.resumeAgent(options.cursor_agent_id);
+  store.save(updatedProjection);
 
   return {
     managedAgent,

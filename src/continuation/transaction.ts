@@ -2,7 +2,7 @@ import path from 'node:path';
 import { withDirectoryLock } from '../runtime/atomic.js';
 import { resolveProjectStatePath } from '../runtime/state-root.js';
 import { WorkflowProjectionStore } from '../runtime/cursor-sdk/store.js';
-import { getSourceProfile } from '../workflows/profiles/catalog.js';
+import { getSourceProfile, getNextProfilePhase } from '../workflows/profiles/catalog.js';
 import { deriveFailureFingerprint, evaluateFailureProgress } from './fingerprint.js';
 import type {
   ContinuationTransactionOptions,
@@ -68,7 +68,8 @@ export async function executeContinuationTransaction(
 ): Promise<ContinuationTransactionResult> {
   const statePath = resolveProjectStatePath(options.cwd);
   const store = new WorkflowProjectionStore(options.cwd);
-  const lockFile = path.join(statePath, 'workflows', `${options.run_id}.lock`);
+  const sanitizedRunId = options.run_id.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const lockFile = path.join(statePath, 'workflows', `${sanitizedRunId}.lock`);
 
   return withDirectoryLock(lockFile, async (): Promise<ContinuationTransactionResult> => {
     const current = store.load(options.run_id);
@@ -81,12 +82,36 @@ export async function executeContinuationTransaction(
       };
     }
 
-    // 1. Validate matching Cursor Agent identity
+    // 1. Validate matching Cursor Agent and Run identity
     if (current.cursor_agent_id !== options.cursor_agent_id) {
       return {
         continue: false,
         reason: 'mismatched_cursor_agent',
         refusal_reason: `Cursor agent mismatch: expected ${current.cursor_agent_id}, received ${options.cursor_agent_id}`,
+        next_projection: current,
+        continuation_slot_consumed: false,
+      };
+    }
+
+    if (
+      current.cursor_run_id &&
+      options.cursor_run_id &&
+      current.cursor_run_id !== options.cursor_run_id
+    ) {
+      return {
+        continue: false,
+        reason: 'mismatched_cursor_run',
+        refusal_reason: `Cursor run mismatch: expected ${current.cursor_run_id}, received ${options.cursor_run_id}`,
+        next_projection: current,
+        continuation_slot_consumed: false,
+      };
+    }
+
+    if (current.run_id !== options.run_id) {
+      return {
+        continue: false,
+        reason: 'mismatched_run_id',
+        refusal_reason: `Workflow run mismatch: expected ${current.run_id}, received ${options.run_id}`,
         next_projection: current,
         continuation_slot_consumed: false,
       };
@@ -116,7 +141,12 @@ export async function executeContinuationTransaction(
     }
 
     // 4. Cancellation check
-    if (current.cancel_requested) {
+    const isCancelled =
+      current.cancel_requested ||
+      options.hook_status === 'cancelled' ||
+      options.hook_status === 'abort';
+
+    if (isCancelled) {
       const updated: WorkflowProjection = {
         ...current,
         status: 'cancelled',
@@ -208,8 +238,23 @@ export async function executeContinuationTransaction(
     let failureDirective: string | undefined = undefined;
     const profile = getSourceProfile(current.source_profile);
 
-    if (options.observed_failure) {
-      failureFingerprint = deriveFailureFingerprint(options.observed_failure);
+    let observedFailure = options.observed_failure;
+    if (!observedFailure && options.turn_output?.error) {
+      observedFailure = {
+        error: options.turn_output.error instanceof Error || typeof options.turn_output.error === 'string'
+          ? options.turn_output.error
+          : JSON.stringify(options.turn_output.error),
+        output: options.turn_output.text,
+      };
+    } else if (!observedFailure && (options.hook_status === 'timeout' || options.hook_status === 'error' || options.hook_status === 'failed')) {
+      observedFailure = {
+        error: `Hook failure: ${options.hook_status}`,
+        output: options.turn_output?.text,
+      };
+    }
+
+    if (observedFailure) {
+      failureFingerprint = deriveFailureFingerprint(observedFailure);
       const consecutiveFailures = (current as unknown as { consecutive_failures?: number }).consecutive_failures ?? 0;
       const progress = profile
         ? evaluateFailureProgress(profile, failureFingerprint, current.failure_fingerprint, consecutiveFailures)
@@ -274,6 +319,10 @@ export async function executeContinuationTransaction(
     }
 
     // 10. Check if next action exists or all goals are satisfied
+    const openGoals = current.goals.filter((g) => g.status === 'pending' || g.status === 'in_progress');
+    const openStories = current.stories.filter((s) => s.status === 'pending' || s.status === 'in_progress');
+    const openTodos = current.todos.filter((t) => !t.completed && t.status !== 'cancelled');
+
     const allGoalsDone = current.goals.length > 0 && current.goals.every((g) => g.status === 'completed');
     const allStoriesDone = current.stories.length > 0 && current.stories.every((s) => s.status === 'completed');
     const allTodosDone = current.todos.length > 0 && current.todos.every((t) => t.completed || t.status === 'cancelled');
@@ -282,6 +331,7 @@ export async function executeContinuationTransaction(
       const updated: WorkflowProjection = {
         ...current,
         status: 'completed',
+        phase: profile?.terminalPhases.includes('completed') ? 'completed' : current.phase,
         // Authoritative verification remains false until verified by omcu CLI
         verified: false,
         revision: current.revision + 1,
@@ -293,6 +343,43 @@ export async function executeContinuationTransaction(
         reason: 'all_goals_satisfied',
         refusal_reason: 'All goals, stories, and todos in workflow are completed',
         next_projection: updated,
+        continuation_slot_consumed: false,
+      };
+    }
+
+    // Terminal phase check
+    if (profile && profile.terminalPhases.includes(current.phase)) {
+      return {
+        continue: false,
+        reason: 'terminal_phase_reached',
+        refusal_reason: `Workflow is in terminal phase: ${current.phase}`,
+        next_projection: current,
+        continuation_slot_consumed: false,
+      };
+    }
+
+    // Next action validation: ensure work remains or valid phase transition exists
+    const hasOpenWork = openGoals.length > 0 || openStories.length > 0 || openTodos.length > 0;
+    const hasDefinedEntities = current.goals.length > 0 || current.stories.length > 0 || current.todos.length > 0;
+    const nextPhaseAvailable = profile ? getNextProfilePhase(current.source_profile, current.phase) !== null : false;
+    const isIterativePhase = ['loop', 'momentum_loop', 'ulw_work_loop', 'parallel_work', 'test', 'fix', 'execute', 'implement'].includes(current.phase);
+
+    if (hasDefinedEntities && !hasOpenWork) {
+      return {
+        continue: false,
+        reason: 'no_next_action',
+        refusal_reason: 'No open goals, stories, or todos remain to execute',
+        next_projection: current,
+        continuation_slot_consumed: false,
+      };
+    }
+
+    if (!hasOpenWork && !nextPhaseAvailable && !isIterativePhase) {
+      return {
+        continue: false,
+        reason: 'no_next_action',
+        refusal_reason: 'No next action or phase transition available in workflow',
+        next_projection: current,
         continuation_slot_consumed: false,
       };
     }

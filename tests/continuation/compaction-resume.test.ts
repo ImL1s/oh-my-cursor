@@ -273,4 +273,108 @@ describe('Compaction, Resume, and Native Hook Integration', () => {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  it('delivers native followup_message via dispatchHook afterAgentResponse event when continuation requested', async () => {
+    const { tempDir, store } = setupEnv();
+    try {
+      const projection = createWorkflowProjection({
+        run_id: 'wf-aar-hook-test',
+        cursor_agent_id: 'agent-aar-hook',
+        source_profile: 'omc-autopilot',
+        phase: 'execute',
+        objective_artifact: 'obj-aar-hook',
+        budgets: { max_iterations: 20, max_continuations: 30, deadline_at: '2026-12-01T00:00:00Z' },
+        todos: [{ id: 't-hook', title: 'Write integration test', completed: false, status: 'pending', created_at: '' }],
+      });
+      store.save(projection);
+
+      const dispatchResult = await dispatchHook(
+        'afterAgentResponse',
+        {
+          agent_id: 'agent-aar-hook',
+          run_id: 'wf-aar-hook-test',
+          agent_response: 'Implemented component logic.',
+          request_continuation: true,
+        },
+        { cwd: tempDir }
+      );
+
+      expect(dispatchResult.success).toBe(true);
+      expect(dispatchResult.response.followup_message).toBeDefined();
+      expect(String(dispatchResult.response.followup_message)).toContain('OMCU continuation active');
+      expect(String(dispatchResult.response.followup_message)).toContain('Write integration test');
+
+      const reloaded = store.load('wf-aar-hook-test');
+      expect(reloaded?.budgets.consumed_continuations).toBe(1);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects resume when workflow is cancelled', async () => {
+    const { tempDir, store } = setupEnv();
+    try {
+      const projection = createWorkflowProjection({
+        run_id: 'wf-cancelled',
+        cursor_agent_id: 'agent-cancel-1',
+        source_profile: 'omc-autopilot',
+        phase: 'execute',
+        status: 'cancelled',
+        objective_artifact: 'obj-cancel',
+        budgets: { max_iterations: 10, max_continuations: 20, deadline_at: '2026-12-01T00:00:00Z' },
+      });
+      store.save(projection);
+
+      const mockRuntime = {
+        resumeAgent: vi.fn(),
+      } as unknown as CursorRuntime;
+
+      await expect(
+        resumeWorkflowFromHandoff({
+          baseDir: tempDir,
+          run_id: 'wf-cancelled',
+          cursor_agent_id: 'agent-cancel-1',
+          runtime: mockRuntime,
+        })
+      ).rejects.toThrow('E_WORKFLOW_CANCELLED');
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects resume when handoff artifact checksum is corrupt', async () => {
+    const { tempDir, store } = setupEnv();
+    try {
+      const projection = createWorkflowProjection({
+        run_id: 'wf-corrupt-handoff',
+        cursor_agent_id: 'agent-corrupt-1',
+        source_profile: 'omc-autopilot',
+        phase: 'execute',
+        objective_artifact: 'obj-corrupt',
+        budgets: { max_iterations: 10, max_continuations: 20, deadline_at: '2026-12-01T00:00:00Z' },
+      });
+      store.save(projection);
+
+      const handoff = createCompactHandoff(projection);
+      // Tamper with handoff checksum
+      const tampered = { ...handoff, sha256: 'tampered-fake-sha256' };
+      saveHandoffArtifact(tempDir, tampered);
+
+      const mockRuntime = {
+        resumeAgent: vi.fn(),
+      } as unknown as CursorRuntime;
+
+      await expect(
+        resumeWorkflowFromHandoff({
+          baseDir: tempDir,
+          run_id: 'wf-corrupt-handoff',
+          cursor_agent_id: 'agent-corrupt-1',
+          handoffId: handoff.id,
+          runtime: mockRuntime,
+        })
+      ).rejects.toThrow('E_HANDOFF_CORRUPT');
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });

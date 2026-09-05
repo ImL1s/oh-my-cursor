@@ -461,8 +461,61 @@ for (const profile of WORKFLOW_PROFILES) {
   }
 }
 
+// Canonical aliases explicitly listed in OMC/OMX/OMO requirements
+const ALIAS_PAIRS: readonly [string, string][] = [
+  // OMC
+  ['autopilot', 'omc-autopilot'],
+  ['ralph', 'omc-ralph'],
+  ['ultrawork', 'omc-ultrawork'],
+  ['ultraqa', 'omc-ultraqa'],
+  ['pipeline', 'omc-pipeline'],
+  ['persistent todo continuation', 'omc-persistent-todo'],
+  ['persistent-todo-continuation', 'omc-persistent-todo'],
+  ['persistent_todo', 'omc-persistent-todo'],
+  // OMX
+  ['goal', 'omx-goal'],
+  ['ultragoal', 'omx-ultragoal'],
+  ['ralplan', 'omx-ralplan'],
+  ['ralplan/prometheus handoff', 'omx-ralplan'],
+  ['prometheus', 'omx-ralplan'],
+  ['prometheus-handoff', 'omx-ralplan'],
+  ['omx-ralph', 'omx-ralph'],
+  ['team', 'omx-team'],
+  ['team story execution', 'omx-team'],
+  ['team-story-execution', 'omx-team'],
+  ['research-goal', 'omx-research-goal'],
+  ['research goals', 'omx-research-goal'],
+  ['research-goals', 'omx-research-goal'],
+  // OMO
+  ['boulder', 'omo-boulder'],
+  ['boulder/start-work', 'omo-boulder'],
+  ['start-work', 'omo-boulder'],
+  ['start_work', 'omo-boulder'],
+  ['ulw-loop', 'omo-ulw-loop'],
+  ['ultrawork/ulw-loop', 'omo-ulw-loop'],
+  ['atlas-todo', 'omo-atlas-todo'],
+  ['Atlas-style todo discipline', 'omo-atlas-todo'],
+  ['atlas-style-todo-discipline', 'omo-atlas-todo'],
+  ['steering', 'omo-steering'],
+  ['bounded steering excursions', 'omo-steering'],
+  ['bounded-steering-excursions', 'omo-steering'],
+  ['closing-briefing', 'omo-closing-briefing'],
+  ['closing briefing', 'omo-closing-briefing'],
+];
+
+for (const [alias, targetId] of ALIAS_PAIRS) {
+  const target = PROFILE_MAP.get(targetId);
+  if (target && !PROFILE_MAP.has(alias)) {
+    PROFILE_MAP.set(alias, target);
+  }
+}
+
 export function getSourceProfile(id: string): WorkflowProfileDefinition | undefined {
-  return PROFILE_MAP.get(id);
+  if (PROFILE_MAP.has(id)) return PROFILE_MAP.get(id);
+  const normalized = id.toLowerCase().trim();
+  if (PROFILE_MAP.has(normalized)) return PROFILE_MAP.get(normalized);
+  const slug = normalized.replace(/[\s/_-]+/g, '-');
+  return PROFILE_MAP.get(slug);
 }
 
 export function listSourceProfiles(family?: SourceFamily): readonly WorkflowProfileDefinition[] {
