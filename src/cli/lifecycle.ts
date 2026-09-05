@@ -37,6 +37,16 @@ import {
   explainAgentRoute,
   validateAgentInvocation,
 } from '../agents/index.js';
+import {
+  getHookRegistry,
+  HOOK_TIER_NAMES,
+  dispatchHook,
+  runHooksDoctor,
+  getHookTraces,
+  generateHooksConfig,
+  checkHooksConfig,
+  type CursorNativeHookEvent,
+} from '../hooks/index.js';
 import type { CursorAgentAdapter } from '../host/cursor-agent.js';
 import { externalStateRoot, flagValue, optionValue, printJson, type CliContext } from './shared.js';
 
@@ -404,6 +414,130 @@ export async function handleLifecycle(context: CliContext): Promise<number | nul
         printJson(context.io, { ok: false, error: err instanceof Error ? err.message : String(err) });
         return 1;
       }
+    }
+  }
+  if (command === 'hooks') {
+    if (action === 'list') {
+      const event = optionValue<string>(context, '--event') as CursorNativeHookEvent | undefined;
+      const registry = getHookRegistry();
+      const handlers = registry.listHandlers(event ? { event } : undefined);
+      printJson(context.io, {
+        ok: true,
+        count: handlers.length,
+        handlers: handlers.map((h) => ({
+          id: h.id,
+          name: h.name,
+          event: h.event,
+          tier: h.tier,
+          tierName: HOOK_TIER_NAMES[h.tier],
+          priority: h.priority,
+          matcher: h.matcher,
+          loopLimit: h.loopLimit,
+          failurePolicy: h.failurePolicy,
+          canonicalContractId: h.canonicalContractId,
+          immutable: h.immutable,
+          description: h.description,
+        })),
+      });
+      return 0;
+    }
+    if (action === 'show') {
+      const id = context.parsed.positionals[0] ?? '';
+      const registry = getHookRegistry();
+      const handler = registry.getHandler(id);
+      if (!handler) {
+        printJson(context.io, { ok: false, error: `Hook handler not found: ${id}` });
+        return 1;
+      }
+      printJson(context.io, {
+        ok: true,
+        handler: {
+          id: handler.id,
+          name: handler.name,
+          description: handler.description,
+          event: handler.event,
+          tier: handler.tier,
+          tierName: HOOK_TIER_NAMES[handler.tier],
+          priority: handler.priority,
+          matcher: handler.matcher,
+          loopLimit: handler.loopLimit,
+          timeoutMs: handler.timeoutMs,
+          maxInputBytes: handler.maxInputBytes,
+          failurePolicy: handler.failurePolicy,
+          sourceAnalogs: handler.sourceAnalogs,
+          canonicalContractId: handler.canonicalContractId,
+          stateAccess: handler.stateAccess,
+          immutable: handler.immutable,
+          supportedRuntimes: handler.supportedRuntimes,
+        },
+      });
+      return 0;
+    }
+    if (action === 'doctor') {
+      const live = flagValue(context, '--live');
+      const report = await runHooksDoctor({ cwd: context.cwd, packageRoot: context.packageRoot, live });
+      printJson(context.io, report);
+      return report.ok ? 0 : 1;
+    }
+    if (action === 'trace') {
+      const runId = optionValue<string>(context, '--run');
+      const traces = getHookTraces(runId, context.cwd);
+      printJson(context.io, {
+        ok: true,
+        count: traces.length,
+        runId,
+        traces,
+      });
+      return 0;
+    }
+    if (action === 'test') {
+      const event = context.parsed.positionals[0] ?? '';
+      const fixtureStr = optionValue<string>(context, '--fixture') ?? '{}';
+      try {
+        let fixtureInput: unknown;
+        if (fixtureStr.startsWith('@') || fs.existsSync(fixtureStr)) {
+          const filePath = fixtureStr.startsWith('@') ? fixtureStr.slice(1) : fixtureStr;
+          fixtureInput = JSON.parse(fs.readFileSync(path.resolve(context.cwd, filePath), 'utf8'));
+        } else {
+          fixtureInput = JSON.parse(fixtureStr);
+        }
+        const dispatchResult = await dispatchHook(event, fixtureInput, { cwd: context.cwd });
+        printJson(context.io, {
+          ok: dispatchResult.success,
+          dispatchResult,
+        });
+        return dispatchResult.success ? 0 : 1;
+      } catch (err) {
+        printJson(context.io, { ok: false, error: err instanceof Error ? err.message : String(err) });
+        return 1;
+      }
+    }
+    if (action === 'generate') {
+      const check = flagValue(context, '--check');
+      const target = (optionValue<string>(context, '--target') ?? 'plugin') as 'plugin' | 'project';
+      const targetFile = target === 'plugin'
+        ? path.join(context.packageRoot, 'hooks', 'hooks.json')
+        : path.join(context.cwd, '.cursor', 'hooks.json');
+
+      if (check) {
+        const checkResult = checkHooksConfig(targetFile, target);
+        printJson(context.io, {
+          ok: checkResult.inSync,
+          target,
+          file: targetFile,
+          inSync: checkResult.inSync,
+          diff: checkResult.diff,
+        });
+        return checkResult.inSync ? 0 : 1;
+      }
+
+      const generated = generateHooksConfig({ target });
+      printJson(context.io, {
+        ok: true,
+        target,
+        config: generated,
+      });
+      return 0;
     }
   }
   if (command === 'capabilities' && action === 'cursor-components') {

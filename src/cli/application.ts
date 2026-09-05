@@ -48,6 +48,7 @@ Lifecycle / orchestration:
   omcu aliases explain <name>                       compatibility alias lookup and collision scan
   omcu agents list|show|invoke                      canonical Cursor agent personas & source profiles
   omcu route explain                                Cursor model routing resolution & tier matching
+  omcu hooks list|show|doctor|trace|test|generate   native Cursor lifecycle hooks & diagnostics
   omcu capabilities discover|native-status|cursor-components pinned host & native component probes
   omcu state create|status|transition|verify|event   CLI-authoritative state
   omcu cancel --id <run-id>                          CLI-authoritative cancellation

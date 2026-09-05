@@ -261,6 +261,13 @@ Do not edit this block manually; it is generated from `COMMAND_SCHEMAS`.
 - `omcu agents invoke` | options: --prompt:string required; --runtime:string default="local"; --background:flag; --profile:string; --json:flag | positionals: role:required
 - `omcu route` | options: none | positionals: none
 - `omcu route explain` | options: --agent:string required; --profile:string; --model:string; --runtime:string; --json:flag | positionals: none
+- `omcu hooks` | options: none | positionals: none
+- `omcu hooks list` | options: --event:string; --json:flag | positionals: none
+- `omcu hooks show` | options: --json:flag | positionals: id:required
+- `omcu hooks doctor` | options: --live:flag; --json:flag | positionals: none
+- `omcu hooks trace` | options: --run:string; --json:flag | positionals: none
+- `omcu hooks test` | options: --fixture:string; --json:flag | positionals: event:required
+- `omcu hooks generate` | options: --check:flag; --target:string; --json:flag | positionals: none
 - `omcu capabilities` | options: none | positionals: none
 - `omcu capabilities discover` | options: none | positionals: none
 - `omcu capabilities native-status` | options: none | positionals: none
