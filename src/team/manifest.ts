@@ -5,13 +5,15 @@ import { withinStateRoot, type StateRoot } from '../runtime/state-root.js';
 import type { TeamManifest } from './types.js';
 
 export interface TeamManifestRepository {
+  readonly root?: StateRoot;
   write(manifest: TeamManifest): void;
   read(teamId: string): TeamManifest;
   exists(teamId: string): boolean;
+  remove?(teamId: string): void;
 }
 
 export class TeamManifestStore implements TeamManifestRepository {
-  constructor(private readonly root: StateRoot) {}
+  constructor(readonly root: StateRoot) {}
   private file(teamId: string): string { return withinStateRoot(this.root, 'teams', safe(teamId), 'manifest.json'); }
   write(manifest: TeamManifest): void {
     validateManifest(manifest, manifest.team_id);
@@ -29,6 +31,20 @@ export class TeamManifestStore implements TeamManifestRepository {
     }
   }
   exists(teamId: string): boolean { return fs.existsSync(this.file(teamId)); }
+  remove(teamId: string): void {
+    const file = this.file(teamId);
+    try {
+      if (fs.existsSync(file)) {
+        fs.unlinkSync(file);
+      }
+      const dir = path.dirname(file);
+      if (fs.existsSync(dir) && fs.readdirSync(dir).length === 0) {
+        fs.rmdirSync(dir);
+      }
+    } catch {
+      // best-effort removal
+    }
+  }
 }
 
 function normalizeManifest(raw: Record<string, unknown>): TeamManifest {

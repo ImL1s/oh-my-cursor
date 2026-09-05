@@ -4,7 +4,7 @@ import { currentProcessIdentity } from '../runtime/process-identity.js';
 import { AutopilotPipeline, CursorWorktreeUlw, evaluateGate, runRalph, runRalplan, type AdvisoryGate, type UlwWorkerSpec } from '../modes/index.js';
 import { executeTeamApiOperation, ExperimentalTmuxTeamSupervisor, TEAM_API_HELP, TeamManifestStore, validateTeamApiOperationInput, type TeamWorkerSpec } from '../team/index.js';
 import { planWorkflow, replayWorkflow, validateWorkflowDefinition, WorkflowPersistenceStore, WorkflowRunner, type WorkflowDefinition, type WorkflowLeaseCredential, type WorkflowLeaseReconciliation } from '../workflows/index.js';
-import { commandRunner, optionValue, positionalValue, printJson, readJsonFile, requiredOptionValue, type CliContext } from './shared.js';
+import { commandRunner, flagValue, optionValue, positionalValue, printJson, readJsonFile, requiredOptionValue, type CliContext } from './shared.js';
 
 export async function handleOrchestration(context: CliContext): Promise<number | null> {
   const { command, action } = context.parsed;
@@ -110,7 +110,8 @@ async function handleTeam(action: string | null, context: CliContext): Promise<n
     const input = requiredOptionValue<Record<string, unknown>>(context, '--input');
     if (input === null || typeof input !== 'object' || Array.isArray(input)) throw new Error('E_TEAM_API_INPUT_INVALID');
     validateTeamApiOperationInput(operation, input);
-    const envelope = await executeTeamApiOperation(operation, input, context.root);
+    const isSupervisor = flagValue(context, '--supervisor');
+    const envelope = await executeTeamApiOperation(operation, input, context.root, { isSupervisor });
     printJson(context.io, envelope);
     return envelope.ok ? 0 : 1;
   }

@@ -282,6 +282,11 @@ describe('strict CLI grammar (#12)', () => {
     }
   });
 
+  it('parses --supervisor flag on team api', () => {
+    const parsed = parseCli(['team', 'api', 'reopen-task', '--input', '{"team_name":"t1","task_id":"1"}', '--supervisor']);
+    expect(parsed.options['--supervisor']).toBe(true);
+  });
+
   it('classifies option-dependent project state access', () => {
     expect(parseCli(['setup']).stateAccess).toBe('none');
     expect(parseCli(['setup', '--init-project-state']).stateAccess).toBe('write-ensure');
