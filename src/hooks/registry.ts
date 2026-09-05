@@ -1,6 +1,9 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { executeContinuationTransaction } from '../continuation/transaction.js';
 import { decidePersist } from '../persist/decision.js';
+import { WorkflowProjectionStore } from '../runtime/cursor-sdk/store.js';
 import { resolveProjectStatePath } from '../runtime/state-root.js';
 import { executeContextCompact } from './context-compact.js';
 import { evaluatePostStepAudit } from './post-step-audit.js';
@@ -233,7 +236,57 @@ export class HookRegistry {
       stateAccess: 'read',
       immutable: false,
       supportedRuntimes: ['local', 'cloud', 'interactive'],
-      handler: (ctx: HookExecutionContext): HookHandlerResult => {
+      handler: async (ctx: HookExecutionContext): Promise<HookHandlerResult> => {
+        try {
+          const store = new WorkflowProjectionStore(ctx.cwd);
+          const inputObj = typeof ctx.rawInput === 'object' && ctx.rawInput !== null
+            ? (ctx.rawInput as Record<string, unknown>)
+            : {};
+          const targetRunId = typeof inputObj.run_id === 'string'
+            ? inputObj.run_id
+            : (typeof inputObj.workflow_id === 'string' ? inputObj.workflow_id : undefined);
+
+          let workflow = targetRunId ? store.load(targetRunId) : null;
+          if (!workflow && ctx.agentId) {
+            const list = store.list();
+            workflow = list.find((w) => w.cursor_agent_id === ctx.agentId && w.status === 'active') ?? null;
+          }
+
+          if (workflow && workflow.status === 'active') {
+            const eventId = typeof inputObj.event_id === 'string' && inputObj.event_id
+              ? inputObj.event_id
+              : `stop-${workflow.run_id}-${ctx.loopCount ?? 0}-${Date.now()}`;
+            const epoch = typeof inputObj.epoch === 'number' ? inputObj.epoch : workflow.epoch;
+            const observedFailure = inputObj.error
+              ? { error: String(inputObj.error), output: typeof inputObj.output === 'string' ? inputObj.output : undefined }
+              : undefined;
+
+            const txResult = await executeContinuationTransaction({
+              cwd: ctx.cwd,
+              run_id: workflow.run_id,
+              cursor_agent_id: workflow.cursor_agent_id,
+              cursor_run_id: workflow.cursor_run_id ?? undefined,
+              epoch,
+              event_id: eventId,
+              hook_event: 'stop',
+              hook_status: typeof inputObj.status === 'string' ? inputObj.status : 'completed',
+              observed_failure: observedFailure,
+            });
+
+            if (txResult.continue && txResult.followup_message) {
+              return {
+                handled: true,
+                action: 'continue',
+                followupMessage: txResult.followup_message,
+                outputPayload: { followup_message: txResult.followup_message },
+              };
+            }
+            return { handled: true, action: 'pass' };
+          }
+        } catch {
+          // Fall through to persist state check
+        }
+
         const statePath = resolveProjectStatePath(ctx.cwd);
         const persistCandidates = [
           path.join(statePath, 'persist.json'),
@@ -287,7 +340,57 @@ export class HookRegistry {
       stateAccess: 'read',
       immutable: false,
       supportedRuntimes: ['local', 'cloud', 'interactive'],
-      handler: (ctx: HookExecutionContext): HookHandlerResult => {
+      handler: async (ctx: HookExecutionContext): Promise<HookHandlerResult> => {
+        try {
+          const store = new WorkflowProjectionStore(ctx.cwd);
+          const inputObj = typeof ctx.rawInput === 'object' && ctx.rawInput !== null
+            ? (ctx.rawInput as Record<string, unknown>)
+            : {};
+          const targetRunId = typeof inputObj.run_id === 'string'
+            ? inputObj.run_id
+            : (typeof inputObj.workflow_id === 'string' ? inputObj.workflow_id : undefined);
+
+          let workflow = targetRunId ? store.load(targetRunId) : null;
+          if (!workflow && ctx.agentId) {
+            const list = store.list();
+            workflow = list.find((w) => w.cursor_agent_id === ctx.agentId && w.status === 'active') ?? null;
+          }
+
+          if (workflow && workflow.status === 'active') {
+            const eventId = typeof inputObj.event_id === 'string' && inputObj.event_id
+              ? inputObj.event_id
+              : `subagent-stop-${workflow.run_id}-${ctx.loopCount ?? 0}-${Date.now()}`;
+            const epoch = typeof inputObj.epoch === 'number' ? inputObj.epoch : workflow.epoch;
+            const observedFailure = inputObj.error
+              ? { error: String(inputObj.error), output: typeof inputObj.output === 'string' ? inputObj.output : undefined }
+              : undefined;
+
+            const txResult = await executeContinuationTransaction({
+              cwd: ctx.cwd,
+              run_id: workflow.run_id,
+              cursor_agent_id: workflow.cursor_agent_id,
+              cursor_run_id: workflow.cursor_run_id ?? undefined,
+              epoch,
+              event_id: eventId,
+              hook_event: 'stop',
+              hook_status: typeof inputObj.status === 'string' ? inputObj.status : 'completed',
+              observed_failure: observedFailure,
+            });
+
+            if (txResult.continue && txResult.followup_message) {
+              return {
+                handled: true,
+                action: 'continue',
+                followupMessage: txResult.followup_message,
+                outputPayload: { followup_message: txResult.followup_message },
+              };
+            }
+            return { handled: true, action: 'pass' };
+          }
+        } catch {
+          // Fall through to persist state check
+        }
+
         const statePath = resolveProjectStatePath(ctx.cwd);
         const persistCandidates = [
           path.join(statePath, 'persist.json'),
@@ -340,10 +443,52 @@ export class HookRegistry {
       stateAccess: 'none',
       immutable: false,
       supportedRuntimes: ['local', 'cloud', 'interactive'],
-      handler: (): HookHandlerResult => {
+      handler: async (ctx: HookExecutionContext): Promise<HookHandlerResult> => {
+        try {
+          const store = new WorkflowProjectionStore(ctx.cwd);
+          const inputObj = typeof ctx.rawInput === 'object' && ctx.rawInput !== null
+            ? (ctx.rawInput as Record<string, unknown>)
+            : {};
+          const targetRunId = typeof inputObj.run_id === 'string'
+            ? inputObj.run_id
+            : (typeof inputObj.workflow_id === 'string' ? inputObj.workflow_id : undefined);
+
+          let workflow = targetRunId ? store.load(targetRunId) : null;
+          if (!workflow && ctx.agentId) {
+            const list = store.list();
+            workflow = list.find((w) => w.cursor_agent_id === ctx.agentId && w.status === 'active') ?? null;
+          }
+
+          if (workflow) {
+            const responseText = ctx.agentResponse ?? (typeof inputObj.agent_response === 'string' ? inputObj.agent_response : '');
+            if (responseText.includes('PASS') || responseText.includes('TESTS') || responseText.includes('verdict')) {
+              const evId = `ev-${crypto.randomUUID().slice(0, 8)}`;
+              const digest = crypto.createHash('sha256').update(responseText).digest('hex').slice(0, 16);
+              const evidence = [
+                ...workflow.evidence,
+                {
+                  id: evId,
+                  type: 'review' as const,
+                  reference: `agent-response:${ctx.turnId ?? 'turn'}`,
+                  digest,
+                  verified: false,
+                  created_at: new Date().toISOString(),
+                },
+              ];
+              store.save({
+                ...workflow,
+                evidence,
+                updated_at: new Date().toISOString(),
+              });
+            }
+          }
+        } catch {
+          // Ignore
+        }
         return { handled: true, action: 'pass' };
       },
     });
+
 
     // 9. Post-Step Audit Hook (Tier 4, postToolUse)
     this.handlers.set('omcu-hook-post-step-audit', {
