@@ -76,11 +76,54 @@ export {
   WorkflowProjectionStore,
 } from './runtime/cursor-sdk/index.js';
 export {
+  createWorkflowProjection,
+  digestWorkflowProjection,
+  type WorkflowProjection,
+  type WorkflowStatus,
+  type GoalRecord,
+  type StoryRecord,
+  type TodoRecord,
+  type ChildTaskReference,
+  type HandoffArtifactRecord,
+  type EvidenceReference,
+  type WorkflowBudgets,
+} from './workflows/projection.js';
+export {
+  WORKFLOW_PROFILES,
+  getSourceProfile,
+  listSourceProfiles,
+  validateProfileTransition,
+  getNextProfilePhase,
+  type WorkflowProfileDefinition,
+  type SourceFamily,
+  type SourceProfileId,
+} from './workflows/profiles/index.js';
+export {
+  deriveFailureFingerprint,
+  evaluateFailureProgress,
+  executeContinuationTransaction,
+  buildProfileFollowupMessage,
+  type ContinuationTransactionOptions,
+  type ContinuationTransactionResult,
+  type FailureFingerprintInput,
+  type FailureRoutingAction,
+} from './continuation/index.js';
+export {
+  createCompactHandoff,
+  saveHandoffArtifact,
+  loadHandoffArtifact,
+  resumeWorkflowFromHandoff,
+  type CompactHandoffArtifact,
+  type ResumeWorkflowOptions,
+  type ResumeWorkflowResult,
+} from './compaction/handoff.js';
+export {
   MCP_PROTOCOL_VERSION,
   MCP_SERVER_NAME,
   PACKAGE_VERSION,
   SUPPORTED_MCP_PROTOCOL_VERSIONS,
 } from './version.js';
+
 
 
 

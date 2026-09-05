@@ -66,6 +66,10 @@
       "types": "./dist/src/workflows/index.d.ts",
       "import": "./dist/src/workflows/index.js"
     },
+    "./continuation": {
+      "types": "./dist/src/continuation/index.d.ts",
+      "import": "./dist/src/continuation/index.js"
+    },
     "./modes": {
       "types": "./dist/src/modes/index.d.ts",
       "import": "./dist/src/modes/index.js"
