@@ -430,4 +430,176 @@ describe('Continuation Transaction', () => {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  it('rejects continuation when cursor_run_id does not match', async () => {
+    const { tempDir, store } = setupTestEnv();
+    try {
+      const projection = createWorkflowProjection({
+        run_id: 'wf-run-mismatch',
+        cursor_agent_id: 'agent-123',
+        cursor_run_id: 'cursor-run-aaa',
+        source_profile: 'omc-autopilot',
+        phase: 'execute',
+        objective_artifact: 'obj-run-check',
+        budgets: { max_iterations: 10, max_continuations: 5, deadline_at: '2026-12-31T23:59:59Z' },
+        todos: [{ id: 't1', title: 'Work', completed: false, status: 'pending', created_at: '' }],
+      });
+      store.save(projection);
+
+      const result = await executeContinuationTransaction({
+        cwd: tempDir,
+        run_id: 'wf-run-mismatch',
+        cursor_agent_id: 'agent-123',
+        cursor_run_id: 'cursor-run-wrong',
+        epoch: 1,
+        event_id: 'ev-run-mismatch',
+        hook_event: 'stop',
+      });
+
+      expect(result.continue).toBe(false);
+      expect(result.reason).toBe('mismatched_cursor_run');
+      expect(result.continuation_slot_consumed).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects continuation when no open goals, stories, or todos remain', async () => {
+    const { tempDir, store } = setupTestEnv();
+    try {
+      const projection = createWorkflowProjection({
+        run_id: 'wf-no-next-action',
+        cursor_agent_id: 'agent-123',
+        source_profile: 'omc-autopilot',
+        phase: 'execute',
+        objective_artifact: 'obj-no-action',
+        budgets: { max_iterations: 10, max_continuations: 5, deadline_at: '2026-12-31T23:59:59Z' },
+        goals: [
+          {
+            id: 'g-failed',
+            title: 'Unsatisfied goal',
+            acceptance_criteria: ['test pass'],
+            status: 'failed',
+            created_at: '',
+          },
+        ],
+        todos: [
+          { id: 't-cancelled', title: 'Cancelled step', completed: false, status: 'cancelled', created_at: '' },
+        ],
+      });
+      store.save(projection);
+
+      const result = await executeContinuationTransaction({
+        cwd: tempDir,
+        run_id: 'wf-no-next-action',
+        cursor_agent_id: 'agent-123',
+        epoch: 1,
+        event_id: 'ev-no-action',
+        hook_event: 'stop',
+      });
+
+      expect(result.continue).toBe(false);
+      expect(result.reason).toBe('no_next_action');
+      expect(result.continuation_slot_consumed).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects continuation when workflow is already in a terminal phase', async () => {
+    const { tempDir, store } = setupTestEnv();
+    try {
+      const projection = createWorkflowProjection({
+        run_id: 'wf-terminal',
+        cursor_agent_id: 'agent-123',
+        source_profile: 'omc-autopilot',
+        phase: 'completed', // Terminal phase in omc-autopilot
+        objective_artifact: 'obj-term',
+        budgets: { max_iterations: 10, max_continuations: 5, deadline_at: '2026-12-31T23:59:59Z' },
+        todos: [{ id: 't1', title: 'Lingering item', completed: false, status: 'pending', created_at: '' }],
+      });
+      store.save(projection);
+
+      const result = await executeContinuationTransaction({
+        cwd: tempDir,
+        run_id: 'wf-terminal',
+        cursor_agent_id: 'agent-123',
+        epoch: 1,
+        event_id: 'ev-terminal',
+        hook_event: 'stop',
+      });
+
+      expect(result.continue).toBe(false);
+      expect(result.reason).toBe('terminal_phase_reached');
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('extracts failure fingerprint from turn_output.error when observed_failure is not provided', async () => {
+    const { tempDir, store } = setupTestEnv();
+    try {
+      const projection = createWorkflowProjection({
+        run_id: 'wf-turn-err',
+        cursor_agent_id: 'agent-123',
+        source_profile: 'omc-pipeline',
+        phase: 'implement',
+        objective_artifact: 'obj-turn-err',
+        budgets: { max_iterations: 10, max_continuations: 10, deadline_at: '2026-12-31T23:59:59Z' },
+        todos: [{ id: 't1', title: 'Work', completed: false, status: 'pending', created_at: '' }],
+      });
+      store.save(projection);
+
+      const result = await executeContinuationTransaction({
+        cwd: tempDir,
+        run_id: 'wf-turn-err',
+        cursor_agent_id: 'agent-123',
+        epoch: 1,
+        event_id: 'ev-turn-err-1',
+        hook_event: 'afterAgentResponse',
+        turn_output: {
+          error: new Error('Command failed with exit code 1'),
+          text: 'error output details',
+        },
+      });
+
+      expect(result.continue).toBe(true);
+      expect(result.failure_fingerprint).toBeDefined();
+      expect(result.failure_fingerprint).toContain('fp-');
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('delivers continuation via afterAgentResponse hook event', async () => {
+    const { tempDir, store } = setupTestEnv();
+    try {
+      const projection = createWorkflowProjection({
+        run_id: 'wf-aar-test',
+        cursor_agent_id: 'agent-aar',
+        source_profile: 'omc-autopilot',
+        phase: 'execute',
+        objective_artifact: 'obj-aar',
+        budgets: { max_iterations: 10, max_continuations: 5, deadline_at: '2026-12-31T23:59:59Z' },
+        todos: [{ id: 't-next', title: 'Next step', completed: false, status: 'pending', created_at: '' }],
+      });
+      store.save(projection);
+
+      const result = await executeContinuationTransaction({
+        cwd: tempDir,
+        run_id: 'wf-aar-test',
+        cursor_agent_id: 'agent-aar',
+        epoch: 1,
+        event_id: 'ev-aar-1',
+        hook_event: 'afterAgentResponse',
+      });
+
+      expect(result.continue).toBe(true);
+      expect(result.continuation_slot_consumed).toBe(true);
+      expect(result.followup_message).toContain('OMCU continuation active');
+      expect(result.followup_message).toContain('Next step');
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });
