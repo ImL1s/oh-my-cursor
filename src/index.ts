@@ -38,6 +38,8 @@ export * as workflows from './workflows/index.js';
 export * as modes from './modes/index.js';
 export * as team from './team/index.js';
 export * as parity from './parity/index.js';
+export * as catalog from './catalog/index.js';
+export * as plugin from './plugin/index.js';
 export * as cursorSdk from './runtime/cursor-sdk/index.js';
 export {
   createCursorRuntime,

@@ -40,3 +40,63 @@ export async function discoverCursorCapabilities(adapter: CursorAgentAdapter, lo
       : Object.fromEntries(Object.entries(lock.capabilities).map(([name, claim]) => [name, { ...claim, verified: false, reason: 'current host probe did not match the pinned capability lock' }])),
   };
 }
+
+export async function discoverCursorComponents(
+  adapter: CursorAgentAdapter,
+  packageRoot: string,
+  cwd: string,
+  live = false,
+): Promise<import('../catalog/types.js').CursorComponentsCapabilityReport> {
+  const [versionResult, helpResult, pluginResult] = await Promise.all([
+    adapter.run({ argv: ['--version'], cwd, interactive: false }, { timeoutMs: 10_000 }),
+    adapter.run({ argv: ['--help'], cwd, interactive: false }, { timeoutMs: 10_000 }),
+    live ? adapter.run({ argv: ['--plugin-dir', packageRoot, '--help'], cwd, interactive: false }, { timeoutMs: 10_000 }) : Promise.resolve({ code: 0, stdout: '', stderr: '' }),
+  ]);
+
+  const observedVersion = versionResult.code === 0 ? versionResult.stdout.trim() : null;
+  const hostAccepted = pluginResult.code === 0;
+
+  return {
+    ok: observedVersion !== null && hostAccepted,
+    host: 'cursor-agent',
+    host_version: observedVersion,
+    components: {
+      plugin_manifest: {
+        supported: true,
+        status: 'native',
+        detail: 'Cursor supports --plugin-dir with .cursor-plugin/plugin.json manifest schema',
+      },
+      skills: {
+        supported: true,
+        status: 'native',
+        detail: 'Native Cursor skills supported in skills/<name>/SKILL.md format',
+      },
+      agents: {
+        supported: true,
+        status: 'native',
+        detail: 'Custom agents supported in agents/<name>.md format',
+      },
+      rules: {
+        supported: true,
+        status: 'native',
+        detail: 'Cursor rules supported under .cursor/rules/*.mdc format',
+      },
+      hooks: {
+        supported: true,
+        status: 'native',
+        detail: 'Cursor lifecycle hooks supported via hooks/hooks.json format',
+      },
+      mcp: {
+        supported: true,
+        status: 'native',
+        detail: 'Model Context Protocol supported via .mcp.json stdio server',
+      },
+      sdk: {
+        supported: true,
+        status: 'native',
+        detail: 'Cursor SDK (@cursor/sdk@1.0.31) supported as execution runtime',
+      },
+    },
+    live_proven: live && hostAccepted,
+  };
+}

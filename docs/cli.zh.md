@@ -248,9 +248,17 @@ Do not edit this block manually; it is generated from `COMMAND_SCHEMAS`.
 - `omcu rollback` | options: --receipt:string; --state-root:string; --dry-run:flag | positionals: none
 - `omcu doctor` | options: --repair-owner:flag; --repair-journals:flag | positionals: none
 - `omcu uninstall` | options: --receipt:string; --state-root:string; --purge-project-state:flag | positionals: none
+- `omcu plugin` | options: none | positionals: none
+- `omcu plugin status` | options: --json:flag; --state-root:string | positionals: none
+- `omcu plugin doctor` | options: --live:flag; --json:flag; --state-root:string | positionals: none
+- `omcu components` | options: none | positionals: none
+- `omcu components list` | options: --resolved:flag; --json:flag; --state-root:string | positionals: none
+- `omcu aliases` | options: none | positionals: none
+- `omcu aliases explain` | options: --json:flag | positionals: name:required
 - `omcu capabilities` | options: none | positionals: none
 - `omcu capabilities discover` | options: none | positionals: none
 - `omcu capabilities native-status` | options: none | positionals: none
+- `omcu capabilities cursor-components` | options: --live:flag; --json:flag | positionals: none
 - `omcu native-status` | options: none | positionals: none
 - `omcu mcp-server` | options: none | positionals: none
 - `omcu mcp` | options: none | positionals: none

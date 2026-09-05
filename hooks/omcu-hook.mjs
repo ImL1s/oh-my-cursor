@@ -132,7 +132,15 @@ async function readStdin() {
 }
 
 export async function runHook(event, inputText, env = process.env, runner = spawnSync) {
-  parseHookInput(inputText); // Validate and redact before any optional diagnostics.
+  const parsed = parseHookInput(inputText); // Validate and redact before any optional diagnostics.
+  if (parsed && typeof parsed === 'object' && typeof parsed.omcu_probe_nonce === 'string') {
+    return {
+      provenance: 'omcu',
+      version: '0.3.0',
+      nonce: parsed.omcu_probe_nonce,
+      event: SUPPORTED_EVENTS.has(event) ? event : 'unknown',
+    };
+  }
   if (PERSIST_CONTINUABLE.has(event)) {
     const followup = persistFollowup(inputText, env, runner);
     // subagentStop only supports followup_message; stop supports it too. When the
