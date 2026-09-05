@@ -435,6 +435,7 @@ describe('team api interop (P0)', () => {
       task_id: taskId,
       worker: 'two',
       force: true,
+      expected_generation: 1,
       reason: 'handover to worker two',
     }, root);
     expect(unauthorizedReclaim.ok).toBe(false);
@@ -448,6 +449,7 @@ describe('team api interop (P0)', () => {
       task_id: taskId,
       worker: 'two',
       force: true,
+      expected_generation: 1,
       reason: 'handover to worker two',
     }, root, { isSupervisor: true });
     expect(reclaimed.ok).toBe(true);
@@ -688,6 +690,7 @@ describe('team api interop (P0)', () => {
       task_id: '1',
       worker: 'one',
       force: true,
+      expected_generation: 2,
       process_identity: {
         pid: 67890,
         start_identity: 'custom-start-id',
@@ -756,5 +759,58 @@ describe('team api interop (P0)', () => {
     expect(exitWith).toBe(0);
     const task = await readTask(root, teamName, '1');
     expect(task?.status).toBe('pending');
+  });
+
+  it('validates expected_generation on forced reclaim via team API', async () => {
+    const { root, teamName } = workspace();
+    await executeTeamApiOperation('create-task', {
+      team_name: teamName,
+      subject: 'Task 1',
+      description: 'Desc',
+    }, root);
+    await executeTeamApiOperation('claim-task', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'one',
+    }, root);
+
+    // 1. Force reclaim without expected_generation or expected_version returns invalid_input
+    const noExp = await executeTeamApiOperation('reclaim-task', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'two',
+      force: true,
+    }, root, { isSupervisor: true });
+    expect(noExp.ok).toBe(false);
+    if (!noExp.ok) {
+      expect(noExp.error.code).toBe('invalid_input');
+      expect(noExp.error.message).toContain('Forced reclaim requires expected_generation or expected_version');
+    }
+
+    // 2. Force reclaim with mismatched expected_generation returns generation_mismatch
+    const mismatch = await executeTeamApiOperation('reclaim-task', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'two',
+      force: true,
+      expected_generation: 99,
+    }, root, { isSupervisor: true });
+    expect(mismatch.ok).toBe(false);
+    if (!mismatch.ok) {
+      expect(mismatch.error.code).toBe('generation_mismatch');
+    }
+
+    // 3. Force reclaim with matching expected_generation succeeds
+    const match = await executeTeamApiOperation('reclaim-task', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'two',
+      force: true,
+      expected_generation: 1,
+    }, root, { isSupervisor: true });
+    expect(match.ok).toBe(true);
+    if (!match.ok) return;
+    expect(match.data.previousGeneration).toBe(1);
+    expect(match.data.newGeneration).toBe(2);
   });
 });

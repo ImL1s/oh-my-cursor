@@ -445,11 +445,22 @@ export async function executeTeamApiOperation(
         if (force && !options?.isSupervisor) {
           return fail(operation, 'unauthorized', 'Forced reclaim requires supervisor authority');
         }
+        const expectedGeneration = isFiniteInteger(args.expected_generation ?? args.generation)
+          ? ((args.expected_generation ?? args.generation) as number)
+          : undefined;
+        const expectedVersion = isFiniteInteger(args.expected_version)
+          ? (args.expected_version as number)
+          : undefined;
+        if (force && expectedGeneration === undefined && expectedVersion === undefined) {
+          return fail(operation, 'invalid_input', 'Forced reclaim requires expected_generation or expected_version');
+        }
         const leaseMs = isFiniteInteger(args.lease_ms) ? (args.lease_ms as number) : undefined;
         const newProcessIdentity = resolveLongLivedWorkerIdentity(root, teamName, worker, args);
         const result = await reclaimTask(root, teamName, taskId, worker, {
           ...(reason !== undefined ? { reason } : {}),
           ...(force ? { force: true } : {}),
+          ...(expectedGeneration !== undefined ? { expectedGeneration } : {}),
+          ...(expectedVersion !== undefined ? { expectedVersion } : {}),
           ...(leaseMs !== undefined ? { leaseMs } : {}),
           ...(newProcessIdentity !== undefined ? { newProcessIdentity } : {}),
         });

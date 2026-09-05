@@ -151,7 +151,9 @@ export type ReclaimTaskResult =
         | 'lease_active'
         | 'worker_alive'
         | 'reconciliation_required'
-        | 'already_terminal';
+        | 'already_terminal'
+        | 'generation_mismatch'
+        | 'claim_conflict';
       readonly reason?: string;
       readonly priorGeneration?: number;
       readonly priorOwner?: string;
@@ -235,6 +237,8 @@ export interface RenewTaskClaimOptions {
 export interface ReclaimTaskOptions {
   readonly reason?: string;
   readonly force?: boolean;
+  readonly expectedGeneration?: number;
+  readonly expectedVersion?: number;
   readonly killProcess?: (pid: number) => void;
   readonly processRuntime?: ProcessIdentityRuntime;
   readonly leaseMs?: number;
@@ -424,15 +428,15 @@ function taskJournal(
   });
 }
 
-function appendTaskJournalEvent(
+async function appendTaskJournalEvent(
   root: StateRoot,
   teamName: string,
   taskId: string,
   event: TeamTaskJournalEvent,
   now: () => Date,
-): void {
+): Promise<void> {
   const journal = taskJournal(root, teamName, taskId, now);
-  journal.append({
+  await journal.append({
     kind: event.kind,
     payload: event,
     at: now().toISOString(),
@@ -518,8 +522,86 @@ function readTaskUnlocked(root: StateRoot, teamName: string, taskId: string): Te
   }
 }
 
-function writeTaskUnlocked(root: StateRoot, teamName: string, task: TeamTask): void {
-  atomicWriteJson(taskFilePath(root, teamName, task.id), task);
+function writeTaskUnlocked(root: StateRoot, teamName: string, task: TeamTask, options?: AtomicWriteOptions): void {
+  atomicWriteJson(taskFilePath(root, teamName, task.id), task, options);
+}
+
+async function commitTaskWithJournal(
+  root: StateRoot,
+  teamName: string,
+  taskId: string,
+  event: TeamTaskJournalEvent,
+  task: TeamTask,
+  previousTask: TeamTask | null,
+  nowFn: () => Date,
+  writeOptions?: AtomicWriteOptions,
+): Promise<void> {
+  await appendTaskJournalEvent(root, teamName, taskId, event, nowFn);
+  try {
+    writeTaskUnlocked(root, teamName, task, writeOptions);
+  } catch (error) {
+    if (previousTask !== null) {
+      const lastClaimGen = Math.max(
+        task.last_claim_generation ?? 0,
+        task.claim?.generation ?? 0,
+        previousTask.last_claim_generation ?? 0,
+        previousTask.claim?.generation ?? 0,
+      );
+      const isClaimOp = event.kind === 'claimed' || event.kind === 'reclaimed';
+      const { owner: _prevOwner, claim: _prevClaim, ...baseTask } = previousTask;
+      const reconciledTask: TeamTask = {
+        ...baseTask,
+        version: task.version + 1,
+        ...(lastClaimGen > 0 ? { last_claim_generation: lastClaimGen } : {}),
+        ...(isClaimOp
+          ? {
+              status: previousTask.status === 'in_progress' ? 'pending' : previousTask.status,
+            }
+          : {
+              ...(previousTask.owner !== undefined ? { owner: previousTask.owner } : {}),
+              ...(previousTask.claim !== undefined ? { claim: previousTask.claim } : {}),
+            }),
+      };
+
+      try {
+        await appendTaskJournalEvent(
+          root,
+          teamName,
+          taskId,
+          {
+            kind: 'released',
+            task: reconciledTask,
+          },
+          nowFn,
+        );
+      } catch {
+        // best effort journal reconciliation
+      }
+
+      const filePath = taskFilePath(root, teamName, taskId);
+      try {
+        writeTaskUnlocked(root, teamName, reconciledTask);
+      } catch {
+        try {
+          if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+          }
+        } catch {
+          // best effort unlink
+        }
+      }
+    } else {
+      const filePath = taskFilePath(root, teamName, taskId);
+      try {
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+      } catch {
+        // best effort cleanup
+      }
+    }
+    throw error;
+  }
 }
 
 function checkDependencyCycle(
@@ -564,7 +646,7 @@ async function unblockDependentTasks(root: StateRoot, teamName: string, complete
     if (!match) continue;
     const otherId = match[1]!;
     if (otherId === completedTaskId) continue;
-    await withDirectoryLock(taskFilePath(root, teamName, otherId), () => {
+    await withDirectoryLock(taskFilePath(root, teamName, otherId), async () => {
       const other = readTaskUnlocked(root, teamName, otherId);
       if (other && other.status === 'blocked' && other.blocked_by && other.blocked_by.includes(completedTaskId)) {
         const stillIncomplete = other.blocked_by.filter((depId) => {
@@ -577,13 +659,20 @@ async function unblockDependentTasks(root: StateRoot, teamName: string, complete
             status: 'pending',
             version: other.version + 1,
           };
-          writeTaskUnlocked(root, teamName, unblocked);
-          appendTaskJournalEvent(root, teamName, otherId, {
-            kind: 'transitioned',
-            task: unblocked,
-            from: 'blocked',
-            to: 'pending',
-          }, now);
+          await commitTaskWithJournal(
+            root,
+            teamName,
+            otherId,
+            {
+              kind: 'transitioned',
+              task: unblocked,
+              from: 'blocked',
+              to: 'pending',
+            },
+            unblocked,
+            other,
+            now,
+          );
         }
       }
     });
@@ -607,7 +696,7 @@ async function reblockDependentTasks(root: StateRoot, teamName: string, reopened
       const otherId = match[1]!;
       if (otherId === currentUncompletedId) continue;
 
-      await withDirectoryLock(taskFilePath(root, teamName, otherId), () => {
+      await withDirectoryLock(taskFilePath(root, teamName, otherId), async () => {
         const other = readTaskUnlocked(root, teamName, otherId);
         if (other && (other.status === 'pending' || other.status === 'in_progress') && other.blocked_by && other.blocked_by.includes(currentUncompletedId)) {
           const priorStatus = other.status;
@@ -617,13 +706,20 @@ async function reblockDependentTasks(root: StateRoot, teamName: string, reopened
             status: 'blocked',
             version: other.version + 1,
           };
-          writeTaskUnlocked(root, teamName, reblocked);
-          appendTaskJournalEvent(root, teamName, otherId, {
-            kind: 'transitioned',
-            task: reblocked,
-            from: priorStatus,
-            to: 'blocked',
-          }, now);
+          await commitTaskWithJournal(
+            root,
+            teamName,
+            otherId,
+            {
+              kind: 'transitioned',
+              task: reblocked,
+              from: priorStatus,
+              to: 'blocked',
+            },
+            reblocked,
+            other,
+            now,
+          );
           toCheck.add(otherId);
         }
       });
@@ -681,7 +777,7 @@ export async function createTask(
   if (subject === '' || description === '') throw new Error('E_TEAM_TASK_FIELDS_REQUIRED');
   const requestId = input.request_id === undefined ? undefined : assertRequestId(input.request_id);
 
-  return withDirectoryLock(teamConfigPath(root, teamName), () => {
+  return withDirectoryLock(teamConfigPath(root, teamName), async () => {
     const config = readTeamConfig(root, teamName);
     if (config === null) throw new Error('E_TEAM_NOT_FOUND');
     let workingConfig = config;
@@ -781,7 +877,7 @@ export async function createTask(
       ...(blockedBy !== undefined ? { blocked_by: blockedBy } : {}),
     };
     atomicCreateJson(taskFilePath(root, teamName, task.id), task, actualOptions.taskWriteOptions);
-    appendTaskJournalEvent(root, teamName, task.id, { kind: 'created', task }, nowFn);
+    await appendTaskJournalEvent(root, teamName, task.id, { kind: 'created', task }, nowFn);
     const next: TeamCoordinationConfig = { ...workingConfig, next_task_id: workingConfig.next_task_id + 1 };
     try {
       atomicWriteJson(teamConfigPath(root, teamName), next, actualOptions.configWriteOptions);
@@ -913,7 +1009,7 @@ export async function claimTask(
     }
   }
 
-  return withDirectoryLock(taskFilePath(root, teamName, id), () => {
+  return withDirectoryLock(taskFilePath(root, teamName, id), async () => {
     const current = readTaskUnlocked(root, teamName, id);
     if (current === null) return { ok: false, error: 'task_not_found' as const };
     if (expVersion !== null && current.version !== expVersion) return { ok: false, error: 'claim_conflict' as const };
@@ -986,12 +1082,20 @@ export async function claimTask(
       claim,
       ...(working.blocked_by !== undefined ? { blocked_by: working.blocked_by } : {}),
     };
-    appendTaskJournalEvent(root, teamName, updated.id, {
-      kind: 'claimed',
-      task: updated,
-      claim,
-    }, nowFn);
-    writeTaskUnlocked(root, teamName, updated);
+    await commitTaskWithJournal(
+      root,
+      teamName,
+      updated.id,
+      {
+        kind: 'claimed',
+        task: updated,
+        claim,
+      },
+      updated,
+      working,
+      nowFn,
+      actualOptions.taskWriteOptions,
+    );
     return { ok: true as const, task: updated, claimToken };
   });
 }
@@ -1011,7 +1115,7 @@ export async function renewTaskClaim(
   if (config === null) return { ok: false, error: 'task_not_found' };
   if (!config.workers.some((entry) => entry.name === worker)) return { ok: false, error: 'worker_not_found' };
 
-  return withDirectoryLock(taskFilePath(root, teamName, id), () => {
+  return withDirectoryLock(taskFilePath(root, teamName, id), async () => {
     const current = readTaskUnlocked(root, teamName, id);
     if (current === null) return { ok: false, error: 'task_not_found' as const };
     if (TERMINAL.has(current.status)) return { ok: false, error: 'already_terminal' as const };
@@ -1060,12 +1164,20 @@ export async function renewTaskClaim(
       version: current.version + 1,
       claim: updatedClaim,
     };
-    appendTaskJournalEvent(root, teamName, updated.id, {
-      kind: 'renewed',
-      task: updated,
-      claim: updatedClaim,
-    }, now);
-    writeTaskUnlocked(root, teamName, updated);
+    await commitTaskWithJournal(
+      root,
+      teamName,
+      updated.id,
+      {
+        kind: 'renewed',
+        task: updated,
+        claim: updatedClaim,
+      },
+      updated,
+      current,
+      now,
+      options.taskWriteOptions,
+    );
     return { ok: true as const, task: updated };
   });
 }
@@ -1084,12 +1196,44 @@ export async function reclaimTask(
   if (config === null) return { ok: false, error: 'task_not_found' };
   if (!config.workers.some((entry) => entry.name === worker)) return { ok: false, error: 'worker_not_found' };
 
-  return withDirectoryLock(taskFilePath(root, teamName, id), () => {
+  return withDirectoryLock(taskFilePath(root, teamName, id), async () => {
     const current = readTaskUnlocked(root, teamName, id);
     if (current === null) return { ok: false, error: 'task_not_found' as const };
     if (TERMINAL.has(current.status)) return { ok: false, error: 'already_terminal' as const };
     if (current.status !== 'in_progress' || !current.claim) {
       return { ok: false, error: 'not_in_progress' as const };
+    }
+
+    if (options.force) {
+      if (options.expectedGeneration === undefined && options.expectedVersion === undefined) {
+        return {
+          ok: false,
+          error: 'generation_mismatch' as const,
+          reason: 'Forced reclaim requires expectedGeneration or expectedVersion to guard against stale overrides',
+          priorGeneration: current.claim.generation,
+          priorOwner: current.claim.owner,
+        };
+      }
+    }
+
+    if (options.expectedGeneration !== undefined && current.claim.generation !== options.expectedGeneration) {
+      return {
+        ok: false,
+        error: 'generation_mismatch' as const,
+        reason: `Task generation ${current.claim.generation} does not match expected generation ${options.expectedGeneration}`,
+        priorGeneration: current.claim.generation,
+        priorOwner: current.claim.owner,
+      };
+    }
+
+    if (options.expectedVersion !== undefined && current.version !== options.expectedVersion) {
+      return {
+        ok: false,
+        error: 'claim_conflict' as const,
+        reason: `Task version ${current.version} does not match expected version ${options.expectedVersion}`,
+        priorGeneration: current.claim.generation,
+        priorOwner: current.claim.owner,
+      };
     }
 
     if (!leaseExpired(current.claim, now()) && !options.force) {
@@ -1152,14 +1296,22 @@ export async function reclaimTask(
       last_claim_generation: newGeneration,
       claim,
     };
-    appendTaskJournalEvent(root, teamName, updated.id, {
-      kind: 'reclaimed',
-      task: updated,
-      previous_generation: priorGeneration,
-      new_generation: newGeneration,
-      ...(options.reason !== undefined ? { reason: options.reason } : {}),
-    }, now);
-    writeTaskUnlocked(root, teamName, updated);
+    await commitTaskWithJournal(
+      root,
+      teamName,
+      updated.id,
+      {
+        kind: 'reclaimed',
+        task: updated,
+        previous_generation: priorGeneration,
+        new_generation: newGeneration,
+        ...(options.reason !== undefined ? { reason: options.reason } : {}),
+      },
+      updated,
+      current,
+      now,
+      options.taskWriteOptions,
+    );
     return {
       ok: true as const,
       task: updated,
@@ -1193,7 +1345,7 @@ export async function transitionTaskStatus(
   }
 
   const executeTransition = async (): Promise<TransitionTaskResult> => {
-    const result = await withDirectoryLock(taskFilePath(root, teamName, id), (): TransitionTaskResult => {
+    const result = await withDirectoryLock(taskFilePath(root, teamName, id), async (): Promise<TransitionTaskResult> => {
       const current = readTaskUnlocked(root, teamName, id);
       if (current === null) return { ok: false, error: 'task_not_found' as const };
       if (TERMINAL.has(current.status)) return { ok: false, error: 'already_terminal' as const };
@@ -1253,8 +1405,16 @@ export async function transitionTaskStatus(
         return { ok: false, error: 'invalid_transition' as const };
       }
 
-      appendTaskJournalEvent(root, teamName, updated.id, event, nowFn);
-      writeTaskUnlocked(root, teamName, updated);
+      await commitTaskWithJournal(
+        root,
+        teamName,
+        updated.id,
+        event,
+        updated,
+        current,
+        nowFn,
+        terminalData.taskWriteOptions,
+      );
       return { ok: true as const, task: updated };
     });
 
@@ -1293,7 +1453,7 @@ export async function releaseTaskClaim(
   }
   if (actualOptions.now) nowFn = actualOptions.now;
 
-  return withDirectoryLock(taskFilePath(root, teamName, id), () => {
+  return withDirectoryLock(taskFilePath(root, teamName, id), async () => {
     const current = readTaskUnlocked(root, teamName, id);
     if (current === null) return { ok: false, error: 'task_not_found' as const };
     if (current.status === 'pending' && current.claim === undefined && current.owner === undefined) {
@@ -1322,11 +1482,19 @@ export async function releaseTaskClaim(
       ...requestMetadata(current),
       ...(current.blocked_by !== undefined ? { blocked_by: current.blocked_by } : {}),
     };
-    appendTaskJournalEvent(root, teamName, updated.id, {
-      kind: 'released',
-      task: updated,
-    }, nowFn);
-    writeTaskUnlocked(root, teamName, updated);
+    await commitTaskWithJournal(
+      root,
+      teamName,
+      updated.id,
+      {
+        kind: 'released',
+        task: updated,
+      },
+      updated,
+      current,
+      nowFn,
+      actualOptions.taskWriteOptions,
+    );
     return { ok: true as const, task: updated };
   });
 }
@@ -1340,7 +1508,7 @@ export async function reopenTask(
 ): Promise<ReopenTaskResult> {
   const id = assertTaskId(taskId);
   return withDependencyCoordinationLock(root, teamName, async (): Promise<ReopenTaskResult> => {
-    const result = await withDirectoryLock(taskFilePath(root, teamName, id), (): ReopenTaskResult => {
+    const result = await withDirectoryLock(taskFilePath(root, teamName, id), async (): Promise<ReopenTaskResult> => {
       const current = readTaskUnlocked(root, teamName, id);
       if (current === null) return { ok: false, error: 'task_not_found' as const };
       if (!TERMINAL.has(current.status)) return { ok: false, error: 'not_terminal' as const };
@@ -1367,12 +1535,20 @@ export async function reopenTask(
         ...requestMetadata(current),
         ...(current.blocked_by !== undefined ? { blocked_by: current.blocked_by } : {}),
       };
-      appendTaskJournalEvent(root, teamName, updated.id, {
-        kind: 'reopened',
-        task: updated,
-        ...(options.reason !== undefined ? { reason: options.reason } : {}),
-      }, now);
-      writeTaskUnlocked(root, teamName, updated);
+      await commitTaskWithJournal(
+        root,
+        teamName,
+        updated.id,
+        {
+          kind: 'reopened',
+          task: updated,
+          ...(options.reason !== undefined ? { reason: options.reason } : {}),
+        },
+        updated,
+        current,
+        now,
+        options.taskWriteOptions,
+      );
       return { ok: true as const, task: updated };
     });
 

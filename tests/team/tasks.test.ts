@@ -824,6 +824,7 @@ describe('team tasks lifecycle & generation fencing', { timeout: 20_000 }, () =>
         'supervisor',
         {
           force: true,
+          expectedGeneration: 1,
           killProcess: (pid) => {
             killedPids.push(pid);
             alivePids.delete(pid);
@@ -869,7 +870,7 @@ describe('team tasks lifecycle & generation fencing', { timeout: 20_000 }, () =>
         teamName,
         task.id,
         'worker-2',
-        { force: true, now: () => fakeTime },
+        { force: true, expectedGeneration: 1, now: () => fakeTime },
       );
       expect(reclaim.ok).toBe(true);
       if (!reclaim.ok) return;
@@ -1155,6 +1156,7 @@ describe('team tasks lifecycle & generation fencing', { timeout: 20_000 }, () =>
       // reclaimTask caps to 24h
       const reclaim = await reclaimTask(root, teamName, task.id, 'worker-2', {
         force: true,
+        expectedGeneration: 1,
         leaseMs: hugeLease,
         now: () => now,
       });
@@ -1314,6 +1316,162 @@ describe('team tasks lifecycle & generation fencing', { timeout: 20_000 }, () =>
         // If completion succeeded before reopen took effect, verify both are non-conflicting
         expect(read2?.status).toBe('completed');
       }
+    });
+  });
+
+  describe('Forced Reclaim Expected Generation & Version Fencing', () => {
+    it('rejects forced reclaim without expectedGeneration or expectedVersion', async () => {
+      const { root, teamName } = workspace();
+      const task = await createTask(root, teamName, { subject: 'T1', description: 'Desc' });
+      const claim = await claimTask(root, teamName, task.id, 'worker-1');
+      expect(claim.ok).toBe(true);
+
+      const reclaim = await reclaimTask(root, teamName, task.id, 'supervisor', {
+        force: true,
+      });
+      expect(reclaim.ok).toBe(false);
+      if (!reclaim.ok) {
+        expect(reclaim.error).toBe('generation_mismatch');
+        expect(reclaim.reason).toContain('Forced reclaim requires expectedGeneration or expectedVersion');
+      }
+    });
+
+    it('rejects forced reclaim with mismatched expectedGeneration', async () => {
+      const { root, teamName } = workspace();
+      const task = await createTask(root, teamName, { subject: 'T1', description: 'Desc' });
+      const claim = await claimTask(root, teamName, task.id, 'worker-1');
+      expect(claim.ok).toBe(true);
+
+      const reclaim = await reclaimTask(root, teamName, task.id, 'supervisor', {
+        force: true,
+        expectedGeneration: 99,
+      });
+      expect(reclaim.ok).toBe(false);
+      if (!reclaim.ok) {
+        expect(reclaim.error).toBe('generation_mismatch');
+        expect(reclaim.priorGeneration).toBe(1);
+      }
+    });
+
+    it('rejects forced reclaim with mismatched expectedVersion', async () => {
+      const { root, teamName } = workspace();
+      const task = await createTask(root, teamName, { subject: 'T1', description: 'Desc' });
+      const claim = await claimTask(root, teamName, task.id, 'worker-1');
+      expect(claim.ok).toBe(true);
+
+      const reclaim = await reclaimTask(root, teamName, task.id, 'supervisor', {
+        force: true,
+        expectedGeneration: 1,
+        expectedVersion: 99,
+      });
+      expect(reclaim.ok).toBe(false);
+      if (!reclaim.ok) {
+        expect(reclaim.error).toBe('claim_conflict');
+      }
+    });
+
+    it('protects newer claims against stale supervisor force-reclaims', async () => {
+      const { root, teamName } = workspace();
+      const task = await createTask(root, teamName, { subject: 'T1', description: 'Desc' });
+
+      let fakeTime = new Date('2026-09-05T10:00:00.000Z');
+      const claim1 = await claimTask(root, teamName, task.id, 'worker-1', { leaseMs: 60000, now: () => fakeTime });
+      expect(claim1.ok).toBe(true);
+
+      // Lease expires, worker 2 reclaims (generation 2)
+      fakeTime = new Date('2026-09-05T10:01:01.000Z');
+      const reclaim2 = await reclaimTask(root, teamName, task.id, 'worker-2', { now: () => fakeTime });
+      expect(reclaim2.ok).toBe(true);
+      if (!reclaim2.ok) return;
+      expect(reclaim2.newGeneration).toBe(2);
+
+      // Stale supervisor request targeting generation 1 arrives
+      const staleSupervisorReclaim = await reclaimTask(root, teamName, task.id, 'supervisor', {
+        force: true,
+        expectedGeneration: 1,
+        now: () => fakeTime,
+      });
+      expect(staleSupervisorReclaim.ok).toBe(false);
+      if (!staleSupervisorReclaim.ok) {
+        expect(staleSupervisorReclaim.error).toBe('generation_mismatch');
+        expect(staleSupervisorReclaim.priorGeneration).toBe(2);
+        expect(staleSupervisorReclaim.priorOwner).toBe('worker-2');
+      }
+
+      // Worker 2's active claim remains intact and protected
+      const currentTask = await readTask(root, teamName, task.id);
+      expect(currentTask?.owner).toBe('worker-2');
+      expect(currentTask?.claim?.generation).toBe(2);
+    });
+  });
+
+  describe('Journal Reconciliation on Snapshot Write Failure', () => {
+    it('reconciles journal and advances generation when claimTask snapshot write fails', async () => {
+      const { root, teamName } = workspace();
+      const task = await createTask(root, teamName, { subject: 'Fail Snapshot', description: 'desc' });
+      expect(task.status).toBe('pending');
+      expect(task.version).toBe(1);
+
+      // Attempt claim with simulated atomic write error
+      await expect(
+        claimTask(root, teamName, task.id, 'worker-1', {
+          taskWriteOptions: {
+            faultInjector: (point) => {
+              if (point === 'write') throw new Error('E_ATOMIC_WRITE_SIMULATED');
+            },
+          },
+        }),
+      ).rejects.toThrow('E_ATOMIC_WRITE_SIMULATED');
+
+      // 1. Recovery must not resurrect an unauthenticated in-progress claim
+      const recovered = rebuildTaskFromJournal(root, teamName, task.id);
+      expect(recovered).not.toBeNull();
+      expect(recovered?.status).toBe('pending');
+      expect(recovered?.claim).toBeUndefined();
+      expect(recovered?.owner).toBeUndefined();
+      // 2. The aborted claim generation (1) is recorded as burned in last_claim_generation
+      expect(recovered?.last_claim_generation).toBe(1);
+
+      // 3. Retry claiming: it must succeed and allocate generation 2, never reusing generation 1
+      const retry = await claimTask(root, teamName, task.id, 'worker-1');
+      expect(retry.ok).toBe(true);
+      if (!retry.ok) return;
+      expect(retry.task.claim?.generation).toBe(2);
+      expect(retry.task.last_claim_generation).toBe(2);
+    });
+
+    it('reconciles journal when reclaimTask snapshot write fails', async () => {
+      const { root, teamName } = workspace();
+      const task = await createTask(root, teamName, { subject: 'Fail Reclaim', description: 'desc' });
+
+      let fakeTime = new Date('2026-09-05T10:00:00.000Z');
+      const claim1 = await claimTask(root, teamName, task.id, 'worker-1', { leaseMs: 60000, now: () => fakeTime });
+      expect(claim1.ok).toBe(true);
+
+      // Reclaim attempt after lease expires with simulated snapshot write failure
+      fakeTime = new Date('2026-09-05T10:01:01.000Z');
+      await expect(
+        reclaimTask(root, teamName, task.id, 'worker-2', {
+          taskWriteOptions: {
+            faultInjector: (point) => {
+              if (point === 'write') throw new Error('E_RECLAIM_WRITE_SIMULATED');
+            },
+          },
+          now: () => fakeTime,
+        }),
+      ).rejects.toThrow('E_RECLAIM_WRITE_SIMULATED');
+
+      // Recovery should not resurrect unauthenticated worker-2 claim
+      const recovered = rebuildTaskFromJournal(root, teamName, task.id);
+      expect(recovered?.claim).toBeUndefined();
+      expect(recovered?.owner).toBeUndefined();
+      expect(recovered?.last_claim_generation).toBe(2);
+
+      // Subsequent retry allocates generation 3
+      const retry = await claimTask(root, teamName, task.id, 'worker-2', { now: () => fakeTime });
+      expect(retry.ok).toBe(true);
+      if (!retry.ok) return;
+      expect(retry.task.claim?.generation).toBe(3);
     });
   });
 });
