@@ -248,6 +248,15 @@ export function validateTeamApiOperationInput(
       if (args.force !== undefined && typeof args.force !== 'boolean') {
         invalidInput('force must be a boolean');
       }
+      if (args.expected_generation !== undefined && (!isFiniteInteger(args.expected_generation) || args.expected_generation < 1)) {
+        invalidInput('expected_generation must be a positive integer');
+      }
+      if (args.generation !== undefined && (!isFiniteInteger(args.generation) || args.generation < 1)) {
+        invalidInput('generation must be a positive integer');
+      }
+      if (args.expected_version !== undefined && (!isFiniteInteger(args.expected_version) || args.expected_version < 1)) {
+        invalidInput('expected_version must be a positive integer');
+      }
       if (args.lease_ms !== undefined && (!isFiniteInteger(args.lease_ms) || args.lease_ms < 1 || args.lease_ms > MAX_TOTAL_LEASE_MS)) {
         invalidInput(`lease_ms must be a positive integer of at most ${MAX_TOTAL_LEASE_MS}`);
       }
@@ -468,16 +477,25 @@ export async function executeTeamApiOperation(
         if (force && !options?.isSupervisor) {
           return fail(operation, 'unauthorized', 'Forced reclaim requires supervisor authority');
         }
-        const expectedGeneration = isFiniteInteger(args.expected_generation ?? args.generation)
-          ? ((args.expected_generation ?? args.generation) as number)
-          : undefined;
-        const expectedVersion = isFiniteInteger(args.expected_version)
-          ? (args.expected_version as number)
-          : undefined;
+        if (args.expected_generation !== undefined && (!isFiniteInteger(args.expected_generation) || args.expected_generation < 1)) {
+          return fail(operation, 'invalid_input', 'expected_generation must be a positive integer when provided');
+        }
+        if (args.generation !== undefined && (!isFiniteInteger(args.generation) || args.generation < 1)) {
+          return fail(operation, 'invalid_input', 'generation must be a positive integer when provided');
+        }
+        if (args.expected_version !== undefined && (!isFiniteInteger(args.expected_version) || args.expected_version < 1)) {
+          return fail(operation, 'invalid_input', 'expected_version must be a positive integer when provided');
+        }
+        const rawGeneration = args.expected_generation ?? args.generation;
+        const expectedGeneration = rawGeneration !== undefined ? (rawGeneration as number) : undefined;
+        const expectedVersion = args.expected_version !== undefined ? (args.expected_version as number) : undefined;
         if (force && expectedGeneration === undefined && expectedVersion === undefined) {
           return fail(operation, 'invalid_input', 'Forced reclaim requires expected_generation or expected_version');
         }
-        const leaseMs = isFiniteInteger(args.lease_ms) ? (args.lease_ms as number) : undefined;
+        if (args.lease_ms !== undefined && (!isFiniteInteger(args.lease_ms) || args.lease_ms < 1 || args.lease_ms > MAX_TOTAL_LEASE_MS)) {
+          return fail(operation, 'invalid_input', `lease_ms must be a positive integer of at most ${MAX_TOTAL_LEASE_MS}`);
+        }
+        const leaseMs = args.lease_ms !== undefined ? (args.lease_ms as number) : undefined;
         const config = readTeamConfig(root, teamName);
         const newProcessIdentity = resolveLongLivedWorkerIdentity(root, teamName, worker, args, options?.processRuntime);
         if (!options?.isSupervisor && config?.tmux_session && newProcessIdentity === undefined) {

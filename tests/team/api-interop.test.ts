@@ -1012,4 +1012,55 @@ describe('team api interop (P0)', { timeout: 20_000 }, () => {
     expect(match.data.previousGeneration).toBe(1);
     expect(match.data.newGeneration).toBe(2);
   });
+
+  it('rejects malformed reclaim generation and version fences during preflight and execution', async () => {
+    const { root, teamName } = workspace('reclaim-fence-validation');
+
+    expect(() => validateTeamApiOperationInput('reclaim-task', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'two',
+      expected_generation: '1' as unknown as number,
+    })).toThrow('E_TEAM_API_INPUT_INVALID: expected_generation must be a positive integer');
+
+    expect(() => validateTeamApiOperationInput('reclaim-task', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'two',
+      expected_generation: 0,
+    })).toThrow('E_TEAM_API_INPUT_INVALID: expected_generation must be a positive integer');
+
+    expect(() => validateTeamApiOperationInput('reclaim-task', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'two',
+      expected_generation: 1e100,
+    })).toThrow('E_TEAM_API_INPUT_INVALID: expected_generation must be a positive integer');
+
+    expect(() => validateTeamApiOperationInput('reclaim-task', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'two',
+      generation: '1' as unknown as number,
+    })).toThrow('E_TEAM_API_INPUT_INVALID: generation must be a positive integer');
+
+    expect(() => validateTeamApiOperationInput('reclaim-task', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'two',
+      expected_version: '1' as unknown as number,
+    })).toThrow('E_TEAM_API_INPUT_INVALID: expected_version must be a positive integer');
+
+    const execResult = await executeTeamApiOperation('reclaim-task', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'two',
+      expected_generation: '1' as unknown as number,
+    }, root);
+    expect(execResult.ok).toBe(false);
+    if (!execResult.ok) {
+      expect(execResult.error.code).toBe('invalid_input');
+      expect(execResult.error.message).toContain('expected_generation must be a positive integer');
+    }
+  });
 });

@@ -605,6 +605,44 @@ describe('team tasks lifecycle & generation fencing', { timeout: 20_000 }, () =>
       expect(renew.error).toBe('lease_limit_exceeded');
     });
 
+    it('does not shorten an existing lease during renewal when renewal request has earlier deadline', async () => {
+      const { root, teamName } = workspace();
+      const task = await createTask(root, teamName, {
+        subject: 'Long Lease Task',
+        description: 'Initial lease is long',
+      });
+
+      const startTime = new Date('2026-09-05T00:00:00.000Z');
+      const claim = await claimTask(
+        root,
+        teamName,
+        task.id,
+        'worker-1',
+        { leaseMs: 60 * 60 * 1000, now: () => startTime },
+      );
+      expect(claim.ok).toBe(true);
+      if (!claim.ok) return;
+
+      const initialLeasedUntil = claim.task.claim?.leased_until;
+      expect(initialLeasedUntil).toBe(new Date(startTime.getTime() + 60 * 60 * 1000).toISOString());
+
+      // At 10m, send renewal with default 15m (10m + 15m = 25m < 60m)
+      const renewTime = new Date(startTime.getTime() + 10 * 60 * 1000);
+      const renew = await renewTaskClaim(
+        root,
+        teamName,
+        task.id,
+        'worker-1',
+        claim.claimToken,
+        { leaseMs: 15 * 60 * 1000, now: () => renewTime },
+      );
+      expect(renew.ok).toBe(true);
+      if (!renew.ok) return;
+
+      // The lease must NOT be shortened to 25m; it must preserve the 60m deadline
+      expect(renew.task.claim?.leased_until).toBe(initialLeasedUntil);
+    });
+
     it('verifies worker process liveness during renewal', async () => {
       const { root, teamName } = workspace();
       const task = await createTask(root, teamName, {

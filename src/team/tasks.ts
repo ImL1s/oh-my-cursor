@@ -1198,7 +1198,12 @@ export async function renewTaskClaim(
 
     const leaseMs = options.leaseMs ?? CLAIM_LEASE_MS;
     const maxTotalMs = options.maxTotalLeaseMs ?? MAX_TOTAL_LEASE_MS;
-    const newLeasedUntil = new Date(now().getTime() + leaseMs);
+    const currentLeasedUntilMs = Date.parse(current.claim.leased_until);
+    const requestedLeasedUntilMs = now().getTime() + leaseMs;
+    const targetDeadlineMs = Number.isFinite(currentLeasedUntilMs)
+      ? Math.max(currentLeasedUntilMs, requestedLeasedUntilMs)
+      : requestedLeasedUntilMs;
+    const newLeasedUntil = new Date(targetDeadlineMs);
     const acquiredAtTime = Date.parse(current.claim.acquired_at);
     if (Number.isFinite(acquiredAtTime) && newLeasedUntil.getTime() - acquiredAtTime > maxTotalMs) {
       return { ok: false, error: 'lease_limit_exceeded' as const };
