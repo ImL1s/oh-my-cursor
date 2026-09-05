@@ -9,6 +9,7 @@ export class ClaudeProviderAdapter extends BaseCliProviderAdapter {
   readonly displayName = 'Claude Code CLI';
   readonly isCanonical = false;
   readonly defaultBinary = 'claude';
+  override readonly candidateBinaries: readonly string[] = ['claude'];
   readonly envAllowlist: readonly string[] = [
     'ANTHROPIC_API_KEY',
     'CLAUDE_CONFIG_DIR',
@@ -35,6 +36,13 @@ export class ClaudeProviderAdapter extends BaseCliProviderAdapter {
   ): 'authenticated' | 'unauthenticated' | 'unknown' {
     if (env.ANTHROPIC_API_KEY || env.CLAUDE_API_KEY) {
       return 'authenticated';
+    }
+    if (env.CLAUDE_CONFIG_DIR) {
+      const customConfig = path.join(env.CLAUDE_CONFIG_DIR, '.claude.json');
+      const customConfigAlt = path.join(env.CLAUDE_CONFIG_DIR, 'config.json');
+      if (fs.existsSync(customConfig) || fs.existsSync(customConfigAlt)) {
+        return 'authenticated';
+      }
     }
     const claudeConfig = path.join(os.homedir(), '.claude.json');
     if (fs.existsSync(claudeConfig)) {

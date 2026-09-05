@@ -445,7 +445,7 @@ export async function listCursorModels(
   options?: ModelListFilter & ModelDiscoveryOptions
 ): Promise<readonly DiscoveredModel[]> {
   const cache = await discoverCursorModels(options);
-  let models = cache.models;
+  let models = (cache.models ?? []).filter((m): m is DiscoveredModel => Boolean(m && typeof m.id === 'string'));
 
   if (options?.runtime) {
     models = models.filter((m) => m.runtime === options.runtime || m.runtime === 'both');
@@ -454,13 +454,13 @@ export async function listCursorModels(
     models = models.filter((m) => m.routingTier === options.tier);
   }
   if (options?.requiresVision) {
-    models = models.filter((m) => m.capabilities.vision);
+    models = models.filter((m) => Boolean(m.capabilities?.vision));
   }
   if (options?.requiresTools) {
-    models = models.filter((m) => m.capabilities.tools);
+    models = models.filter((m) => Boolean(m.capabilities?.tools));
   }
   if (options?.requiresReasoning) {
-    models = models.filter((m) => m.capabilities.reasoning);
+    models = models.filter((m) => Boolean(m.capabilities?.reasoning));
   }
 
   return models;
@@ -473,11 +473,14 @@ export async function isCursorModelAvailable(
   modelId: string,
   options?: ModelDiscoveryOptions
 ): Promise<boolean> {
+  if (!modelId || typeof modelId !== 'string') return false;
   const trimmed = modelId.trim().toLowerCase();
   const cache = await discoverCursorModels(options);
-  return cache.models.some(
+  return (cache.models ?? []).some(
     (m) =>
-      m.id.toLowerCase() === trimmed ||
-      m.aliases?.some((a) => a.toLowerCase() === trimmed)
+      m &&
+      typeof m.id === 'string' &&
+      (m.id.toLowerCase() === trimmed ||
+        m.aliases?.some((a) => typeof a === 'string' && a.toLowerCase() === trimmed))
   );
 }

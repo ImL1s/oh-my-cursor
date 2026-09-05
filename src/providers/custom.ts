@@ -6,12 +6,15 @@ export class CustomProviderAdapter extends BaseCliProviderAdapter {
   readonly displayName = 'Custom User-Defined CLI';
   readonly isCanonical = false;
   readonly defaultBinary: string;
-  readonly envAllowlist: readonly string[] = [];
+  override readonly candidateBinaries: readonly string[];
+  readonly envAllowlist: readonly string[];
   readonly supportedModels: readonly string[] = ['custom-default'];
 
-  constructor(binary = 'custom-ai') {
+  constructor(binary = 'custom-ai', envAllowlist: readonly string[] = []) {
     super();
     this.defaultBinary = binary;
+    this.candidateBinaries = [binary];
+    this.envAllowlist = envAllowlist;
   }
 
   buildExecutionArgs(prompt: string, model?: string): readonly string[] {
@@ -21,18 +24,5 @@ export class CustomProviderAdapter extends BaseCliProviderAdapter {
     }
     args.push(prompt);
     return args;
-  }
-
-  override async probe(cwd?: string, runner?: CustomProcessRunner): Promise<ProviderReadiness> {
-    const binary = findBinaryInPath(this.defaultBinary);
-    if (!binary) {
-      return {
-        provider: this.id,
-        available: false,
-        reason: `Custom binary '${this.defaultBinary}' not found in PATH`,
-        supportedModels: this.supportedModels,
-      };
-    }
-    return super.probe(cwd, runner);
   }
 }

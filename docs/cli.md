@@ -277,7 +277,7 @@ Do not edit this block manually; it is generated from `COMMAND_SCHEMAS`.
 - `omcu agents show` | options: --profile:string; --json:flag | positionals: role:required
 - `omcu agents invoke` | options: --prompt:string required; --runtime:string default="local"; --background:flag; --profile:string; --json:flag | positionals: role:required
 - `omcu route` | options: none | positionals: none
-- `omcu route explain` | options: --agent:string required; --category:string; --profile:string; --model:string; --runtime:string; --json:flag | positionals: none
+- `omcu route explain` | options: --agent:string required; --category:string; --profile:string; --model:string; --provider:string; --runtime:string; --json:flag | positionals: none
 - `omcu models` | options: none | positionals: none
 - `omcu models list` | options: --runtime:string; --json:flag; --refresh:flag; --state-root:string | positionals: none
 - `omcu providers` | options: none | positionals: none

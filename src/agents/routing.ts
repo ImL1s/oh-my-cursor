@@ -162,7 +162,7 @@ export function resolveAgentRoute(
   // 2. Exact role/profile constraint
   const profileModel = profile.modelOverride?.preferredModel;
   const roleExact = role.model.exactModelRequired ? role.model.preferredModel : undefined;
-  const constraintModel = profileModel ?? roleExact;
+  const constraintModel = roleExact ?? (!isExplicitExternal ? profileModel : undefined);
 
   if (constraintModel) {
     history.push(`Step 2 (profile_constraint): Found constraint model '${constraintModel}' on profile '${profile.profileId}'`);

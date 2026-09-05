@@ -403,9 +403,10 @@ export async function handleLifecycle(context: CliContext): Promise<number | nul
       const category = optionValue<string>(context, '--category');
       const profile = optionValue<string>(context, '--profile');
       const model = optionValue<string>(context, '--model');
+      const provider = optionValue<string>(context, '--provider');
       const runtime = optionValue<string>(context, '--runtime') as 'local' | 'cloud' | undefined;
       try {
-        const explanation = explainAgentRoute(agent, { profile, model, runtime, category });
+        const explanation = explainAgentRoute(agent, { profile, model, runtime, category, provider });
         printJson(context.io, {
           ok: true,
           explanation,

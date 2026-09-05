@@ -14,6 +14,32 @@ export function getModelsCachePath(workspace: string): string {
   return path.join(stateDir, MODELS_CACHE_FILE);
 }
 
+function isValidDiscoveredModel(item: unknown): boolean {
+  if (!item || typeof item !== 'object') return false;
+  const m = item as Record<string, unknown>;
+  if (typeof m.id !== 'string' || m.id.trim().length === 0) return false;
+  if (m.runtime !== undefined && m.runtime !== 'local' && m.runtime !== 'cloud' && m.runtime !== 'both') {
+    return false;
+  }
+  return true;
+}
+
+export function isValidModelCatalogCache(parsed: unknown): parsed is ModelCatalogCache {
+  if (!parsed || typeof parsed !== 'object') return false;
+  const p = parsed as Partial<ModelCatalogCache>;
+  if (p.schema_version !== 1) return false;
+  if (typeof p.cachedAt !== 'string' || typeof p.ttlMs !== 'number' || isNaN(p.ttlMs) || p.ttlMs <= 0) {
+    return false;
+  }
+  const cachedAtMs = new Date(p.cachedAt).getTime();
+  if (isNaN(cachedAtMs)) return false;
+  if (!Array.isArray(p.models) || p.models.length === 0) return false;
+  for (const m of p.models) {
+    if (!isValidDiscoveredModel(m)) return false;
+  }
+  return true;
+}
+
 /**
  * Reads model cache for a workspace from .omcu/models-cache.json or in-memory fallback.
  * Returns null if missing, corrupted, or expired.
@@ -28,8 +54,8 @@ export function readModelCache(
   if (fs.existsSync(cachePath)) {
     try {
       const content = fs.readFileSync(cachePath, 'utf8');
-      const parsed = JSON.parse(content) as ModelCatalogCache;
-      if (parsed && parsed.schema_version === 1 && Array.isArray(parsed.models)) {
+      const parsed = JSON.parse(content);
+      if (isValidModelCatalogCache(parsed)) {
         if (options?.ignoreExpiry) {
           return parsed;
         }
@@ -45,7 +71,7 @@ export function readModelCache(
 
   // Check memory cache
   const mem = memoryCache.get(path.resolve(workspace));
-  if (mem) {
+  if (mem && isValidModelCatalogCache(mem)) {
     if (options?.ignoreExpiry) {
       return mem;
     }

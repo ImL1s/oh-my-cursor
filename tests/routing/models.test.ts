@@ -148,4 +148,40 @@ describe('Cursor Model Registry & SDK Discovery (Issue #31)', () => {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  it('safely drops corrupt or malformed cache entries without crashing list/availability methods', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-corrupt-cache-'));
+    const stateDir = path.join(tempDir, '.omcu');
+    fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    const cachePath = path.join(stateDir, 'models-cache.json');
+
+    // Poisoned/corrupt cache file with null and invalid model entries
+    fs.writeFileSync(
+      cachePath,
+      JSON.stringify({
+        schema_version: 1,
+        cachedAt: new Date().toISOString(),
+        ttlMs: 60_000,
+        accountVisible: true,
+        models: [null, { bad: true }, { id: 123 }, { id: 'custom-good-model', runtime: 'local' }],
+      })
+    );
+
+    try {
+      // Corrupt cache should be rejected by readModelCache and fall back to default catalog
+      const read = readModelCache(tempDir);
+      expect(read).toBeNull();
+
+      // listCursorModels and isCursorModelAvailable should safely fall back to default catalog without crashing
+      const models = await listCursorModels({ workspace: tempDir, runtime: 'local' });
+      expect(Array.isArray(models)).toBe(true);
+      expect(models.some((m) => m.id === 'cursor-small')).toBe(true);
+
+      const isAvail = await isCursorModelAvailable('cursor-small', { workspace: tempDir });
+      expect(isAvail).toBe(true);
+    } finally {
+      clearModelCache(tempDir);
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });

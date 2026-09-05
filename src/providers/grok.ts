@@ -6,6 +6,7 @@ export class GrokProviderAdapter extends BaseCliProviderAdapter {
   readonly displayName = 'Grok / xAI CLI';
   readonly isCanonical = false;
   readonly defaultBinary = 'grok';
+  override readonly candidateBinaries: readonly string[] = ['grok', 'xai'];
   readonly envAllowlist: readonly string[] = [
     'XAI_API_KEY',
     'GROK_API_KEY',
@@ -22,23 +23,6 @@ export class GrokProviderAdapter extends BaseCliProviderAdapter {
     }
     args.push(prompt);
     return args;
-  }
-
-  override async probe(cwd?: string, runner?: CustomProcessRunner): Promise<ProviderReadiness> {
-    const primary = findBinaryInPath('grok');
-    const alias = findBinaryInPath('xai');
-    const binary = primary ?? alias;
-
-    if (!binary) {
-      return {
-        provider: this.id,
-        available: false,
-        reason: "Neither 'grok' nor 'xai' found in PATH",
-        supportedModels: this.supportedModels,
-      };
-    }
-
-    return super.probe(cwd, runner);
   }
 
   protected override checkAuthStatus(

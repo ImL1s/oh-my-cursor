@@ -9,6 +9,7 @@ export class CodexProviderAdapter extends BaseCliProviderAdapter {
   readonly displayName = 'Codex CLI';
   readonly isCanonical = false;
   readonly defaultBinary = 'codex';
+  override readonly candidateBinaries: readonly string[] = ['codex'];
   readonly envAllowlist: readonly string[] = [
     'OPENAI_API_KEY',
     'CODEX_API_KEY',

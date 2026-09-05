@@ -6,6 +6,7 @@ export class OpenCodeProviderAdapter extends BaseCliProviderAdapter {
   readonly displayName = 'OpenCode / OMO CLI';
   readonly isCanonical = false;
   readonly defaultBinary = 'opencode';
+  override readonly candidateBinaries: readonly string[] = ['opencode', 'omo'];
   readonly envAllowlist: readonly string[] = [
     'OPENCODE_API_KEY',
   ];
@@ -20,23 +21,6 @@ export class OpenCodeProviderAdapter extends BaseCliProviderAdapter {
     }
     args.push(prompt);
     return args;
-  }
-
-  override async probe(cwd?: string, runner?: CustomProcessRunner): Promise<ProviderReadiness> {
-    const primary = findBinaryInPath('opencode');
-    const alias = findBinaryInPath('omo');
-    const binary = primary ?? alias;
-
-    if (!binary) {
-      return {
-        provider: this.id,
-        available: false,
-        reason: "Neither 'opencode' nor 'omo' found in PATH",
-        supportedModels: this.supportedModels,
-      };
-    }
-
-    return super.probe(cwd, runner);
   }
 
   protected override checkAuthStatus(
