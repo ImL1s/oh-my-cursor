@@ -1556,7 +1556,7 @@ export async function transitionTaskStatus(
         payload: event,
         at: nowFn().toISOString(),
       });
-      if (Buffer.byteLength(serializedProbe, 'utf8') > 60 * 1024) {
+      if (Buffer.byteLength(serializedProbe, 'utf8') > MAX_TASK_JOURNAL_RECORD_BYTES) {
         return { ok: false, error: 'invalid_transition' as const };
       }
 
