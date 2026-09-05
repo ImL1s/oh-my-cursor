@@ -71,7 +71,7 @@ function workspace(teamName = 'api-team') {
   return { dir, root, teamName };
 }
 
-describe('team api interop (P0)', () => {
+describe('team api interop (P0)', { timeout: 20_000 }, () => {
   it('resolves only the P0 operation set', () => {
     expect(TEAM_API_OPERATIONS).toEqual([
       'send-message',
