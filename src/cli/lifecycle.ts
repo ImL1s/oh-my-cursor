@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { quarantineInvalidCliOwnerRecord } from '../state/authority.js';
@@ -27,6 +28,15 @@ import {
 } from '../plugin/index.js';
 import { explainAlias } from '../catalog/index.js';
 import { discoverCursorComponents } from '../capabilities/discovery.js';
+import {
+  listAgentRoles,
+  resolveRoleAndProfile,
+  discoverCustomAgents,
+  composeAgentPrompt,
+  resolveAgentRoute,
+  explainAgentRoute,
+  validateAgentInvocation,
+} from '../agents/index.js';
 import type { CursorAgentAdapter } from '../host/cursor-agent.js';
 import { externalStateRoot, flagValue, optionValue, printJson, type CliContext } from './shared.js';
 
@@ -280,6 +290,120 @@ export async function handleLifecycle(context: CliContext): Promise<number | nul
       const result = explainAlias(name, context.packageRoot);
       printJson(context.io, result);
       return result.found ? 0 : 1;
+    }
+  }
+  if (command === 'agents') {
+    if (action === 'list') {
+      const source = optionValue<string>(context, '--source');
+      const canonicalRoles = listAgentRoles(source ? { source } : undefined);
+      const customRoles = (!source || source === 'all' || source === 'custom')
+        ? discoverCustomAgents(context.cwd)
+        : [];
+      const allRoles = [...canonicalRoles, ...customRoles];
+      printJson(context.io, {
+        ok: true,
+        count: allRoles.length,
+        roles: allRoles.map((r) => ({
+          id: r.id,
+          canonicalName: r.canonicalName,
+          category: r.category,
+          mode: r.mode,
+          routingTier: r.model.routingTier,
+          profiles: r.profiles.map((p) => p.profileId),
+          defaultProfile: r.defaultProfile,
+          custom: Boolean(r.custom),
+          description: r.profiles.find((p) => p.profileId === r.defaultProfile)?.description ?? '',
+        })),
+      });
+      return 0;
+    }
+    if (action === 'show') {
+      const roleName = context.parsed.positionals[0] ?? '';
+      const profileName = optionValue<string>(context, '--profile');
+      try {
+        const { role, profile } = resolveRoleAndProfile(roleName, profileName);
+        const promptPreview = composeAgentPrompt(role, profile.profileId);
+        printJson(context.io, {
+          ok: true,
+          role,
+          selectedProfile: profile,
+          promptPreview: {
+            promptHash: promptPreview.promptHash,
+            effectiveTools: promptPreview.effectiveTools,
+            deniedTools: promptPreview.deniedTools,
+            writeScope: promptPreview.writeScope,
+            maxDepth: promptPreview.maxDepth,
+            canDelegate: promptPreview.canDelegate,
+            systemPrompt: promptPreview.systemPrompt,
+          },
+        });
+        return 0;
+      } catch (err) {
+        printJson(context.io, { ok: false, error: err instanceof Error ? err.message : String(err) });
+        return 1;
+      }
+    }
+    if (action === 'invoke') {
+      const roleName = context.parsed.positionals[0] ?? '';
+      const prompt = optionValue<string>(context, '--prompt') ?? '';
+      const runtime = (optionValue<string>(context, '--runtime') ?? 'local') as 'local' | 'cloud';
+      const background = flagValue(context, '--background');
+      const profileName = optionValue<string>(context, '--profile');
+      try {
+        const { role, profile } = resolveRoleAndProfile(roleName, profileName);
+        const enforcement = validateAgentInvocation(
+          role,
+          { runtime, isBackground: background, profile: profile.profileId },
+          profile
+        );
+        if (!enforcement.allowed) {
+          printJson(context.io, {
+            ok: false,
+            error: enforcement.reason,
+            code: enforcement.errorCode ?? 'E_ENFORCEMENT_FAILED',
+          });
+          return 1;
+        }
+        const route = resolveAgentRoute(role, profile, { runtime });
+        const composed = composeAgentPrompt(role, profile.profileId, { objective: prompt });
+        const runId = `omcu-run-${crypto.randomUUID().slice(0, 8)}`;
+        printJson(context.io, {
+          ok: true,
+          run_id: runId,
+          role: role.canonicalName,
+          profile: profile.profileId,
+          runtime,
+          background,
+          model: route.selectedModel,
+          routingTier: route.routingTier,
+          prompt_hash: composed.promptHash,
+          effective_tools: composed.effectiveTools,
+          status: 'dispatched',
+        });
+        return 0;
+      } catch (err) {
+        printJson(context.io, { ok: false, error: err instanceof Error ? err.message : String(err) });
+        return 1;
+      }
+    }
+  }
+  if (command === 'route') {
+    if (action === 'explain') {
+      const agent = optionValue<string>(context, '--agent') ?? '';
+      const profile = optionValue<string>(context, '--profile');
+      const model = optionValue<string>(context, '--model');
+      const runtime = optionValue<string>(context, '--runtime') as 'local' | 'cloud' | undefined;
+      try {
+        const explanation = explainAgentRoute(agent, { profile, model, runtime });
+        printJson(context.io, {
+          ok: true,
+          explanation,
+        });
+        return explanation.resolutionStep === 'unavailable' ? 1 : 0;
+      } catch (err) {
+        printJson(context.io, { ok: false, error: err instanceof Error ? err.message : String(err) });
+        return 1;
+      }
     }
   }
   if (command === 'capabilities' && action === 'cursor-components') {

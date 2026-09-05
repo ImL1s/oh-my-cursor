@@ -235,6 +235,54 @@ export const COMMAND_SCHEMAS: Readonly<Record<string, CommandSchema>> = Object.f
       },
     },
   },
+  agents: {
+    stateAccess: 'none',
+    requireAction: true,
+    actions: {
+      list: {
+        options: [
+          { name: '--source', kind: 'string', enum: ['omc', 'omx', 'omo', 'omcu', 'custom', 'all'] },
+          { name: '--json', kind: 'flag' },
+        ],
+      },
+      show: {
+        options: [
+          { name: '--profile', kind: 'string' },
+          { name: '--json', kind: 'flag' },
+        ],
+        positionals: [
+          { name: 'role', required: true, minLength: 1 },
+        ],
+      },
+      invoke: {
+        options: [
+          { name: '--prompt', kind: 'string', required: true, pattern: NON_BLANK_PATTERN },
+          { name: '--runtime', kind: 'string', enum: ['local', 'cloud'], default: 'local' },
+          { name: '--background', kind: 'flag' },
+          { name: '--profile', kind: 'string' },
+          { name: '--json', kind: 'flag' },
+        ],
+        positionals: [
+          { name: 'role', required: true, minLength: 1 },
+        ],
+      },
+    },
+  },
+  route: {
+    stateAccess: 'none',
+    requireAction: true,
+    actions: {
+      explain: {
+        options: [
+          { name: '--agent', kind: 'string', required: true },
+          { name: '--profile', kind: 'string' },
+          { name: '--model', kind: 'string' },
+          { name: '--runtime', kind: 'string', enum: ['local', 'cloud'] },
+          { name: '--json', kind: 'flag' },
+        ],
+      },
+    },
+  },
   capabilities: {
     stateAccess: 'none',
     requireAction: true,

@@ -86,6 +86,14 @@
       "types": "./dist/src/plugin/index.d.ts",
       "import": "./dist/src/plugin/index.js"
     },
+    "./agents": {
+      "types": "./dist/src/agents/index.d.ts",
+      "import": "./dist/src/agents/index.js"
+    },
+    "./routing": {
+      "types": "./dist/src/routing/index.d.ts",
+      "import": "./dist/src/routing/index.js"
+    },
     "./package.json": "./package.json"
   },
   "bin": {
