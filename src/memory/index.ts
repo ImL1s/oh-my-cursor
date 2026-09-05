@@ -50,6 +50,18 @@ function readMemoryRecordFile(file: string, expectedId: string): ProjectMemory {
   }
 }
 
+function safeQuarantineFilename(originalName: string, nonce: string, timestamp: number): string {
+  const suffix = `.corrupt-${timestamp}-${nonce}`;
+  const maxTotalLength = 200;
+  const maxBaseLength = maxTotalLength - suffix.length;
+  let base = originalName;
+  if (base.length > maxBaseLength) {
+    const hash = crypto.createHash('sha256').update(originalName).digest('hex').slice(0, 16);
+    base = `${originalName.slice(0, maxBaseLength - 17)}-${hash}`;
+  }
+  return `${base}${suffix}`;
+}
+
 export class ProjectMemoryStore {
   constructor(
     private readonly root: StateRoot,
@@ -527,7 +539,7 @@ export class ProjectMemoryStore {
               const qDir = this.quarantineDir();
               fs.mkdirSync(qDir, { recursive: true, mode: 0o700 });
               const nonce = crypto.randomBytes(6).toString('hex');
-              const qFile = path.join(qDir, `${entry}.corrupt-${Date.now()}-${nonce}`);
+              const qFile = path.join(qDir, safeQuarantineFilename(entry, nonce, Date.now()));
               fs.renameSync(filePath, qFile);
               quarantinedTo = qFile;
             }
@@ -581,7 +593,7 @@ export class ProjectMemoryStore {
           const qDir = this.quarantineDir();
           fs.mkdirSync(qDir, { recursive: true, mode: 0o700 });
           const nonce = crypto.randomBytes(6).toString('hex');
-          const qFile = path.join(qDir, `index.json.corrupt-${Date.now()}-${nonce}`);
+          const qFile = path.join(qDir, safeQuarantineFilename('index.json', nonce, Date.now()));
           fs.renameSync(indexFile, qFile);
           quarantinedTo = qFile;
         }

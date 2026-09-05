@@ -640,4 +640,30 @@ describe('ProjectMemoryStore transactional, conflict-aware, and schema-validated
     expect(repairMalformed.corrupt_records[0]?.quarantined_to).toBeDefined();
     expect((await store.doctor()).ok).toBe(true);
   });
+
+  it('bounds quarantine filenames for corrupt entries near NAME_MAX without ENAMETOOLONG', async () => {
+    const root = projectStateRoot(tempDir);
+    const store = new ProjectMemoryStore(root, now);
+
+    const recordsDir = path.join(root.path, 'memory', 'records');
+    fs.mkdirSync(recordsDir, { recursive: true });
+
+    // Long filename of 240 bytes (near NAME_MAX of 255)
+    const longFileName = `${'x'.repeat(235)}.json`;
+    const longFilePath = path.join(recordsDir, longFileName);
+    fs.writeFileSync(longFilePath, 'corrupt-content\n');
+
+    const report = await store.doctor({ repair: true });
+    expect(report.ok).toBe(false);
+    expect(report.corrupt_records).toHaveLength(1);
+    expect(report.corrupt_records[0]?.file).toBe(longFileName);
+
+    const quarantinedTo = report.corrupt_records[0]?.quarantined_to;
+    expect(quarantinedTo).toBeDefined();
+    expect(fs.existsSync(quarantinedTo!)).toBe(true);
+    expect(path.basename(quarantinedTo!).length).toBeLessThanOrEqual(200);
+
+    // Corrupt file was successfully moved out of records/
+    expect(fs.existsSync(longFilePath)).toBe(false);
+  });
 });
