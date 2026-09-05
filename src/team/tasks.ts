@@ -590,9 +590,18 @@ export async function createTask(
   root: StateRoot,
   teamName: string,
   input: CreateTaskInput,
-  now: () => Date = () => new Date(),
+  nowOrOptions: (() => Date) | CreateTaskOptions = () => new Date(),
   options: CreateTaskOptions = {},
 ): Promise<TeamTask> {
+  let nowFn = () => new Date();
+  let actualOptions = options;
+  if (typeof nowOrOptions === 'function') {
+    nowFn = nowOrOptions;
+    actualOptions = options;
+  } else if (typeof nowOrOptions === 'object' && nowOrOptions !== null) {
+    actualOptions = nowOrOptions;
+  }
+
   const subject = input.subject.trim();
   const description = input.description.trim();
   if (subject === '' || description === '') throw new Error('E_TEAM_TASK_FIELDS_REQUIRED');
@@ -686,7 +695,7 @@ export async function createTask(
       subject,
       description,
       status: initialStatus,
-      created_at: now().toISOString(),
+      created_at: nowFn().toISOString(),
       version: 1,
       last_claim_generation: 0,
       ...(requestId !== undefined ? {
@@ -697,22 +706,22 @@ export async function createTask(
       ...(owner !== undefined ? { owner } : {}),
       ...(blockedBy !== undefined ? { blocked_by: blockedBy } : {}),
     };
-    appendTaskJournalEvent(root, teamName, task.id, { kind: 'created', task }, now);
-    atomicCreateJson(taskFilePath(root, teamName, task.id), task, options.taskWriteOptions);
+    atomicCreateJson(taskFilePath(root, teamName, task.id), task, actualOptions.taskWriteOptions);
+    appendTaskJournalEvent(root, teamName, task.id, { kind: 'created', task }, nowFn);
     const next: TeamCoordinationConfig = { ...workingConfig, next_task_id: workingConfig.next_task_id + 1 };
     try {
-      atomicWriteJson(teamConfigPath(root, teamName), next, options.configWriteOptions);
+      atomicWriteJson(teamConfigPath(root, teamName), next, actualOptions.configWriteOptions);
     } catch (error) {
       if ((error as { phase?: string }).phase === 'commit_durability_unknown') {
         const observed = readTeamConfig(root, teamName);
         if (observed?.next_task_id === next.next_task_id) {
-          options.faultInjector?.('after_task_and_config_commit_before_response');
+          actualOptions.faultInjector?.('after_task_and_config_commit_before_response');
           return task;
         }
       }
       throw error;
     }
-    options.faultInjector?.('after_task_and_config_commit_before_response');
+    actualOptions.faultInjector?.('after_task_and_config_commit_before_response');
     return task;
   });
 }
@@ -1102,6 +1111,12 @@ export async function transitionTaskStatus(
   const token = claimToken.trim();
   if (token === '') return { ok: false, error: 'claim_conflict' };
   const nowFn = terminalData.now ?? now;
+  if (terminalData.result !== undefined && (typeof terminalData.result !== 'string' || terminalData.result.length > 64 * 1024)) {
+    return { ok: false, error: 'invalid_transition' };
+  }
+  if (terminalData.error !== undefined && (typeof terminalData.error !== 'string' || terminalData.error.length > 64 * 1024)) {
+    return { ok: false, error: 'invalid_transition' };
+  }
 
   return withDirectoryLock(taskFilePath(root, teamName, id), () => {
     const current = readTaskUnlocked(root, teamName, id);

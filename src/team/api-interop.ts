@@ -183,8 +183,12 @@ export function validateTeamApiOperationInput(
       const to = requiredString(args, 'to', 32);
       if (!allowed.has(from) || !allowed.has(to)) invalidInput('from and to must be valid task statuses');
       requiredString(args, 'claim_token', 512);
-      if (args.result !== undefined && typeof args.result !== 'string') invalidInput('result must be a string');
-      if (args.error !== undefined && typeof args.error !== 'string') invalidInput('error must be a string');
+      if (args.result !== undefined && (typeof args.result !== 'string' || args.result.length > 64 * 1024)) {
+        invalidInput('result must be a string of at most 64 KiB');
+      }
+      if (args.error !== undefined && (typeof args.error !== 'string' || args.error.length > 64 * 1024)) {
+        invalidInput('error must be a string of at most 64 KiB');
+      }
       if (args.generation !== undefined && (!isFiniteInteger(args.generation) || args.generation < 1)) {
         invalidInput('generation must be a positive integer');
       }

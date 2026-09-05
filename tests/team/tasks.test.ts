@@ -157,6 +157,35 @@ describe('team tasks lifecycle & generation fencing', () => {
         }),
       ).rejects.toThrow('E_TEAM_WORKER_NOT_FOUND');
     });
+
+    it('does not append created journal event if task creation write fails', async () => {
+      const { root, teamName } = workspace();
+      await expect(
+        createTask(
+          root,
+          teamName,
+          { subject: 'Failing Task', description: 'Write will fail' },
+          {
+            taskWriteOptions: {
+              faultInjector: (point) => {
+                if (point === 'write') throw new Error('injected_write_error');
+              },
+            },
+          },
+        ),
+      ).rejects.toThrow('injected_write_error');
+
+      // Assert journal does not have phantom event
+      const journalTask = rebuildTaskFromJournal(root, teamName, '1');
+      expect(journalTask).toBeNull();
+
+      // Next task creation succeeds and receives task-1 cleanly
+      const created = await createTask(root, teamName, {
+        subject: 'Real Task',
+        description: 'Now succeeds',
+      });
+      expect(created.id).toBe('1');
+    });
   });
 
   describe('Dependencies, Cycle Detection & Auto-Unblocking', () => {
@@ -941,6 +970,52 @@ describe('team tasks lifecycle & generation fencing', () => {
       expect(retry.ok).toBe(false);
       if (retry.ok) return;
       expect(retry.error).toBe('invalid_transition');
+    });
+
+    it('rejects terminal payloads larger than 64 KiB', async () => {
+      const { root, teamName } = workspace();
+      const task = await createTask(root, teamName, {
+        subject: 'Large Payload Task',
+        description: 'Test payload bound',
+      });
+
+      const claim = await claimTask(root, teamName, task.id, 'worker-1');
+      expect(claim.ok).toBe(true);
+      if (!claim.ok) return;
+
+      const tooLarge = 'a'.repeat(64 * 1024 + 1);
+
+      // Oversized result is rejected before commit
+      const largeResult = await transitionTaskStatus(
+        root,
+        teamName,
+        task.id,
+        'in_progress',
+        'completed',
+        claim.claimToken,
+        { result: tooLarge },
+      );
+      expect(largeResult.ok).toBe(false);
+      if (largeResult.ok) return;
+      expect(largeResult.error).toBe('invalid_transition');
+
+      // Oversized error is rejected before commit
+      const largeError = await transitionTaskStatus(
+        root,
+        teamName,
+        task.id,
+        'in_progress',
+        'failed',
+        claim.claimToken,
+        { error: tooLarge },
+      );
+      expect(largeError.ok).toBe(false);
+      if (largeError.ok) return;
+      expect(largeError.error).toBe('invalid_transition');
+
+      // Task remains in_progress and readable
+      const tasks = await listTasks(root, teamName);
+      expect(tasks[0]?.status).toBe('in_progress');
     });
 
     it('reopens completed or failed task preserving monotonic generation watermark', async () => {
