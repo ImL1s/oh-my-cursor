@@ -98,9 +98,40 @@ function resolveLongLivedWorkerIdentity(
   worker: string,
   args?: Record<string, unknown>,
   runtime?: ProcessIdentityRuntime,
+  isSupervisor?: boolean,
 ): WorkerProcessIdentityClaim | undefined {
-  if (args?.process_identity && typeof args.process_identity === 'object' && !Array.isArray(args.process_identity)) {
-    const p = args.process_identity as Record<string, unknown>;
+  let manifestEntry: { pane_pid: number; pane_start_identity: string; pane_start_identity_proven?: boolean } | undefined;
+  let isSupervisedTeam = false;
+
+  try {
+    const store = new TeamManifestStore(root);
+    if (store.exists(teamName)) {
+      isSupervisedTeam = true;
+      const manifest = store.read(teamName);
+      if (manifest.stopped_at !== null || manifest.stopping_at !== null) {
+        return undefined;
+      }
+      if (manifest.stopping_worker_ids && manifest.stopping_worker_ids.includes(worker)) {
+        return undefined;
+      }
+      const entry = manifest.workers.find((w) => w.id === worker);
+      if (entry && typeof entry.pane_pid === 'number' && entry.pane_start_identity) {
+        manifestEntry = {
+          pane_pid: entry.pane_pid,
+          pane_start_identity: entry.pane_start_identity,
+          pane_start_identity_proven: entry.pane_start_identity_proven,
+        };
+      }
+    }
+  } catch {
+    // Manifest lookup is best effort
+  }
+
+  let candidate: WorkerProcessIdentityClaim | undefined;
+
+  const rawInput = args?.process_identity;
+  if (rawInput && typeof rawInput === 'object' && !Array.isArray(rawInput)) {
+    const p = rawInput as Record<string, unknown>;
     if (
       isFiniteInteger(p.pid) &&
       p.pid > 0 &&
@@ -113,48 +144,63 @@ function resolveLongLivedWorkerIdentity(
       const nonceSha256 = typeof p.nonce === 'string'
         ? processNonceSha256(p.nonce)
         : (typeof p.nonce_sha256 === 'string' ? p.nonce_sha256 : undefined);
-      return {
-        pid: p.pid,
-        start_identity: p.start_identity,
-        start_identity_proven: p.start_identity_proven === true,
-        ...(nonceSha256 !== undefined ? { nonce_sha256: nonceSha256 } : {}),
-      };
-    }
-  }
 
-  try {
-    const store = new TeamManifestStore(root);
-    if (store.exists(teamName)) {
-      const manifest = store.read(teamName);
-      if (manifest.stopped_at !== null || manifest.stopping_at !== null) {
-        return undefined;
-      }
-      if (manifest.stopping_worker_ids && manifest.stopping_worker_ids.includes(worker)) {
-        return undefined;
-      }
-      const entry = manifest.workers.find((w) => w.id === worker);
-      if (entry && typeof entry.pane_pid === 'number' && entry.pane_start_identity) {
-        const candidate: WorkerProcessIdentityClaim = {
-          pid: entry.pane_pid,
-          start_identity: entry.pane_start_identity,
-          start_identity_proven: entry.pane_start_identity_proven ?? true,
-        };
-        const liveness = classifyProcessLiveness({
-          pid: candidate.pid,
-          start_identity: candidate.start_identity,
-          start_identity_proven: candidate.start_identity_proven ?? false,
-        }, runtime);
-        if (liveness.status !== 'active') {
+      if (manifestEntry) {
+        if (isSupervisor) {
+          // Authenticated supervisor override
+          candidate = {
+            pid: p.pid,
+            start_identity: p.start_identity,
+            start_identity_proven: p.start_identity_proven === true,
+            ...(nonceSha256 !== undefined ? { nonce_sha256: nonceSha256 } : {}),
+          };
+        } else if (p.pid === manifestEntry.pane_pid && p.start_identity === manifestEntry.pane_start_identity) {
+          // Supervised worker matches its authoritative manifest entry; allow attaching caller nonce
+          candidate = {
+            pid: manifestEntry.pane_pid,
+            start_identity: manifestEntry.pane_start_identity,
+            start_identity_proven: manifestEntry.pane_start_identity_proven ?? true,
+            ...(nonceSha256 !== undefined ? { nonce_sha256: nonceSha256 } : {}),
+          };
+        } else {
+          // Non-supervisor cannot spoof or override authoritative manifest
           return undefined;
         }
-        return candidate;
+      } else if (!isSupervisedTeam || isSupervisor) {
+        // Non-supervised team or supervisor-authenticated explicit identity
+        candidate = {
+          pid: p.pid,
+          start_identity: p.start_identity,
+          start_identity_proven: p.start_identity_proven === true,
+          ...(nonceSha256 !== undefined ? { nonce_sha256: nonceSha256 } : {}),
+        };
+      } else {
+        // Supervised team but worker not found in manifest, and caller is not supervisor
+        return undefined;
       }
     }
-  } catch {
-    // Manifest lookup is best effort
+  } else if (manifestEntry) {
+    candidate = {
+      pid: manifestEntry.pane_pid,
+      start_identity: manifestEntry.pane_start_identity,
+      start_identity_proven: manifestEntry.pane_start_identity_proven ?? true,
+    };
   }
 
-  return undefined;
+  if (!candidate) {
+    return undefined;
+  }
+
+  const liveness = classifyProcessLiveness({
+    pid: candidate.pid,
+    start_identity: candidate.start_identity,
+    start_identity_proven: candidate.start_identity_proven ?? false,
+  }, runtime);
+  if (liveness.status !== 'active') {
+    return undefined;
+  }
+
+  return candidate;
 }
 
 const TEAM_TASK_ID_PATTERN = /^\d{1,20}$/;
@@ -469,8 +515,8 @@ export async function executeTeamApiOperation(
         }
         const leaseMs = isFiniteInteger(args.lease_ms) ? (args.lease_ms as number) : undefined;
         const config = readTeamConfig(root, teamName);
-        const processIdentity = resolveLongLivedWorkerIdentity(root, teamName, worker, args, options?.processRuntime);
-        if (config?.tmux_session && processIdentity === undefined) {
+        const processIdentity = resolveLongLivedWorkerIdentity(root, teamName, worker, args, options?.processRuntime, options?.isSupervisor);
+        if ((config?.tmux_session || args.process_identity !== undefined) && processIdentity === undefined) {
           return fail(operation, 'worker_process_identity_required', 'Worker process identity must be published via supervisor manifest or provided in arguments before claiming tasks');
         }
         const result = await claimTask(root, teamName, taskId, worker, {
@@ -532,8 +578,8 @@ export async function executeTeamApiOperation(
         }
         const leaseMs = args.lease_ms !== undefined ? (args.lease_ms as number) : undefined;
         const config = readTeamConfig(root, teamName);
-        const newProcessIdentity = resolveLongLivedWorkerIdentity(root, teamName, worker, args, options?.processRuntime);
-        if (!options?.isSupervisor && config?.tmux_session && newProcessIdentity === undefined) {
+        const newProcessIdentity = resolveLongLivedWorkerIdentity(root, teamName, worker, args, options?.processRuntime, options?.isSupervisor);
+        if (((!options?.isSupervisor && config?.tmux_session) || args.process_identity !== undefined) && newProcessIdentity === undefined) {
           return fail(operation, 'worker_process_identity_required', 'Worker process identity must be published via supervisor manifest or provided in arguments before reclaiming tasks');
         }
         const result = await reclaimTask(root, teamName, taskId, worker, {

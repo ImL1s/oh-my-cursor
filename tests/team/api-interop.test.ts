@@ -754,22 +754,135 @@ describe('team api interop (P0)', { timeout: 20_000 }, () => {
       expected_generation: 2,
       process_identity: {
         pid: 67890,
-        start_identity: 'custom-start-id',
+        start_identity: 'darwin:custom-start-id',
         nonce: rawNonce,
         start_identity_proven: true,
       },
-    }, root, { isSupervisor: true });
+    }, root, {
+      isSupervisor: true,
+      processRuntime: makeMockProcessRuntime({
+        alivePids: new Set([67890]), // Prior worker 12345 is dead; new worker 67890 is active
+        startTimes: new Map([[12345, 'worker-pane-start-12345'], [67890, 'custom-start-id']]),
+      }),
+    });
     expect(reclaimWithArgs.ok).toBe(true);
 
     const taskReclaimed = await readTask(root, teamName, '1');
     expect(taskReclaimed?.claim?.worker_process_identity).toEqual({
       pid: 67890,
-      start_identity: 'custom-start-id',
+      start_identity: 'darwin:custom-start-id',
       start_identity_proven: true,
       nonce_sha256: expectedHash,
     });
     // Verify raw nonce is not saved
     expect((taskReclaimed?.claim?.worker_process_identity as Record<string, unknown>).nonce).toBeUndefined();
+  });
+
+  it('rejects unprivileged caller attempting to override supervisor manifest with spoofed process_identity', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-spoof-guard-'));
+    roots.push(dir);
+    const root = projectStateRoot(dir);
+    const teamName = 'spoof-guard-team';
+    initializeTeamState(root, {
+      teamName,
+      task: 'anti-spoof test',
+      workers: [
+        { name: 'worker-1', owned_paths: ['src/w1'] },
+      ],
+    });
+
+    const store = new TeamManifestStore(root);
+    store.write({
+      schema_version: 2,
+      team_id: teamName,
+      capability_tier: 'experimental-local',
+      native_cursor_team: false,
+      tmux_session: `omcu-${teamName}`,
+      workers: [
+        {
+          id: 'worker-1',
+          role: 'worker',
+          cwd: dir,
+          owned_paths: ['src/w1'],
+          pane_target: '%1',
+          pane_pid: 11111,
+          pane_start_identity: 'darwin:start-11111',
+          pane_start_identity_proven: true,
+          process_group_id: 11111,
+          argv: ['omcu', 'worker'],
+        },
+      ],
+      created_at: '2026-07-31T00:00:00.000Z',
+      stopping_at: null,
+      stopping_worker_ids: null,
+      stopped_at: null,
+    });
+
+    await executeTeamApiOperation('create-task', {
+      team_name: teamName,
+      subject: 'Task 1',
+      description: 'Desc 1',
+    }, root);
+
+    // Unprivileged worker tries to claim task supplying PID 99999 (attempting to bind to another process)
+    const spoofClaim = await executeTeamApiOperation('claim-task', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'worker-1',
+      process_identity: {
+        pid: 99999,
+        start_identity: 'darwin:start-99999',
+        start_identity_proven: true,
+      },
+    }, root, {
+      processRuntime: makeMockProcessRuntime({
+        alivePids: new Set([11111, 99999]),
+        startTimes: new Map([[11111, 'start-11111'], [99999, 'start-99999']]),
+      }),
+    });
+
+    // Spoofed PID is rejected; worker_process_identity_required returned
+    expect(spoofClaim.ok).toBe(false);
+    expect((spoofClaim as { error?: { code: string } }).error?.code).toBe('worker_process_identity_required');
+  });
+
+  it('rejects caller-supplied process_identity when candidate process is dead or stale', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-dead-proc-'));
+    roots.push(dir);
+    const root = projectStateRoot(dir);
+    const teamName = 'dead-proc-team';
+    initializeTeamState(root, {
+      teamName,
+      task: 'dead proc test',
+      workers: [
+        { name: 'worker-1', owned_paths: ['src/w1'] },
+      ],
+    });
+
+    await executeTeamApiOperation('create-task', {
+      team_name: teamName,
+      subject: 'Task 1',
+      description: 'Desc 1',
+    }, root);
+
+    // Caller provides dead process PID 54321
+    const deadClaim = await executeTeamApiOperation('claim-task', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'worker-1',
+      process_identity: {
+        pid: 54321,
+        start_identity: 'darwin:start-54321',
+        start_identity_proven: true,
+      },
+    }, root, {
+      processRuntime: makeMockProcessRuntime({
+        alivePids: new Set([]), // 54321 is dead
+      }),
+    });
+
+    expect(deadClaim.ok).toBe(false);
+    expect((deadClaim as { error?: { code: string } }).error?.code).toBe('worker_process_identity_required');
   });
 
   it('rejects claim-task in tmux-supervised team before worker identity is published in manifest', async () => {

@@ -407,10 +407,12 @@ function normalizeTask(task: TeamTask): TeamTask {
   let normalizedClaim = task.claim;
   if (normalizedClaim) {
     let updatedClaim = normalizedClaim;
-    if (!normalizedClaim.token_sha256 && normalizedClaim.token) {
+    if (updatedClaim.token !== undefined) {
+      const derivedSha256 = updatedClaim.token_sha256 ?? crypto.createHash('sha256').update(updatedClaim.token).digest('hex');
+      const { token: _legacyToken, ...rest } = updatedClaim;
       updatedClaim = {
-        ...updatedClaim,
-        token_sha256: crypto.createHash('sha256').update(normalizedClaim.token).digest('hex'),
+        ...rest,
+        token_sha256: derivedSha256,
       };
     }
     if (updatedClaim.generation === undefined) {

@@ -385,6 +385,8 @@ describe('Team Tasks Journal Recovery and Reconciliation', () => {
       expect(read).not.toBeNull();
       expect(read?.claim?.generation).toBe(1);
       expect(read?.last_claim_generation).toBe(1);
+      expect(read?.claim?.token).toBeUndefined();
+      expect(read?.claim?.token_sha256).toBe(crypto.createHash('sha256').update('legacy-token').digest('hex'));
 
       // Release the claim back to pending
       const released = await releaseTaskClaim(root, teamName, task.id, 'legacy-token', 'worker-1');
