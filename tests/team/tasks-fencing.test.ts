@@ -18,6 +18,7 @@ import {
   releaseTaskClaim,
   renewTaskClaim,
   reopenTask,
+  toWorkerProcessIdentityClaim,
   transitionTaskStatus,
   type TeamTask,
   type WorkerProcessIdentityClaim,
@@ -1315,6 +1316,104 @@ describe('team tasks fencing & reconciliation', { timeout: 20_000 }, () => {
       expect(recovered2).not.toBeNull();
       expect(recovered2?.status).toBe('pending');
       expect(recovered2?.claim).toBeUndefined();
+    });
+  });
+
+  describe('Process Identity validation and Ownership preservation', () => {
+    it('rejects invalid process identity in toWorkerProcessIdentityClaim', () => {
+      expect(() => toWorkerProcessIdentityClaim(null as unknown as WorkerProcessIdentityClaim))
+        .toThrow('E_TEAM_TASK_PROCESS_IDENTITY_INVALID: process identity must be an object');
+      expect(() => toWorkerProcessIdentityClaim({ pid: -1, start_identity: 'id' }))
+        .toThrow('E_TEAM_TASK_PROCESS_IDENTITY_INVALID: pid must be a positive integer');
+      expect(() => toWorkerProcessIdentityClaim({ pid: 1, start_identity: '' }))
+        .toThrow('E_TEAM_TASK_PROCESS_IDENTITY_INVALID: start_identity must be a non-empty string');
+      expect(() => toWorkerProcessIdentityClaim({ pid: 1, start_identity: 'id', start_identity_proven: 'yes' as unknown as boolean }))
+        .toThrow('E_TEAM_TASK_PROCESS_IDENTITY_INVALID: start_identity_proven must be a boolean');
+      expect(() => toWorkerProcessIdentityClaim({ pid: 1, start_identity: 'id', nonce: '' }))
+        .toThrow('E_TEAM_TASK_PROCESS_IDENTITY_INVALID: nonce must be a non-empty string');
+      expect(() => toWorkerProcessIdentityClaim({ pid: 1, start_identity: 'id', nonce_sha256: 'bad' }))
+        .toThrow('E_TEAM_TASK_PROCESS_IDENTITY_INVALID: nonce_sha256 must be a 64-character hex string');
+    });
+
+    it('preserves assigned owner when completed dependent is reblocked and then unblocked', async () => {
+      const { root, teamName } = workspace();
+      const task1 = await createTask(root, teamName, {
+        subject: 'Prereq Task',
+        description: 'First step',
+      });
+      const task2 = await createTask(root, teamName, {
+        subject: 'Dependent Task',
+        description: 'Second step',
+        owner: 'worker-2',
+        blocked_by: [task1.id],
+      });
+
+      expect(task2.status).toBe('blocked');
+      expect(task2.owner).toBe('worker-2');
+      expect(task2.request_owner).toBe('worker-2');
+
+      // Complete task1 -> unblocks task2 to pending with owner intact
+      const claim1 = await claimTask(root, teamName, task1.id, 'worker-1');
+      expect(claim1.ok).toBe(true);
+      if (!claim1.ok) return;
+      await transitionTaskStatus(root, teamName, task1.id, 'in_progress', 'completed', claim1.claimToken);
+
+      const unblocked2 = await readTask(root, teamName, task2.id);
+      expect(unblocked2?.status).toBe('pending');
+      expect(unblocked2?.owner).toBe('worker-2');
+
+      // worker-2 claims and completes task2
+      const claim2 = await claimTask(root, teamName, task2.id, 'worker-2');
+      expect(claim2.ok).toBe(true);
+      if (!claim2.ok) return;
+      await transitionTaskStatus(root, teamName, task2.id, 'in_progress', 'completed', claim2.claimToken, { result: 'done' });
+
+      const completed2 = await readTask(root, teamName, task2.id);
+      expect(completed2?.status).toBe('completed');
+      expect(completed2?.owner).toBe('worker-2');
+
+      // Reopen task1 -> task2 should be reblocked, but preserve its owner worker-2!
+      await reopenTask(root, teamName, task1.id, 'reopen for rework');
+      const reblocked2 = await readTask(root, teamName, task2.id);
+      expect(reblocked2?.status).toBe('blocked');
+      expect(reblocked2?.owner).toBe('worker-2');
+
+      // Re-complete task1 -> task2 unblocks to pending, still retaining worker-2!
+      const reclaim1 = await claimTask(root, teamName, task1.id, 'worker-1');
+      expect(reclaim1.ok).toBe(true);
+      if (!reclaim1.ok) return;
+      await transitionTaskStatus(root, teamName, task1.id, 'in_progress', 'completed', reclaim1.claimToken);
+
+      const restored2 = await readTask(root, teamName, task2.id);
+      expect(restored2?.status).toBe('pending');
+      expect(restored2?.owner).toBe('worker-2');
+    });
+
+    it('preserves assigned owner on reopening non-idempotent task created without request_id', async () => {
+      const { root, teamName } = workspace();
+      const task = await createTask(root, teamName, {
+        subject: 'Non-idempotent task',
+        description: 'Created with owner but no request_id',
+        owner: 'worker-1',
+      });
+
+      expect(task.request_id).toBeUndefined();
+      expect(task.owner).toBe('worker-1');
+      expect(task.request_owner).toBe('worker-1');
+
+      // Claim and complete
+      const claim = await claimTask(root, teamName, task.id, 'worker-1');
+      expect(claim.ok).toBe(true);
+      if (!claim.ok) return;
+      await transitionTaskStatus(root, teamName, task.id, 'in_progress', 'completed', claim.claimToken, { result: 'finished' });
+
+      // Reopen task
+      const reopen = await reopenTask(root, teamName, task.id, 'needs fixes');
+      expect(reopen.ok).toBe(true);
+      if (!reopen.ok) return;
+      expect(reopen.task.status).toBe('pending');
+      expect(reopen.task.owner).toBe('worker-1');
+      expect(reopen.task.request_owner).toBe('worker-1');
     });
   });
 });

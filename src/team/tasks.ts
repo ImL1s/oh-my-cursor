@@ -48,6 +48,24 @@ export interface WorkerProcessIdentityClaim {
 export function toWorkerProcessIdentityClaim(
   identity: WorkerProcessIdentityClaim | ProcessIdentity | (Pick<WorkerProcessIdentityClaim, 'pid' | 'start_identity'> & { start_identity_proven?: boolean; nonce?: string; nonce_sha256?: string }),
 ): WorkerProcessIdentityClaim {
+  if (typeof identity !== 'object' || identity === null || Array.isArray(identity)) {
+    throw new Error('E_TEAM_TASK_PROCESS_IDENTITY_INVALID: process identity must be an object');
+  }
+  if (typeof identity.pid !== 'number' || !Number.isSafeInteger(identity.pid) || identity.pid <= 0) {
+    throw new Error('E_TEAM_TASK_PROCESS_IDENTITY_INVALID: pid must be a positive integer');
+  }
+  if (typeof identity.start_identity !== 'string' || identity.start_identity.trim() === '') {
+    throw new Error('E_TEAM_TASK_PROCESS_IDENTITY_INVALID: start_identity must be a non-empty string');
+  }
+  if (identity.start_identity_proven !== undefined && typeof identity.start_identity_proven !== 'boolean') {
+    throw new Error('E_TEAM_TASK_PROCESS_IDENTITY_INVALID: start_identity_proven must be a boolean');
+  }
+  if ('nonce' in identity && identity.nonce !== undefined && (typeof identity.nonce !== 'string' || identity.nonce.trim() === '')) {
+    throw new Error('E_TEAM_TASK_PROCESS_IDENTITY_INVALID: nonce must be a non-empty string');
+  }
+  if ('nonce_sha256' in identity && identity.nonce_sha256 !== undefined && (typeof identity.nonce_sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(identity.nonce_sha256))) {
+    throw new Error('E_TEAM_TASK_PROCESS_IDENTITY_INVALID: nonce_sha256 must be a 64-character hex string');
+  }
   let nonceSha256 = 'nonce_sha256' in identity ? identity.nonce_sha256 : undefined;
   if ('nonce' in identity && typeof (identity as { nonce?: unknown }).nonce === 'string') {
     nonceSha256 = processNonceSha256((identity as { nonce: string }).nonce);
@@ -337,7 +355,8 @@ function isTeamTask(value: unknown): value is TeamTask {
   if (task.request_payload_sha256 !== undefined && (typeof task.request_payload_sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(task.request_payload_sha256))) return false;
   if (task.request_owner !== undefined && task.request_owner !== null && !isValidWorkerName(task.request_owner)) return false;
   if ((task.request_id === undefined) !== (task.request_payload_sha256 === undefined)) return false;
-  if ((task.request_id === undefined) !== (task.request_owner === undefined)) return false;
+  if (task.request_id !== undefined && task.request_owner === undefined) return false;
+  if (task.request_id === undefined && task.request_owner === null) return false;
 
   if (task.owner !== undefined && !isValidWorkerName(task.owner)) return false;
 
@@ -786,12 +805,14 @@ async function reblockDependentTasks(
             error: _err,
             ...rest
           } = other;
-          const preserveOwner = priorStatus === 'pending' && other.claim === undefined && other.owner !== undefined;
+          const preservedOwner = (other.request_owner !== undefined && other.request_owner !== null)
+            ? other.request_owner
+            : (priorStatus === 'pending' && other.claim === undefined && other.owner !== undefined ? other.owner : undefined);
           const reblocked: TeamTask = {
             ...rest,
             status: 'blocked',
             version: other.version + 1,
-            ...(preserveOwner ? { owner: other.owner } : {}),
+            ...(preservedOwner !== undefined ? { owner: preservedOwner } : {}),
           };
           const event: TeamTaskJournalEvent = (priorStatus === 'completed' || priorStatus === 'failed')
             ? {
@@ -969,7 +990,7 @@ export async function createTask(
         request_id: requestId,
         request_payload_sha256: requestPayloadSha256!,
         request_owner: owner ?? null,
-      } : {}),
+      } : (owner !== undefined ? { request_owner: owner } : {})),
       ...(owner !== undefined ? { owner } : {}),
       ...(blockedBy !== undefined ? { blocked_by: blockedBy } : {}),
     };
@@ -1034,13 +1055,11 @@ function canonicalTaskRequestSha256(
 }
 
 function requestMetadata(task: TeamTask): Partial<Pick<TeamTask, 'request_id' | 'request_payload_sha256' | 'request_owner'>> {
-  return task.request_id === undefined || task.request_payload_sha256 === undefined || task.request_owner === undefined
-    ? {}
-    : {
-      request_id: task.request_id,
-      request_payload_sha256: task.request_payload_sha256,
-      request_owner: task.request_owner,
-    };
+  return {
+    ...(task.request_id !== undefined ? { request_id: task.request_id } : {}),
+    ...(task.request_payload_sha256 !== undefined ? { request_payload_sha256: task.request_payload_sha256 } : {}),
+    ...(task.request_owner !== undefined ? { request_owner: task.request_owner } : {}),
+  };
 }
 
 function sameTaskRequest(

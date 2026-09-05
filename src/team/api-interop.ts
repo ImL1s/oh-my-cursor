@@ -70,6 +70,28 @@ function isFiniteInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value);
 }
 
+function validateProcessIdentityInput(value: unknown): void {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    invalidInput('process_identity must be an object');
+  }
+  const p = value as Record<string, unknown>;
+  if (!isFiniteInteger(p.pid) || p.pid <= 0) {
+    invalidInput('process_identity.pid must be a positive integer');
+  }
+  if (typeof p.start_identity !== 'string' || p.start_identity.trim() === '') {
+    invalidInput('process_identity.start_identity must be a non-empty string');
+  }
+  if (p.start_identity_proven !== undefined && typeof p.start_identity_proven !== 'boolean') {
+    invalidInput('process_identity.start_identity_proven must be a boolean');
+  }
+  if (p.nonce !== undefined && (typeof p.nonce !== 'string' || p.nonce.trim() === '')) {
+    invalidInput('process_identity.nonce must be a non-empty string');
+  }
+  if (p.nonce_sha256 !== undefined && (typeof p.nonce_sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(p.nonce_sha256))) {
+    invalidInput('process_identity.nonce_sha256 must be a 64-character hex string');
+  }
+}
+
 function resolveLongLivedWorkerIdentity(
   root: StateRoot,
   teamName: string,
@@ -79,7 +101,15 @@ function resolveLongLivedWorkerIdentity(
 ): WorkerProcessIdentityClaim | undefined {
   if (args?.process_identity && typeof args.process_identity === 'object' && !Array.isArray(args.process_identity)) {
     const p = args.process_identity as Record<string, unknown>;
-    if (typeof p.pid === 'number' && typeof p.start_identity === 'string') {
+    if (
+      isFiniteInteger(p.pid) &&
+      p.pid > 0 &&
+      typeof p.start_identity === 'string' &&
+      p.start_identity.trim() !== '' &&
+      (p.start_identity_proven === undefined || typeof p.start_identity_proven === 'boolean') &&
+      (p.nonce === undefined || (typeof p.nonce === 'string' && p.nonce.trim() !== '')) &&
+      (p.nonce_sha256 === undefined || (typeof p.nonce_sha256 === 'string' && /^[a-f0-9]{64}$/.test(p.nonce_sha256)))
+    ) {
       const nonceSha256 = typeof p.nonce === 'string'
         ? processNonceSha256(p.nonce)
         : (typeof p.nonce_sha256 === 'string' ? p.nonce_sha256 : undefined);
@@ -222,8 +252,8 @@ export function validateTeamApiOperationInput(
       if (args.lease_ms !== undefined && (!isFiniteInteger(args.lease_ms) || args.lease_ms < 1 || args.lease_ms > MAX_TOTAL_LEASE_MS)) {
         invalidInput(`lease_ms must be a positive integer of at most ${MAX_TOTAL_LEASE_MS}`);
       }
-      if (args.process_identity !== undefined && (typeof args.process_identity !== 'object' || args.process_identity === null || Array.isArray(args.process_identity))) {
-        invalidInput('process_identity must be an object');
+      if (args.process_identity !== undefined) {
+        validateProcessIdentityInput(args.process_identity);
       }
       break;
     case 'renew-task-claim':
@@ -261,8 +291,8 @@ export function validateTeamApiOperationInput(
       if (args.lease_ms !== undefined && (!isFiniteInteger(args.lease_ms) || args.lease_ms < 1 || args.lease_ms > MAX_TOTAL_LEASE_MS)) {
         invalidInput(`lease_ms must be a positive integer of at most ${MAX_TOTAL_LEASE_MS}`);
       }
-      if (args.process_identity !== undefined && (typeof args.process_identity !== 'object' || args.process_identity === null || Array.isArray(args.process_identity))) {
-        invalidInput('process_identity must be an object');
+      if (args.process_identity !== undefined) {
+        validateProcessIdentityInput(args.process_identity);
       }
       break;
     case 'transition-task-status': {

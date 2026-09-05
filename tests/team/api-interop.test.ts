@@ -1063,4 +1063,38 @@ describe('team api interop (P0)', { timeout: 20_000 }, () => {
       expect(execResult.error.message).toContain('expected_generation must be a positive integer');
     }
   });
+
+  it('rejects malformed process_identity in claim-task and reclaim-task preflight', () => {
+    for (const op of ['claim-task', 'reclaim-task'] as const) {
+      const base = { team_name: 'team-a', task_id: '1', worker: 'worker-1' };
+
+      expect(() => validateTeamApiOperationInput(op, { ...base, process_identity: 'not-an-object' }))
+        .toThrow('E_TEAM_API_INPUT_INVALID: process_identity must be an object');
+      expect(() => validateTeamApiOperationInput(op, { ...base, process_identity: null }))
+        .toThrow('E_TEAM_API_INPUT_INVALID: process_identity must be an object');
+      expect(() => validateTeamApiOperationInput(op, { ...base, process_identity: [] }))
+        .toThrow('E_TEAM_API_INPUT_INVALID: process_identity must be an object');
+
+      expect(() => validateTeamApiOperationInput(op, { ...base, process_identity: { pid: -1, start_identity: 'start' } }))
+        .toThrow('E_TEAM_API_INPUT_INVALID: process_identity.pid must be a positive integer');
+      expect(() => validateTeamApiOperationInput(op, { ...base, process_identity: { pid: 0, start_identity: 'start' } }))
+        .toThrow('E_TEAM_API_INPUT_INVALID: process_identity.pid must be a positive integer');
+      expect(() => validateTeamApiOperationInput(op, { ...base, process_identity: { pid: 1.5, start_identity: 'start' } }))
+        .toThrow('E_TEAM_API_INPUT_INVALID: process_identity.pid must be a positive integer');
+
+      expect(() => validateTeamApiOperationInput(op, { ...base, process_identity: { pid: 100, start_identity: '' } }))
+        .toThrow('E_TEAM_API_INPUT_INVALID: process_identity.start_identity must be a non-empty string');
+      expect(() => validateTeamApiOperationInput(op, { ...base, process_identity: { pid: 100, start_identity: '  ' } }))
+        .toThrow('E_TEAM_API_INPUT_INVALID: process_identity.start_identity must be a non-empty string');
+
+      expect(() => validateTeamApiOperationInput(op, { ...base, process_identity: { pid: 100, start_identity: 'start', start_identity_proven: 'yes' } }))
+        .toThrow('E_TEAM_API_INPUT_INVALID: process_identity.start_identity_proven must be a boolean');
+
+      expect(() => validateTeamApiOperationInput(op, { ...base, process_identity: { pid: 100, start_identity: 'start', nonce: '' } }))
+        .toThrow('E_TEAM_API_INPUT_INVALID: process_identity.nonce must be a non-empty string');
+
+      expect(() => validateTeamApiOperationInput(op, { ...base, process_identity: { pid: 100, start_identity: 'start', nonce_sha256: 'invalid-hex' } }))
+        .toThrow('E_TEAM_API_INPUT_INVALID: process_identity.nonce_sha256 must be a 64-character hex string');
+    }
+  });
 });
