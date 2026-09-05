@@ -70,6 +70,21 @@ export function validateParityLocks(locks: ParityLocks): ParityValidationResult 
   if (locks.hostCapabilities.schema_version !== 2) errors.push(`host-capabilities.lock.json: invalid schema_version ${locks.hostCapabilities.schema_version}, expected 2`);
   if (locks.contract.schema_version !== 1) errors.push(`omcu-contract.lock.json: invalid schema_version ${locks.contract.schema_version}, expected 1`);
 
+  // 1b. Cursor SDK integrity check
+  if (!locks.sdk.integrity || !locks.sdk.integrity.startsWith('sha512-')) {
+    errors.push(`sdk.lock.json: integrity digest must start with 'sha512-', found '${locks.sdk.integrity}'`);
+  } else {
+    const b64 = locks.sdk.integrity.slice('sha512-'.length);
+    try {
+      const buf = Buffer.from(b64, 'base64');
+      if (buf.length !== 64 || buf.toString('base64') !== b64) {
+        errors.push(`sdk.lock.json: integrity sha512 digest must decode to exactly 64 bytes, decoded to ${buf.length}`);
+      }
+    } catch {
+      errors.push(`sdk.lock.json: invalid base64 in integrity digest: '${locks.sdk.integrity}'`);
+    }
+  }
+
   // 2. Upstream item integrity
   const totalUpstream = locks.omc.items.length + locks.omx.items.length + locks.omo.items.length;
   const allUpstreamItems = [...locks.omc.items, ...locks.omx.items, ...locks.omo.items];

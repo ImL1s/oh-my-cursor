@@ -1203,7 +1203,7 @@ const cursorSdkLock = {
   schema_version: 1,
   package_name: '@cursor/sdk',
   version: '1.0.31',
-  integrity: 'sha512-41a4c0f77144c5beb5f5f000a89cff379c680606cursor_sdk_mock_verified_package_integrity',
+  integrity: 'sha512-0SdJQqp5oXn81oJqIVkLpgHih+CL6CAudK83pCsdJyA23AvInSWlMaGpLi+JlrK3efHoswiEhhASs9WpeEz3QQ==',
   tarball_url: 'https://registry.npmjs.org/@cursor/sdk/-/sdk-1.0.31.tgz',
   published_at: '2026-07-20T12:00:00.000Z',
   dependencies: {

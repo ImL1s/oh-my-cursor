@@ -269,6 +269,31 @@ describe('Parity Contract Matrix & Clean-Room Provenance Lock (Issue #25)', () =
       expect(result.errors.some((e) => e.includes('Disposition count mismatch for \'native\''))).toBe(true);
     });
 
+    it('detects malformed SDK package integrity digest', () => {
+      const locks = loadParityLocks(REPO_ROOT);
+      const clonedLocksPrefix: ParityLocks = {
+        ...locks,
+        sdk: {
+          ...locks.sdk,
+          integrity: 'sha256-invalidprefix'
+        }
+      };
+      const resultPrefix = validateParityLocks(clonedLocksPrefix);
+      expect(resultPrefix.valid).toBe(false);
+      expect(resultPrefix.errors.some((e) => e.includes('integrity digest must start with \'sha512-\''))).toBe(true);
+
+      const clonedLocksLength: ParityLocks = {
+        ...locks,
+        sdk: {
+          ...locks.sdk,
+          integrity: 'sha512-41a4c0f77144c5beb5f5f000a89cff379c680606cursor_sdk_mock_verified_package_integrity'
+        }
+      };
+      const resultLength = validateParityLocks(clonedLocksLength);
+      expect(resultLength.valid).toBe(false);
+      expect(resultLength.errors.some((e) => e.includes('must decode to exactly 64 bytes'))).toBe(true);
+    });
+
     it('detects missing documentation file', () => {
       const docsResult = validateParityDocs('/tmp');
       expect(docsResult.valid).toBe(false);
@@ -277,3 +302,4 @@ describe('Parity Contract Matrix & Clean-Room Provenance Lock (Issue #25)', () =
     });
   });
 });
+

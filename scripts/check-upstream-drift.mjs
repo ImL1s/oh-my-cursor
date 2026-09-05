@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -10,7 +10,7 @@ const omo = JSON.parse(fs.readFileSync(path.join(repoRoot, 'parity/upstreams/omo
 
 function getRemoteHead(repoUrl) {
   try {
-    const out = execSync(`git ls-remote ${repoUrl} HEAD`, { encoding: 'utf8', timeout: 15000 });
+    const out = execFileSync('git', ['ls-remote', repoUrl, 'HEAD'], { encoding: 'utf8', timeout: 15000 });
     const [sha] = out.trim().split(/\s+/);
     if (!sha || sha.length < 40) throw new Error(`Invalid SHA returned for ${repoUrl}`);
     return sha;
