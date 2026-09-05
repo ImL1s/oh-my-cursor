@@ -11,6 +11,7 @@ import {
   runSetupDoctor,
   uninstall,
   verifyInstallations,
+  type CommandRunner,
   type InstallResult,
 } from '../setup/index.js';
 import {
@@ -19,11 +20,36 @@ import {
   uninstallMcpServer,
   type McpStatusResult,
 } from '../mcp/lifecycle.js';
+import type { CursorAgentAdapter } from '../host/cursor-agent.js';
 import { externalStateRoot, flagValue, optionValue, printJson, type CliContext } from './shared.js';
+
+function adapterToCommandRunner(adapter: CursorAgentAdapter, defaultCwd: string): CommandRunner {
+  return {
+    async run(_command, args, options) {
+      try {
+        const result = await adapter.run(
+          { argv: args, cwd: options?.cwd ?? defaultCwd, interactive: false },
+          {
+            ...(options?.env !== undefined ? { env: options.env } : {}),
+            ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+          },
+        );
+        return { code: result.code, stdout: result.stdout, stderr: result.stderr };
+      } catch (err) {
+        return {
+          code: 1,
+          stdout: '',
+          stderr: err instanceof Error ? err.message : String(err),
+        };
+      }
+    },
+  };
+}
 
 export async function handleLifecycle(context: CliContext): Promise<number | null> {
   const { command, action } = context.parsed;
   const stateRoot = optionValue<string>(context, '--state-root') ?? externalStateRoot(context.homeDir);
+  const runner = adapterToCommandRunner(context.adapter, context.cwd);
   if (command === 'setup' || command === 'update') {
     const source = optionValue<string>(context, '--source');
     const archive = optionValue<string>(context, '--archive');
@@ -50,6 +76,7 @@ export async function handleLifecycle(context: CliContext): Promise<number | nul
       projectRoot: context.cwd,
       initializeProjectState: flagValue(context, '--init-project-state'),
       dryRun,
+      runner,
     });
     printJson(context.io, result);
     return installExitCode(result);
@@ -63,6 +90,7 @@ export async function handleLifecycle(context: CliContext): Promise<number | nul
       stateRoot,
       projectRoot: context.cwd,
       dryRun,
+      runner,
     });
     printJson(context.io, result);
     return 0;
@@ -114,6 +142,7 @@ export async function handleLifecycle(context: CliContext): Promise<number | nul
         homeDir: context.homeDir,
         stateRoot,
         projectRoot: context.cwd,
+        runner,
       });
       printJson(context.io, result);
       return result.repaired ? 0 : (result.doctor?.ok === false ? 1 : 0);
@@ -130,6 +159,7 @@ export async function handleLifecycle(context: CliContext): Promise<number | nul
       projectRoot: context.cwd,
       homeDir: context.homeDir,
       repairJournals,
+      runner,
     });
     printJson(context.io, repairOwner
       ? { ...report, owner_repair: { repaired: quarantinedOwner !== null, quarantine_path: quarantinedOwner } }

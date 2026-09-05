@@ -224,9 +224,11 @@ describe('integrated CLI surface', () => {
 
   it('integrates install lifecycle commands: status, list, verify, rollback, prune, repair, and update-source enforcement', async () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'omcu-lifecycle-cli-'));
+    fs.chmodSync(cwd, 0o700);
     const h = harness(cwd);
     const home = h.dependencies.homeDir;
-    fs.mkdirSync(home, { recursive: true });
+    fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+    fs.chmodSync(home, 0o700);
 
     const healthyAdapter = new CursorAgentAdapter('cursor-agent', async (_exe, invocation) => {
       if (invocation.argv[0] === '--version') return { code: 0, stdout: '2026.07.20-test\n', stderr: '' };
@@ -241,7 +243,7 @@ describe('integrated CLI surface', () => {
       fs.mkdirSync(path.join(p, '.cursor', 'rules'), { recursive: true });
       fs.writeFileSync(path.join(p, 'package.json'), JSON.stringify({ name: '@iml1s/oh-my-cursor', version: ver, files: ['dist', '.cursor-plugin', '.cursor/rules'] }));
       fs.writeFileSync(path.join(p, 'dist', 'bin', 'omcu.js'), `#!/usr/bin/env node\nconsole.log("${ver}");\n`);
-      fs.writeFileSync(path.join(p, '.cursor', 'rules', 'omcu.mdc'), '---\nalwaysApply: true\n---\n');
+      fs.writeFileSync(path.join(p, '.cursor', 'rules', 'oh-my-cursor.mdc'), '---\nalwaysApply: true\n---\n');
       fs.writeFileSync(path.join(p, '.cursor-plugin', 'plugin.json'), JSON.stringify({ name: 'oh-my-cursor', version: ver, rules: './.cursor/rules/' }));
       return p;
     }
