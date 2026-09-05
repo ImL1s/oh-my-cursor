@@ -40,8 +40,9 @@ describe('Cursor service layer', () => {
     fs.writeFileSync(transcript, `${lines.join('\n')}\n`);
     const snapshot = recoverCursorSession(projectStateRoot(cwd), { projectJsonlPath: transcript, recoveryId: 'r1', now });
     expect(snapshot.copied_lines).toBe(900);
-    expect(snapshot.truncated).toBe(true);
-    expect(snapshot.warnings.map(({ code }) => code)).toEqual(expect.arrayContaining(['W_PARTIAL_RECORD', 'W_BROKEN_CHAIN']));
+    expect(snapshot.schema_version).toBe(2);
+    expect(snapshot.consistency_status).toBe('consistent');
+    expect(snapshot.warnings.map(({ code }) => code)).toEqual(expect.arrayContaining(['W_MALFORMED_RECORD', 'W_BROKEN_CHAIN', 'W_TRUNCATED_PREFIX']));
     const copied = fs.readFileSync(snapshot.copy_path, 'utf8');
     expect(copied.split('\n').filter(Boolean)).toHaveLength(900);
     expect(copied).not.toContain('"secret"');
