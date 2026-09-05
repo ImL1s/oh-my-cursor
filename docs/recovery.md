@@ -29,9 +29,16 @@ A source with more than 900 lines sets `truncated: true`. The snapshot may repor
 
 | Warning | Meaning |
 | --- | --- |
-| `W_PARTIAL_RECORD` | A selected line is not valid JSON. It is preserved as redacted raw text. |
+| `W_TRUNCATED_PREFIX` | Source exceeds 900 lines; an omitted prefix precedes the retained tail. |
+| `W_PARENT_OUTSIDE_RETAINED_TAIL` | A referenced parent is located in the omitted prefix; this is expected under truncation and not corruption. |
+| `W_PARTIAL_FINAL_RECORD` | The unterminated/incomplete final record was preserved as redacted raw text. |
+| `W_MALFORMED_RECORD` | A non-final line with invalid JSON was preserved as redacted raw text. |
 | `W_UNKNOWN_RECORD` | A record shape is not recognized. It is preserved without interpretation. |
-| `W_BROKEN_CHAIN` | A parent reference is missing, often because it fell outside the copied window. |
+| `W_BROKEN_CHAIN` | Scanned source confirms the referenced parent does not exist in the source. |
+| `W_CHAIN_UNVERIFIED` | Resource bounds prevented proving parent existence. |
+| `W_PARTIAL_RECORD` | Preserved for schema v1 snapshot compatibility. |
+
+Use `--summary` (`omcu recover create --summary` or `omcu recover show --summary --id <id>`) to display a concise machine-readable summary without raw record payloads.
 
 These warnings are evidence of an incomplete or ambiguous recovery. Do not infer task completion, acceptance, or full history from the tail.
 

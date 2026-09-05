@@ -275,8 +275,8 @@ Do not edit this block manually; it is generated from `COMMAND_SCHEMAS`.
 - `omcu lease release` | options: --run:string required; --name:string required; --owner:string required; --generation:integer required | positionals: none
 - `omcu cancel` | options: --id:string required | positionals: none
 - `omcu recover` | options: none | positionals: none
-- `omcu recover show` | options: --id:string required | positionals: none
-- `omcu recover create` | options: --transcript:string; --project-jsonl:string; --id:string | positionals: none
+- `omcu recover show` | options: --id:string required; --summary:flag | positionals: none
+- `omcu recover create` | options: --transcript:string; --project-jsonl:string; --id:string; --summary:flag | positionals: none
 - `omcu compact` | options: none | positionals: none
 - `omcu compact checkpoint` | options: --id:string required; --generation:integer required; --payload-json:json required | positionals: none
 - `omcu compact show` | options: --id:string required | positionals: none

@@ -4,7 +4,7 @@ import { CompactionStore } from '../compaction/index.js';
 import { ProjectMemoryStore } from '../memory/index.js';
 import { serveMcpStdio } from '../mcp/index.js';
 import { NotificationService, refusingNotificationTransport } from '../notify/index.js';
-import { readRecovery, recoverCursorSession } from '../recovery/index.js';
+import { readRecovery, recoverCursorSession, recoverySummary } from '../recovery/index.js';
 import { routeSessionCommand, type SessionCommand } from '../sessions/router.js';
 import { createCliMutationAuthority } from '../state/authority.js';
 import { LeaseStore, observeLease, observeRunState, RunStateStore } from '../state/store.js';
@@ -19,17 +19,22 @@ export async function handleLocalServices(context: CliContext): Promise<number |
   if (command === 'mcp-server') { await serveMcpStdio(context.root); return 0; }
   if (command === 'session' || command === 'resume') return handleSession(command === 'resume' ? 'resume' : action, context);
   if (command === 'recover') {
+    const summary = flagValue(context, '--summary');
     if (action === 'show') {
-      printJson(context.io, readRecovery(context.root, requiredOptionValue<string>(context, '--id')));
+      const snapshot = readRecovery(context.root, requiredOptionValue<string>(context, '--id'));
+      printJson(context.io, summary ? recoverySummary(snapshot) : snapshot);
       return 0;
     }
     if (action === 'create' || action === null) {
-      const transcriptPath = optionValue<string>(context, '--transcript'); const projectJsonlPath = optionValue<string>(context, '--project-jsonl'); const recoveryId = optionValue<string>(context, '--id');
-      printJson(context.io, recoverCursorSession(context.root, {
+      const transcriptPath = optionValue<string>(context, '--transcript');
+      const projectJsonlPath = optionValue<string>(context, '--project-jsonl');
+      const recoveryId = optionValue<string>(context, '--id');
+      const snapshot = recoverCursorSession(context.root, {
         ...(transcriptPath === undefined ? {} : { transcriptPath }),
         ...(projectJsonlPath === undefined ? {} : { projectJsonlPath }),
         ...(recoveryId === undefined ? {} : { recoveryId }),
-      }));
+      });
+      printJson(context.io, summary ? recoverySummary(snapshot) : snapshot);
       return 0;
     }
     throw new Error(`E_RECOVERY_ACTION_INVALID: ${action}`);

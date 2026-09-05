@@ -213,13 +213,20 @@ export const COMMAND_SCHEMAS: Readonly<Record<string, CommandSchema>> = Object.f
   cancel: { stateAccess: 'write-ensure', options: [{ name: '--id', kind: 'string', required: true, pattern: SAFE_KEY_PATTERN }] },
   recover: {
     actions: {
-      show: { stateAccess: 'read-existing', options: [{ name: '--id', kind: 'string', required: true, pattern: SAFE_KEY_PATTERN }] },
+      show: {
+        stateAccess: 'read-existing',
+        options: [
+          { name: '--id', kind: 'string', required: true, pattern: SAFE_KEY_PATTERN },
+          { name: '--summary', kind: 'flag' },
+        ],
+      },
       create: {
         stateAccess: 'write-ensure',
         options: [
           { name: '--transcript', kind: 'string', absolutePath: true },
           { name: '--project-jsonl', kind: 'string', absolutePath: true },
           { name: '--id', kind: 'string', pattern: SAFE_KEY_PATTERN },
+          { name: '--summary', kind: 'flag' },
         ],
         exactlyOneOf: [['--transcript', '--project-jsonl']],
       },

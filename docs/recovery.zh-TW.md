@@ -29,9 +29,16 @@ omcu session continue
 
 | 警告 | 意義 |
 | --- | --- |
-| `W_PARTIAL_RECORD` | 選定行不是有效 JSON。保留為編修後原始文字。 |
+| `W_TRUNCATED_PREFIX` | 來源超過 900 行；保留的尾部之前存在被省略的前綴。 |
+| `W_PARENT_OUTSIDE_RETAINED_TAIL` | 所引用的父節點位於被省略的前綴中；此為截斷下的預期現象，非毀損。 |
+| `W_PARTIAL_FINAL_RECORD` | 未完結/不完整的最後一行記錄保留為編修後原始文字。 |
+| `W_MALFORMED_RECORD` | 非最後一行且無效的 JSON 記錄保留為編修後原始文字。 |
 | `W_UNKNOWN_RECORD` | 記錄形狀無法辨識。保留但不解讀。 |
-| `W_BROKEN_CHAIN` | 缺少父參考，常因落在複製視窗外。 |
+| `W_BROKEN_CHAIN` | 已掃描來源證實所引用的父節點在來源中確實不存在。 |
+| `W_CHAIN_UNVERIFIED` | 資源限制致使無法證明父節點存在性。 |
+| `W_PARTIAL_RECORD` | 為相容版本 1 (v1) 快照所保留。 |
+
+使用 `--summary` (`omcu recover create --summary` 或 `omcu recover show --summary --id <id>`) 可輸出簡潔且不含原始記錄內文的機器可讀摘要。
 
 這些警告表示復原不完整或模糊。勿從尾部推斷任務完成、驗收或完整歷史。
 
