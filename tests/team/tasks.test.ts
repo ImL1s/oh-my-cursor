@@ -1174,6 +1174,86 @@ describe('team tasks lifecycle & generation fencing', { timeout: 20_000 }, () =>
       expect(finish2.error).toBe('invalid_transition');
     });
 
+    it('invalidates completed and terminal dependents across multi-level cascade when a prerequisite is reopened', async () => {
+      const { root, teamName } = workspace();
+      // Setup DAG: Task 1 -> Task 2 -> Task 3
+      const task1 = await createTask(root, teamName, { subject: 'Task 1', description: 'Root prerequisite' });
+      const task2 = await createTask(root, teamName, { subject: 'Task 2', description: 'Intermediate dependent', blocked_by: [task1.id] });
+      const task3 = await createTask(root, teamName, { subject: 'Task 3', description: 'Leaf dependent', blocked_by: [task2.id] });
+
+      // Complete Task 1
+      const c1 = await claimTask(root, teamName, task1.id, 'worker-1');
+      expect(c1.ok).toBe(true);
+      if (!c1.ok) return;
+      await transitionTaskStatus(root, teamName, task1.id, 'in_progress', 'completed', c1.claimToken, { result: 'res-1' });
+
+      // Complete Task 2
+      const c2 = await claimTask(root, teamName, task2.id, 'worker-2');
+      expect(c2.ok).toBe(true);
+      if (!c2.ok) return;
+      await transitionTaskStatus(root, teamName, task2.id, 'in_progress', 'completed', c2.claimToken, { result: 'res-2' });
+
+      // Complete Task 3
+      const c3 = await claimTask(root, teamName, task3.id, 'worker-1');
+      expect(c3.ok).toBe(true);
+      if (!c3.ok) return;
+      await transitionTaskStatus(root, teamName, task3.id, 'in_progress', 'completed', c3.claimToken, { result: 'res-3' });
+
+      // Verify all 3 tasks are initially completed
+      let tasks = await listTasks(root, teamName);
+      expect(tasks.map((t) => t.status)).toEqual(['completed', 'completed', 'completed']);
+
+      // Now reopen Task 1
+      const reopen = await reopenTask(root, teamName, task1.id, { reason: 'upstream input updated' });
+      expect(reopen.ok).toBe(true);
+
+      // Verify Task 1 is pending, and both Task 2 and Task 3 are invalidated and transitioned to blocked
+      tasks = await listTasks(root, teamName);
+      const t1 = tasks.find((t) => t.id === task1.id)!;
+      const t2 = tasks.find((t) => t.id === task2.id)!;
+      const t3 = tasks.find((t) => t.id === task3.id)!;
+
+      expect(t1.status).toBe('pending');
+      expect(t2.status).toBe('blocked');
+      expect(t2.completed_at).toBeUndefined();
+      expect(t2.result).toBeUndefined();
+      expect(t2.claim).toBeUndefined();
+      expect(t2.owner).toBeUndefined();
+
+      expect(t3.status).toBe('blocked');
+      expect(t3.completed_at).toBeUndefined();
+      expect(t3.result).toBeUndefined();
+      expect(t3.claim).toBeUndefined();
+      expect(t3.owner).toBeUndefined();
+
+      // Journal verification: check that reopened events were recorded for dependents
+      const t2Rebuilt = rebuildTaskFromJournal(root, teamName, task2.id);
+      expect(t2Rebuilt?.status).toBe('blocked');
+      const t3Rebuilt = rebuildTaskFromJournal(root, teamName, task3.id);
+      expect(t3Rebuilt?.status).toBe('blocked');
+    });
+
+    it('serializes task creation with prerequisite reopening under dependency coordination lock', async () => {
+      const { root, teamName } = workspace();
+      const task1 = await createTask(root, teamName, { subject: 'Prereq 1', description: 'Base task' });
+      const c1 = await claimTask(root, teamName, task1.id, 'worker-1');
+      expect(c1.ok).toBe(true);
+      if (!c1.ok) return;
+      await transitionTaskStatus(root, teamName, task1.id, 'in_progress', 'completed', c1.claimToken);
+
+      // Concurrently create dependent task2 and reopen task1
+      const [reopenRes, createdTask2] = await Promise.all([
+        reopenTask(root, teamName, task1.id),
+        createTask(root, teamName, { subject: 'Dep 2', description: 'Depends on 1', blocked_by: [task1.id] }),
+      ]);
+
+      expect(reopenRes.ok).toBe(true);
+      // Because operations are serialized under dependencyCoordinationLock,
+      // task2 MUST end up blocked.
+      const finalTask2 = await readTask(root, teamName, createdTask2.id);
+      expect(finalTask2?.status).toBe('blocked');
+    });
+
     it('caps initial leaseMs to MAX_TOTAL_LEASE_MS on claimTask and reclaimTask', async () => {
       const { root, teamName } = workspace();
       const task = await createTask(root, teamName, { subject: 'Lease Cap', description: 'Bound check' });

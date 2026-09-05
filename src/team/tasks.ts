@@ -695,7 +695,13 @@ async function unblockDependentTasks(root: StateRoot, teamName: string, complete
   }
 }
 
-async function reblockDependentTasks(root: StateRoot, teamName: string, reopenedTaskId: string, now: () => Date): Promise<void> {
+async function reblockDependentTasks(
+  root: StateRoot,
+  teamName: string,
+  reopenedTaskId: string,
+  now: () => Date,
+  writeOptions?: AtomicWriteOptions,
+): Promise<void> {
   const dir = teamTasksDir(root, teamName);
   if (!fs.existsSync(dir)) return;
 
@@ -714,27 +720,42 @@ async function reblockDependentTasks(root: StateRoot, teamName: string, reopened
 
       await withDirectoryLock(taskFilePath(root, teamName, otherId), async () => {
         const other = readTaskUnlocked(root, teamName, otherId);
-        if (other && (other.status === 'pending' || other.status === 'in_progress') && other.blocked_by && other.blocked_by.includes(currentUncompletedId)) {
+        if (other && other.status !== 'blocked' && other.blocked_by && other.blocked_by.includes(currentUncompletedId)) {
           const priorStatus = other.status;
-          const { owner: _o, claim: _c, ...rest } = other;
+          const {
+            owner: _o,
+            claim: _c,
+            completed_at: _ca,
+            result: _res,
+            error: _err,
+            ...rest
+          } = other;
           const reblocked: TeamTask = {
             ...rest,
             status: 'blocked',
             version: other.version + 1,
           };
+          const event: TeamTaskJournalEvent = (priorStatus === 'completed' || priorStatus === 'failed')
+            ? {
+                kind: 'reopened',
+                task: reblocked,
+                reason: `prerequisite_${currentUncompletedId}_reopened`,
+              }
+            : {
+                kind: 'transitioned',
+                task: reblocked,
+                from: priorStatus,
+                to: 'blocked',
+              };
           await commitTaskWithJournal(
             root,
             teamName,
             otherId,
-            {
-              kind: 'transitioned',
-              task: reblocked,
-              from: priorStatus,
-              to: 'blocked',
-            },
+            event,
             reblocked,
             other,
             now,
+            writeOptions,
           );
           toCheck.add(otherId);
         }
@@ -793,10 +814,11 @@ export async function createTask(
   if (subject === '' || description === '') throw new Error('E_TEAM_TASK_FIELDS_REQUIRED');
   const requestId = input.request_id === undefined ? undefined : assertRequestId(input.request_id);
 
-  return withDirectoryLock(teamConfigPath(root, teamName), async () => {
-    const config = readTeamConfig(root, teamName);
-    if (config === null) throw new Error('E_TEAM_NOT_FOUND');
-    let workingConfig = config;
+  return withDependencyCoordinationLock(root, teamName, async () => {
+    return withDirectoryLock(teamConfigPath(root, teamName), async () => {
+      const config = readTeamConfig(root, teamName);
+      if (config === null) throw new Error('E_TEAM_NOT_FOUND');
+      let workingConfig = config;
 
     let owner: string | undefined;
     if (input.owner !== undefined) {
@@ -910,6 +932,7 @@ export async function createTask(
     actualOptions.faultInjector?.('after_task_and_config_commit_before_response');
     return task;
   });
+});
 }
 
 function isRequestId(value: string): boolean {
@@ -1569,7 +1592,7 @@ export async function reopenTask(
     });
 
     if (result.ok) {
-      await reblockDependentTasks(root, teamName, id, now);
+      await reblockDependentTasks(root, teamName, id, now, options.taskWriteOptions);
     }
     return result;
   });
