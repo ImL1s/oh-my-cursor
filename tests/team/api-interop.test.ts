@@ -1097,4 +1097,12 @@ describe('team api interop (P0)', { timeout: 20_000 }, () => {
         .toThrow('E_TEAM_API_INPUT_INVALID: process_identity.nonce_sha256 must be a 64-character hex string');
     }
   });
+
+  it('rejects oversized task payload during create-task preflight', () => {
+    expect(() => validateTeamApiOperationInput('create-task', {
+      team_name: 'team-a',
+      subject: 'Large Task',
+      description: 'x'.repeat(61 * 1024),
+    })).toThrow('E_TEAM_API_INPUT_INVALID: task subject and description must not exceed 60 KiB combined');
+  });
 });

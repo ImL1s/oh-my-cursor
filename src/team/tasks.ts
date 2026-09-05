@@ -457,6 +457,8 @@ function normalizeTask(task: TeamTask): TeamTask {
   return normalized;
 }
 
+export const MAX_TASK_JOURNAL_RECORD_BYTES = 64 * 1024;
+
 function taskJournal(
   root: StateRoot,
   teamName: string,
@@ -466,7 +468,7 @@ function taskJournal(
   const dir = teamTaskJournalDir(root, teamName, taskId);
   return new Journal<TeamTaskJournalEvent>(dir, `team/${teamName}/task/${taskId}`, {
     now,
-    maxRecordBytes: 64 * 1024,
+    maxRecordBytes: MAX_TASK_JOURNAL_RECORD_BYTES,
     maxSegmentBytes: 2 * 1024 * 1024,
   });
 }
@@ -994,6 +996,18 @@ export async function createTask(
       ...(owner !== undefined ? { owner } : {}),
       ...(blockedBy !== undefined ? { blocked_by: blockedBy } : {}),
     };
+
+    const simulatedCreatedEvent: TeamTaskJournalEvent = { kind: 'created', task };
+    const simulatedRecord = JSON.stringify({
+      kind: simulatedCreatedEvent.kind,
+      payload: simulatedCreatedEvent,
+      at: nowFn().toISOString(),
+    });
+    // Reserve 2 KiB headroom for subsequent claim metadata in lifecycle journal records
+    if (Buffer.byteLength(simulatedRecord, 'utf8') > MAX_TASK_JOURNAL_RECORD_BYTES - 2048) {
+      throw new Error('E_TEAM_TASK_TOO_LARGE');
+    }
+
     atomicCreateJson(taskFilePath(root, teamName, task.id), task, actualOptions.taskWriteOptions);
     await appendTaskJournalEvent(root, teamName, task.id, { kind: 'created', task }, nowFn);
     const next: TeamCoordinationConfig = { ...workingConfig, next_task_id: workingConfig.next_task_id + 1 };
@@ -1123,8 +1137,9 @@ export async function claimTask(
     }
   }
 
-  return withDirectoryLock(taskFilePath(root, teamName, id), async () => {
-    const current = readTaskUnlocked(root, teamName, id);
+  return withDependencyCoordinationLock(root, teamName, async () => {
+    return withDirectoryLock(taskFilePath(root, teamName, id), async () => {
+      const current = readTaskUnlocked(root, teamName, id);
     if (current === null) return { ok: false, error: 'task_not_found' as const };
     if (expVersion !== null && current.version !== expVersion) return { ok: false, error: 'claim_conflict' as const };
     if (TERMINAL.has(current.status)) return { ok: false, error: 'already_terminal' as const };
@@ -1212,6 +1227,7 @@ export async function claimTask(
       actualOptions.taskWriteOptions,
     );
     return { ok: true as const, task: updated, claimToken };
+    });
   });
 }
 
@@ -1330,8 +1346,9 @@ export async function reclaimTask(
   if (config === null) return { ok: false, error: 'task_not_found' };
   if (!config.workers.some((entry) => entry.name === worker)) return { ok: false, error: 'worker_not_found' };
 
-  return withDirectoryLock(taskFilePath(root, teamName, id), async () => {
-    const current = readTaskUnlocked(root, teamName, id);
+  return withDependencyCoordinationLock(root, teamName, async () => {
+    return withDirectoryLock(taskFilePath(root, teamName, id), async () => {
+      const current = readTaskUnlocked(root, teamName, id);
     if (current === null) return { ok: false, error: 'task_not_found' as const };
     if (TERMINAL.has(current.status)) return { ok: false, error: 'already_terminal' as const };
     if (current.status !== 'in_progress' || !current.claim) {
@@ -1456,6 +1473,7 @@ export async function reclaimTask(
       previousGeneration: priorGeneration,
       newGeneration,
     };
+    });
   });
 }
 

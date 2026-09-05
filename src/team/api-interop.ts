@@ -227,9 +227,12 @@ export function validateTeamApiOperationInput(
       safeWorker(args, 'worker');
       requiredString(args, 'message_id', 256);
       break;
-    case 'create-task':
-      requiredString(args, 'subject');
-      requiredString(args, 'description');
+    case 'create-task': {
+      const subject = requiredString(args, 'subject');
+      const description = requiredString(args, 'description');
+      if (Buffer.byteLength(subject, 'utf8') + Buffer.byteLength(description, 'utf8') > 60 * 1024) {
+        invalidInput('task subject and description must not exceed 60 KiB combined');
+      }
       if (args.owner !== undefined) safeWorker(args, 'owner');
       if (args.request_id !== undefined) {
         const requestId = requiredString(args, 'request_id', 256);
@@ -240,6 +243,7 @@ export function validateTeamApiOperationInput(
         invalidInput('blocked_by must be an array of task ids');
       }
       break;
+    }
     case 'list-tasks':
     case 'get-summary':
       break;

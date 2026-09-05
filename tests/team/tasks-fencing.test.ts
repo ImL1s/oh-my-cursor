@@ -1415,5 +1415,53 @@ describe('team tasks fencing & reconciliation', { timeout: 20_000 }, () => {
       expect(reopen.task.owner).toBe('worker-1');
       expect(reopen.task.request_owner).toBe('worker-1');
     });
+
+    it('fences claimTask against concurrent prerequisite reopen', async () => {
+      const { root, teamName } = workspace();
+      const task1 = await createTask(root, teamName, { subject: 'Prereq 1', description: 'Root' });
+      const c1 = await claimTask(root, teamName, task1.id, 'worker-1');
+      expect(c1.ok).toBe(true);
+      if (!c1.ok) return;
+      await transitionTaskStatus(root, teamName, task1.id, 'in_progress', 'completed', c1.claimToken);
+
+      const task2 = await createTask(root, teamName, { subject: 'Dep 1', description: 'Leaf', blocked_by: [task1.id] });
+      expect(task2.status).toBe('pending');
+
+      // Concurrently claim Task 2 and reopen Task 1
+      const [claimResult, reopenResult] = await Promise.all([
+        claimTask(root, teamName, task2.id, 'worker-2'),
+        reopenTask(root, teamName, task1.id, { reason: 'need revision' }),
+      ]);
+
+      expect(reopenResult.ok).toBe(true);
+      const read1 = await readTask(root, teamName, task1.id);
+      const read2 = await readTask(root, teamName, task2.id);
+      expect(read1?.status).toBe('pending');
+
+      // Due to dependency coordination fence, Task 2 can NEVER remain in_progress if Task 1 is reopened
+      if (claimResult.ok) {
+        // If claim succeeded first, reopenTask's cascade MUST have reblocked Task 2
+        expect(read2?.status).toBe('blocked');
+      } else {
+        // If reopen ran first, claimTask MUST fail due to blocked_dependency
+        expect(claimResult.error).toBe('blocked_dependency');
+        expect(read2?.status).toBe('blocked');
+      }
+    });
+
+    it('rejects task creation when lifecycle journal record would exceed max record limit without creating snapshot', async () => {
+      const { root, teamName } = workspace();
+      const oversizedDescription = 'x'.repeat(65 * 1024);
+
+      await expect(createTask(root, teamName, {
+        subject: 'Oversized Task',
+        description: oversizedDescription,
+      })).rejects.toThrow('E_TEAM_TASK_TOO_LARGE');
+
+      // Verify no orphan snapshot file was created on disk
+      const dir = teamTasksDir(root, teamName);
+      const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.startsWith('task-')) : [];
+      expect(files.length).toBe(0);
+    });
   });
 });
