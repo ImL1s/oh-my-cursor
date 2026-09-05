@@ -159,8 +159,25 @@ export class TaskRunner {
       options.signal.addEventListener('abort', abortListener, { once: true });
     }
 
+    let timeoutTimer: NodeJS.Timeout | undefined;
+    let timedOut = false;
+    const timeoutPromise = task.budget?.maxTimeMs && task.budget.maxTimeMs > 0
+      ? new Promise<never>((_, reject) => {
+          timeoutTimer = setTimeout(() => {
+            timedOut = true;
+            runHandle?.cancel().catch(() => {});
+            reject(new Error(`E_TASK_TIMEOUT: task exceeded maximum time budget of ${task.budget!.maxTimeMs}ms`));
+          }, task.budget!.maxTimeMs);
+        })
+      : null;
+
     try {
-      const result = await runHandle.wait();
+      const result = timeoutPromise
+        ? await Promise.race([runHandle.wait(), timeoutPromise])
+        : await runHandle.wait();
+      if (timeoutTimer) {
+        clearTimeout(timeoutTimer);
+      }
       if (abortListener && options?.signal) {
         options.signal.removeEventListener('abort', abortListener);
       }
@@ -199,10 +216,25 @@ export class TaskRunner {
         completedAt: nowFn().toISOString(),
       });
     } catch (error) {
+      if (timeoutTimer) {
+        clearTimeout(timeoutTimer);
+      }
       if (abortListener && options?.signal) {
         options.signal.removeEventListener('abort', abortListener);
       }
       await agent.close();
+
+      if (timedOut) {
+        return this.store.update(task.taskId, {
+          status: 'failed',
+          error: {
+            kind: 'run',
+            message: `Task exceeded maximum execution time budget of ${task.budget!.maxTimeMs}ms`,
+          },
+          blockerReason: 'task_timeout',
+          completedAt: nowFn().toISOString(),
+        });
+      }
 
       if (options?.signal?.aborted) {
         return this.store.update(task.taskId, {

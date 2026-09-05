@@ -206,4 +206,117 @@ describe('CLI Native Agent Orchestration Commands', () => {
     const removeResult = JSON.parse(stdout[stdout.length - 1]!);
     expect(removeResult.removed).toBe(true);
   });
+
+  it('runs omcu automation install with --allow-fallback', async () => {
+    // Plan
+    await runCli(
+      [
+        'automation',
+        'plan',
+        '--name',
+        'FallbackSync',
+        '--cron',
+        '*/5 * * * *',
+        '--prompt',
+        'Run fallback job',
+        '--id',
+        'auto-fb-1',
+      ],
+      { cwd: tempDir },
+      getIo()
+    );
+
+    // Install with --allow-fallback
+    stdout = [];
+    const installCode = await runCli(
+      ['automation', 'install', '--id', 'auto-fb-1', '--allow-fallback'],
+      { cwd: tempDir },
+      getIo()
+    );
+    expect(installCode).toBe(0);
+    const installResult = JSON.parse(stdout[stdout.length - 1]!);
+    expect(installResult.status).toBe('installed');
+  });
+
+  it('runs omcu team start, status, collect, and stop with --native dispatch', async () => {
+    const fakeRun: Partial<Run> = {
+      id: 'team-run-cli',
+      agentId: 'team-agent-cli',
+      status: 'completed',
+      supports: () => true,
+      unsupportedReason: () => undefined,
+      wait: async () => ({ id: 'team-run-cli', status: 'completed', result: 'Team Worker CLI Output' } as RunResult),
+    };
+
+    const fakeAgent: Partial<SDKAgent> = {
+      agentId: 'team-agent-cli',
+      send: vi.fn().mockResolvedValue(fakeRun as Run),
+      close: vi.fn(),
+    };
+
+    vi.spyOn(Agent, 'create').mockResolvedValue(fakeAgent as SDKAgent);
+    vi.spyOn(Agent, 'getRun').mockResolvedValue({
+      id: 'team-run-cli',
+      status: 'completed',
+      result: 'Team Worker CLI Output',
+    } as Run);
+    vi.spyOn(Agent, 'cancelRun').mockResolvedValue();
+
+    const workers = [
+      { id: 'w1', objective: 'Obj 1', cwd: tempDir, owned_paths: ['src/a.ts'] },
+    ];
+
+    // 1. omcu team start --native
+    stdout = [];
+    const startCode = await runCli(
+      [
+        'team',
+        'start',
+        '--id',
+        'team-cli-1',
+        '--native',
+        '--workers-json',
+        JSON.stringify(workers),
+      ],
+      { cwd: tempDir },
+      getIo()
+    );
+    expect(startCode).toBe(0);
+    const startResult = JSON.parse(stdout[stdout.length - 1]!);
+    expect(startResult.native_cursor_team).toBe(true);
+
+    // 2. omcu team status (auto-detects native team without requiring --native flag!)
+    stdout = [];
+    const statusCode = await runCli(
+      ['team', 'status', '--id', 'team-cli-1'],
+      { cwd: tempDir },
+      getIo()
+    );
+    expect(statusCode).toBe(0);
+    const statusResult = JSON.parse(stdout[stdout.length - 1]!);
+    expect(statusResult.native_cursor_team).toBe(true);
+
+    // 3. omcu team collect --native
+    stdout = [];
+    const collectCode = await runCli(
+      ['team', 'collect', '--id', 'team-cli-1', '--native'],
+      { cwd: tempDir },
+      getIo()
+    );
+    expect(collectCode).toBe(0);
+    const collectResult = JSON.parse(stdout[stdout.length - 1]!);
+    expect(collectResult.team_id).toBe('team-cli-1');
+    expect(collectResult.outputs['w1']).toBe('Team Worker CLI Output');
+
+    // 4. omcu team stop (auto-detects native team and invokes shutdown)
+    stdout = [];
+    const stopCode = await runCli(
+      ['team', 'stop', '--id', 'team-cli-1'],
+      { cwd: tempDir },
+      getIo()
+    );
+    expect(stopCode).toBe(0);
+    const stopResult = JSON.parse(stdout[stdout.length - 1]!);
+    expect(stopResult.stopped_at).not.toBeNull();
+  });
 });

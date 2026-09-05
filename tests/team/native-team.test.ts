@@ -172,4 +172,41 @@ describe('Native Cursor Team Supervisor (No Tmux Requirement)', () => {
     expect(resumeSpy).toHaveBeenCalledWith('agent-w1-resumable', expect.any(Object));
     expect(resumed.workers[0]?.run_id).toBe('new-run-for-agent-w1-resumable');
   });
+
+  it('collect gathers outputs from native worker runs without tmux', async () => {
+    vi.spyOn(Agent, 'getRun').mockImplementation(async (runId) => {
+      return {
+        id: runId,
+        status: 'completed',
+        result: `Output for ${runId}`,
+      } as Partial<Run> as Run;
+    });
+
+    const manifest = {
+      schema_version: 2 as const,
+      team_id: 'team-collect-test',
+      capability_tier: 'native-cursor-team' as const,
+      native_cursor_team: true as const,
+      workers: [
+        {
+          id: 'worker-1',
+          cwd: tempDir,
+          owned_paths: ['src/a.ts'],
+          agent_id: 'agent-1',
+          run_id: 'run-w1-done',
+          status: 'completed',
+          runtime: 'local' as const,
+        },
+      ],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      stopped_at: null,
+    };
+    supervisor.saveManifest(manifest);
+
+    const collection = await supervisor.collect('team-collect-test');
+    expect(collection.team_id).toBe('team-collect-test');
+    expect(collection.outputs['worker-1']).toBe('Output for run-w1-done');
+    expect(collection.verified).toBe(false);
+  });
 });

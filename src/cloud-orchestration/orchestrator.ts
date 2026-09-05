@@ -260,11 +260,15 @@ export class CloudOrchestrator {
 
     try {
       const verifierAgent = await verifierRuntime.createAgent();
+      const lateHandoffNotes = (plan.lateHandoffs ?? []).map(
+        (h) => `Late Handoff for ${h.fromTaskId} (${h.role}): ${h.summary}`
+      );
       const verifierPrompt = [
         `Verify the completed workers for plan '${plan.planId}' (${plan.goal}).`,
         ...updatedTasks.map(
           (t) => `Worker ${t.taskId}: ${t.workerHandoff?.summary ?? 'No summary'}`
         ),
+        ...lateHandoffNotes,
       ].join('\n\n');
 
       const vRun = await verifierAgent.send(verifierPrompt);
@@ -298,6 +302,13 @@ export class CloudOrchestrator {
     };
     this.saveHandoff(verifierHandoff);
 
+    // Re-check stored plan to see if late handoffs arrived during verifier execution
+    const stored = this.loadPlan(planId);
+    const existingLateHandoffs = stored?.lateHandoffs ?? plan.lateHandoffs;
+    const initialLateCount = plan.lateHandoffs?.length ?? 0;
+    const currentLateCount = existingLateHandoffs?.length ?? 0;
+    const hasUnverifiedLateHandoffs = currentLateCount > initialLateCount;
+
     // Update tasks with verifier handoff
     const finalTasks = updatedTasks.map((t) => ({
       ...t,
@@ -308,8 +319,9 @@ export class CloudOrchestrator {
     plan = {
       ...plan,
       tasks: finalTasks,
-      status: verifierPassed ? 'completed' : 'failed',
+      status: hasUnverifiedLateHandoffs ? 'replanning' : (verifierPassed ? 'completed' : 'failed'),
       verifierTaskId,
+      lateHandoffs: existingLateHandoffs,
       updatedAt: nowFn().toISOString(),
     };
     this.savePlan(plan);

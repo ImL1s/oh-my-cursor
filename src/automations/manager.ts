@@ -131,34 +131,41 @@ export class AutomationManager {
     };
   }
 
-  install(automationId: string): AutomationManifest {
+  install(automationId: string, options?: { allowFallback?: boolean }): AutomationManifest {
     const manifest = this.load(automationId);
     if (!manifest) {
       throw new Error(`E_AUTOMATION_NOT_FOUND: automation '${automationId}' not found`);
     }
 
     const now = new Date().toISOString();
+    const fallbackAllowed = options?.allowFallback || this.fallbackSchedulerEnabled;
 
     if (this.automationsAvailable) {
-      // Export to native Cursor Automations directory
-      fs.mkdirSync(this.cursorAutomationsDir, { recursive: true });
-      atomicWriteJson(this.cursorFile(automationId), manifest);
+      try {
+        // Export to native Cursor Automations directory
+        fs.mkdirSync(this.cursorAutomationsDir, { recursive: true });
+        atomicWriteJson(this.cursorFile(automationId), manifest);
 
-      const updated: AutomationManifest = {
-        ...manifest,
-        status: 'installed',
-        target: 'cursor-native',
-        installedAt: now,
-        updatedAt: now,
-      };
-      atomicWriteJson(this.planFile(automationId), updated);
-      return updated;
+        const updated: AutomationManifest = {
+          ...manifest,
+          status: 'installed',
+          target: 'cursor-native',
+          installedAt: now,
+          updatedAt: now,
+        };
+        atomicWriteJson(this.planFile(automationId), updated);
+        return updated;
+      } catch (err) {
+        if (!fallbackAllowed) {
+          throw err;
+        }
+      }
     }
 
     // Cursor Automations are unavailable
-    if (!this.fallbackSchedulerEnabled) {
+    if (!fallbackAllowed) {
       throw new Error(
-        'E_AUTOMATION_UNAVAILABLE: Cursor Automations are unavailable in this environment and local scheduler fallback is not enabled. Enable it via OMCU_LOCAL_SCHEDULER_ENABLED=true.'
+        'E_AUTOMATION_UNAVAILABLE: Cursor Automations are unavailable in this environment and local scheduler fallback is not enabled. Pass --allow-fallback or set OMCU_LOCAL_SCHEDULER_ENABLED=true.'
       );
     }
 

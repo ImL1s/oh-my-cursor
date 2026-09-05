@@ -257,5 +257,116 @@ describe('Local DAG Executor (Official Cookbook DAG Pattern)', () => {
       // Should NOT contain raw transcript formatting
       expect(downstreamPrompt).not.toContain('ConversationTurn');
     });
+
+    it('respects maxConcurrency option during rank execution', async () => {
+      let activeRuns = 0;
+      let peakConcurrency = 0;
+
+      vi.spyOn(Agent, 'create').mockImplementation(async () => {
+        const fakeRun: Partial<Run> = {
+          id: `run-concurrency-${Math.random()}`,
+          agentId: 'agent-concurrency',
+          status: 'running',
+          supports: () => true,
+          unsupportedReason: () => undefined,
+          wait: async () => {
+            activeRuns++;
+            peakConcurrency = Math.max(peakConcurrency, activeRuns);
+            // Simulate work duration
+            await new Promise((resolve) => setTimeout(resolve, 30));
+            activeRuns--;
+            return {
+              id: 'run-done',
+              status: 'completed',
+              result: 'Worker completed',
+            } as RunResult;
+          },
+        };
+
+        const fakeAgent: Partial<SDKAgent> = {
+          agentId: 'agent-concurrency',
+          send: vi.fn().mockResolvedValue(fakeRun as Run),
+          close: vi.fn(),
+        };
+
+        return fakeAgent as SDKAgent;
+      });
+
+      const dag: DagDefinition = {
+        dagId: 'dag-concurrency-test',
+        tasks: [
+          { id: 't1', role: 'omcu-worker', prompt: 'Work 1' },
+          { id: 't2', role: 'omcu-worker', prompt: 'Work 2' },
+          { id: 't3', role: 'omcu-worker', prompt: 'Work 3' },
+          { id: 't4', role: 'omcu-worker', prompt: 'Work 4' },
+        ],
+      };
+
+      const runner = new DagRunner(tempDir);
+      const res = await runner.run(dag, { maxConcurrency: 2 });
+
+      expect(res.status).toBe('completed');
+      expect(peakConcurrency).toBeLessThanOrEqual(2);
+    });
+
+    it('forwards task budget to task record and bounds total upstream context', async () => {
+      const capturedPrompts: string[] = [];
+      vi.spyOn(Agent, 'create').mockImplementation(async () => {
+        const fakeRun: Partial<Run> = {
+          id: 'run-budget',
+          agentId: 'agent-budget',
+          status: 'running',
+          supports: () => true,
+          unsupportedReason: () => undefined,
+          wait: async () => ({
+            id: 'run-budget',
+            status: 'completed',
+            result: 'A'.repeat(2000),
+          } as RunResult),
+        };
+
+        const fakeAgent: Partial<SDKAgent> = {
+          agentId: 'agent-budget',
+          send: vi.fn().mockImplementation(async (msg: string) => {
+            capturedPrompts.push(msg);
+            return fakeRun as Run;
+          }),
+          close: vi.fn(),
+        };
+
+        return fakeAgent as SDKAgent;
+      });
+
+      // 6 upstream tasks each returning 2000 chars
+      const dag: DagDefinition = {
+        dagId: 'dag-budget-total-context',
+        tasks: [
+          { id: 'u1', role: 'omcu-worker', prompt: 'P1', budget: { maxTokens: 500 } },
+          { id: 'u2', role: 'omcu-worker', prompt: 'P2' },
+          { id: 'u3', role: 'omcu-worker', prompt: 'P3' },
+          { id: 'u4', role: 'omcu-worker', prompt: 'P4' },
+          { id: 'u5', role: 'omcu-worker', prompt: 'P5' },
+          { id: 'u6', role: 'omcu-worker', prompt: 'P6' },
+          {
+            id: 'downstream-fanin',
+            role: 'omcu-verifier',
+            prompt: 'Verify all',
+            dependencies: ['u1', 'u2', 'u3', 'u4', 'u5', 'u6'],
+          },
+        ],
+      };
+
+      const runner = new DagRunner(tempDir);
+      const res = await runner.run(dag);
+
+      expect(res.status).toBe('completed');
+      expect(res.tasks['u1']?.budget?.maxTokens).toBe(500);
+
+      // Downstream prompt should not explode in length and should have total context truncation
+      const fanInPrompt = capturedPrompts[capturedPrompts.length - 1]!;
+      expect(fanInPrompt).toContain('total upstream context truncated to 8192 chars');
+      expect(res.tasks['downstream-fanin']?.prompt.length).toBeLessThan(8300);
+      expect(fanInPrompt.length).toBeLessThan(11000);
+    });
   });
 });

@@ -235,4 +235,46 @@ describe('Native Task Runner & Store', () => {
     expect(resumed.status).toBe('completed');
     expect(resumed.output).toBe('Resumed and finished work.');
   });
+
+  it('times out and cancels run when exceeding maxTimeMs budget', async () => {
+    let cancelCalled = false;
+    const fakeRun: Partial<Run> = {
+      id: 'run-timeout-1',
+      agentId: 'agent-timeout-1',
+      status: 'running',
+      supports: (op) => op === 'cancel' || op === 'wait',
+      unsupportedReason: () => undefined,
+      cancel: async () => {
+        cancelCalled = true;
+      },
+      wait: async () => {
+        // Simulates hanging execution longer than 50ms budget
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        return { id: 'run-timeout-1', status: 'completed' } as RunResult;
+      },
+    };
+
+    const fakeAgent: Partial<SDKAgent> = {
+      agentId: 'agent-timeout-1',
+      send: vi.fn().mockResolvedValue(fakeRun as Run),
+      close: vi.fn(),
+    };
+
+    vi.spyOn(Agent, 'create').mockResolvedValue(fakeAgent as SDKAgent);
+
+    const task = runner.createTask({
+      taskId: 'task-timeout-test',
+      role: 'omcu-worker',
+      prompt: 'Hanging work',
+      budget: { maxTimeMs: 40 },
+    });
+
+    const res = await runner.run(task);
+
+    expect(res.status).toBe('failed');
+    expect(res.blockerReason).toBe('task_timeout');
+    expect(res.error?.kind).toBe('run');
+    expect(res.error?.message).toContain('budget of 40ms');
+    expect(cancelCalled).toBe(true);
+  });
 });

@@ -43,6 +43,7 @@ export class DagRunner {
           ...(spec.worktree !== undefined ? { worktree: spec.worktree } : {}),
           ...(spec.ownedPaths !== undefined ? { ownedPaths: spec.ownedPaths } : {}),
           ...(spec.acceptanceCriteria !== undefined ? { acceptanceCriteria: spec.acceptanceCriteria } : {}),
+          ...(spec.budget !== undefined ? { budget: spec.budget } : {}),
         });
         taskRecords[spec.id] = record;
         options?.onTaskUpdate?.(record);
@@ -51,6 +52,27 @@ export class DagRunner {
 
     let dagAborted = false;
 
+    // Helper for bounded rank concurrency
+    const runRankTasks = async (
+      tasks: readonly typeof ranks[0]['tasks'][0][],
+      concurrency: number | undefined,
+      workerFn: (spec: typeof ranks[0]['tasks'][0]) => Promise<void>
+    ) => {
+      if (!concurrency || concurrency <= 0 || concurrency >= tasks.length) {
+        await Promise.all(tasks.map(workerFn));
+        return;
+      }
+      let nextIndex = 0;
+      const pool = Array.from({ length: Math.min(concurrency, tasks.length) }, async () => {
+        while (nextIndex < tasks.length) {
+          if (options?.signal?.aborted || dagAborted) break;
+          const current = nextIndex++;
+          await workerFn(tasks[current]!);
+        }
+      });
+      await Promise.all(pool);
+    };
+
     // 3. Execute ranks sequentially
     for (const rank of ranks) {
       if (options?.signal?.aborted) {
@@ -58,65 +80,67 @@ export class DagRunner {
         break;
       }
 
-      // Run each rank concurrently
-      await Promise.all(
-        rank.tasks.map(async (spec) => {
-          if (options?.signal?.aborted) {
-            dagAborted = true;
-            return;
-          }
+      // Run each rank concurrently (respecting maxConcurrency if specified)
+      await runRankTasks(rank.tasks, options?.maxConcurrency, async (spec) => {
+        if (options?.signal?.aborted) {
+          dagAborted = true;
+          return;
+        }
 
-          // Check if any upstream dependency failed or was skipped
-          let shouldSkip = false;
-          let failedDepId: string | undefined;
+        // Check if any upstream dependency failed or was skipped
+        let shouldSkip = false;
+        let failedDepId: string | undefined;
 
-          if (spec.dependencies && spec.dependencies.length > 0) {
-            for (const depId of spec.dependencies) {
-              const depRecord = taskRecords[depId];
-              if (!depRecord || depRecord.status !== 'completed') {
-                shouldSkip = true;
-                failedDepId = depId;
-                break;
-              }
+        if (spec.dependencies && spec.dependencies.length > 0) {
+          for (const depId of spec.dependencies) {
+            const depRecord = taskRecords[depId];
+            if (!depRecord || depRecord.status !== 'completed') {
+              shouldSkip = true;
+              failedDepId = depId;
+              break;
             }
           }
+        }
 
-          if (shouldSkip) {
-            const skippedRecord = this.store.update(spec.id, {
-              status: 'skipped',
-              blockerReason: `upstream_dependency_failed:${failedDepId ?? 'unknown'}`,
-              completedAt: (options?.now ? options.now() : new Date()).toISOString(),
-            });
-            taskRecords[spec.id] = skippedRecord;
-            options?.onTaskUpdate?.(skippedRecord);
-            return;
-          }
-
-          // Stitch bounded upstream context
-          const promptWithUpstream = stitchBoundedUpstreamContext(spec, upstreamOutputs);
-
-          // Update task prompt with stitched context if needed
-          if (promptWithUpstream !== spec.prompt) {
-            this.store.update(spec.id, { prompt: promptWithUpstream });
-          }
-
-          // Execute task via TaskRunner
-          const completedRecord = await this.taskRunner.run(spec.id, {
-            signal: options?.signal,
-            now: options?.now,
+        if (shouldSkip) {
+          const skippedRecord = this.store.update(spec.id, {
+            status: 'skipped',
+            blockerReason: `upstream_dependency_failed:${failedDepId ?? 'unknown'}`,
+            completedAt: (options?.now ? options.now() : new Date()).toISOString(),
           });
+          taskRecords[spec.id] = skippedRecord;
+          options?.onTaskUpdate?.(skippedRecord);
+          return;
+        }
 
-          taskRecords[spec.id] = completedRecord;
-          options?.onTaskUpdate?.(completedRecord);
+        // Stitch bounded upstream context
+        const promptWithUpstream = stitchBoundedUpstreamContext(spec, upstreamOutputs);
 
-          if (completedRecord.status === 'completed' && completedRecord.output !== undefined) {
-            upstreamOutputs.set(spec.id, {
-              role: spec.role,
-              output: completedRecord.output,
-            });
-          }
-        })
-      );
+        // Update task prompt with stitched context if needed
+        if (promptWithUpstream !== spec.prompt) {
+          this.store.update(spec.id, { prompt: promptWithUpstream });
+        }
+
+        // Execute task via TaskRunner
+        const completedRecord = await this.taskRunner.run(spec.id, {
+          signal: options?.signal,
+          now: options?.now,
+        });
+
+        taskRecords[spec.id] = completedRecord;
+        options?.onTaskUpdate?.(completedRecord);
+
+        if (completedRecord.status === 'completed' && completedRecord.output !== undefined) {
+          upstreamOutputs.set(spec.id, {
+            role: spec.role,
+            output: completedRecord.output,
+          });
+        }
+      });
+
+      if (options?.signal?.aborted) {
+        dagAborted = true;
+      }
 
       if (dagAborted) {
         break;
