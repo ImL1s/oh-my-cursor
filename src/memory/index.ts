@@ -232,7 +232,7 @@ export class ProjectMemoryStore {
       const text = cleanMemoryText(itemObj.text);
       const metadata = cleanMemoryMetadata(itemObj.metadata);
       const updatedAt = validIsoDate(itemObj.updated_at)
-        ? new Date(itemObj.updated_at as string).toISOString()
+        ? (itemObj.updated_at as string)
         : this.now().toISOString();
 
       validatedIncoming.push({

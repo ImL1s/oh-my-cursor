@@ -327,16 +327,31 @@ describe('ProjectMemoryStore transactional, conflict-aware, and schema-validated
     await store1.put('first memory', { tags: ['alpha'] }, 'mem-1');
     await store1.put('second memory', { tags: ['beta'] }, 'mem-2');
 
+    // Also import a record with a non-UTC timezone offset
+    await store1.import({
+      schema_version: 1,
+      memories: [
+        {
+          schema_version: 1,
+          id: 'mem-offset',
+          text: 'offset memory',
+          metadata: {},
+          updated_at: '2026-09-10T00:00:00-10:00',
+        },
+      ],
+    });
+
     const exported1 = store1.export();
 
     const root2 = projectStateRoot(path.join(tempDir, 'r2'));
     const store2 = new ProjectMemoryStore(root2, now);
 
     const receipt = await store2.import(exported1);
-    expect(receipt.imported).toBe(2);
+    expect(receipt.imported).toBe(3);
 
     const exported2 = store2.export();
     expect(exported2).toEqual(exported1);
+    expect(store2.show('mem-offset').updated_at).toBe('2026-09-10T00:00:00-10:00');
   });
 
   it('supports delete with expectedUpdatedAt precondition check', async () => {
