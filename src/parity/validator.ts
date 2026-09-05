@@ -264,9 +264,13 @@ export function validateParityLocks(locks: ParityLocks): ParityValidationResult 
 }
 
 /**
- * Validates that all 12 parity reports and THIRD-PARTY-NOTICES.md exist and are non-empty.
+ * Validates that all 12 parity reports and THIRD-PARTY-NOTICES.md exist, are non-empty,
+ * and match the latest baselines, counts, mechanisms, and contracts in the lock files.
  */
-export function validateParityDocs(baseDir: string = process.cwd()): { valid: boolean; errors: string[] } {
+export function validateParityDocs(
+  baseDir: string = process.cwd(),
+  locks?: ParityLocks
+): { valid: boolean; errors: string[] } {
   const errors: string[] = [];
   const docsDir = path.join(baseDir, 'docs', 'parity');
 
@@ -295,6 +299,120 @@ export function validateParityDocs(baseDir: string = process.cwd()): { valid: bo
     }
   }
 
+  // If any required doc is missing or empty, fail early
+  if (errors.length > 0) {
+    return { valid: false, errors };
+  }
+
+  // Content freshness and lock consistency check
+  let parityLocks = locks;
+  if (!parityLocks) {
+    try {
+      const contractLockPath = path.join(baseDir, 'parity', 'omcu-contract.lock.json');
+      if (fs.existsSync(contractLockPath)) {
+        parityLocks = loadParityLocks(baseDir);
+      }
+    } catch {
+      // Ignore load error if directory does not have full locks (e.g. isolated test paths)
+    }
+  }
+
+  if (parityLocks) {
+    const summaryPath = path.join(docsDir, 'summary.md');
+    if (fs.existsSync(summaryPath)) {
+      const summaryText = fs.readFileSync(summaryPath, 'utf8');
+
+      // Verify upstream commits
+      if (!summaryText.includes(parityLocks.omc.commit)) {
+        errors.push(`Stale docs/parity/summary.md: missing OMC baseline commit ${parityLocks.omc.commit}`);
+      }
+      if (!summaryText.includes(parityLocks.omx.commit)) {
+        errors.push(`Stale docs/parity/summary.md: missing OMX baseline commit ${parityLocks.omx.commit}`);
+      }
+      if (!summaryText.includes(parityLocks.omo.commit)) {
+        errors.push(`Stale docs/parity/summary.md: missing OMO baseline commit ${parityLocks.omo.commit}`);
+      }
+
+      // Verify Cursor target baselines
+      if (!summaryText.includes(parityLocks.sdk.version)) {
+        errors.push(`Stale docs/parity/summary.md: missing SDK version ${parityLocks.sdk.version}`);
+      }
+      if (!summaryText.includes(parityLocks.plugins.commit)) {
+        errors.push(`Stale docs/parity/summary.md: missing plugins commit ${parityLocks.plugins.commit}`);
+      }
+      if (!summaryText.includes(parityLocks.cookbook.commit)) {
+        errors.push(`Stale docs/parity/summary.md: missing cookbook commit ${parityLocks.cookbook.commit}`);
+      }
+
+      // Verify total contracts and counts
+      if (!summaryText.includes(`Total Normalized Contracts: **${parityLocks.contract.total_contracts}**`)) {
+        errors.push(`Stale docs/parity/summary.md: total contracts mismatch with lock (${parityLocks.contract.total_contracts})`);
+      }
+      if (!summaryText.includes(`- **Native** (\`native\`): ${parityLocks.contract.disposition_counts.native}`)) {
+        errors.push(`Stale docs/parity/summary.md: native count mismatch with lock (${parityLocks.contract.disposition_counts.native})`);
+      }
+      if (!summaryText.includes(`- **Composed** (\`composed\`): ${parityLocks.contract.disposition_counts.composed}`)) {
+        errors.push(`Stale docs/parity/summary.md: composed count mismatch with lock (${parityLocks.contract.disposition_counts.composed})`);
+      }
+      if (!summaryText.includes(`- **Thin Extension** (\`thin-extension\`): ${parityLocks.contract.disposition_counts['thin-extension']}`)) {
+        errors.push(`Stale docs/parity/summary.md: thin-extension count mismatch with lock (${parityLocks.contract.disposition_counts['thin-extension']})`);
+      }
+      if (!summaryText.includes(`- **Passing** (\`pass\`): ${parityLocks.contract.status_counts.pass}`)) {
+        errors.push(`Stale docs/parity/summary.md: pass count mismatch with lock (${parityLocks.contract.status_counts.pass})`);
+      }
+    }
+
+    const licensePath = path.join(docsDir, 'license-provenance.md');
+    if (fs.existsSync(licensePath)) {
+      const licenseText = fs.readFileSync(licensePath, 'utf8');
+      const totalUpstream = parityLocks.omc.items.length + parityLocks.omx.items.length + parityLocks.omo.items.length;
+      if (!licenseText.includes(`Total Upstream Items: **${totalUpstream}**`)) {
+        errors.push(`Stale docs/parity/license-provenance.md: total upstream items mismatch with lock (${totalUpstream})`);
+      }
+      if (!licenseText.includes(`OMC (MIT): ${parityLocks.omc.items.length} items`)) {
+        errors.push(`Stale docs/parity/license-provenance.md: OMC item count mismatch with lock (${parityLocks.omc.items.length})`);
+      }
+      if (!licenseText.includes(`OMX (MIT): ${parityLocks.omx.items.length} items`)) {
+        errors.push(`Stale docs/parity/license-provenance.md: OMX item count mismatch with lock (${parityLocks.omx.items.length})`);
+      }
+      if (!licenseText.includes(`OMO (Clean-Room): ${parityLocks.omo.items.length} items`)) {
+        errors.push(`Stale docs/parity/license-provenance.md: OMO item count mismatch with lock (${parityLocks.omo.items.length})`);
+      }
+    }
+
+    const mechanismsPath = path.join(docsDir, 'cursor-mechanisms.md');
+    if (fs.existsSync(mechanismsPath)) {
+      const mechText = fs.readFileSync(mechanismsPath, 'utf8');
+      for (const mech of parityLocks.hostCapabilities.mechanisms) {
+        if (!mechText.includes(mech.mechanism_id)) {
+          errors.push(`Stale docs/parity/cursor-mechanisms.md: missing mechanism '${mech.mechanism_id}'`);
+        }
+      }
+    }
+
+    const familyDocMap: Record<string, string> = {
+      workflow: 'workflows.md',
+      agent: 'agents-routing.md',
+      skill: 'skills-commands.md',
+      hook: 'hooks.md',
+      tool: 'tools-mcp.md',
+      artifact: 'artifacts.md',
+      config: 'config-install.md'
+    };
+    for (const contract of parityLocks.contract.contracts) {
+      const docName = familyDocMap[contract.surface_family];
+      if (docName) {
+        const docPath = path.join(docsDir, docName);
+        if (fs.existsSync(docPath)) {
+          const content = fs.readFileSync(docPath, 'utf8');
+          if (!content.includes(contract.name) && !content.includes(contract.canonical_id)) {
+            errors.push(`Stale docs/parity/${docName}: missing contract '${contract.name}' (${contract.canonical_id})`);
+          }
+        }
+      }
+    }
+  }
+
   return {
     valid: errors.length === 0,
     errors
@@ -312,7 +430,7 @@ export function runParityAudit(baseDir: string = process.cwd()): {
 } {
   const locks = loadParityLocks(baseDir);
   const lockResult = validateParityLocks(locks);
-  const docsResult = validateParityDocs(baseDir);
+  const docsResult = validateParityDocs(baseDir, locks);
 
   const errors = [...lockResult.errors, ...docsResult.errors];
   return {

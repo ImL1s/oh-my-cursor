@@ -461,6 +461,66 @@ describe('Parity Contract Matrix & Clean-Room Provenance Lock (Issue #25)', () =
       expect(docsResult.errors.length).toBeGreaterThan(0);
       expect(docsResult.errors.some((e) => e.includes('Missing required parity doc'))).toBe(true);
     });
+
+    it('detects stale documentation when contract count in locks does not match summary.md', () => {
+      const locks = loadParityLocks(REPO_ROOT);
+      const staleLocks: ParityLocks = {
+        ...locks,
+        contract: {
+          ...locks.contract,
+          total_contracts: 999
+        }
+      };
+
+      const docsResult = validateParityDocs(REPO_ROOT, staleLocks);
+      expect(docsResult.valid).toBe(false);
+      expect(docsResult.errors.some((e) => e.includes('Stale docs/parity/summary.md: total contracts mismatch with lock (999)'))).toBe(true);
+    });
+
+    it('detects stale documentation when upstream baseline commit in locks is updated', () => {
+      const locks = loadParityLocks(REPO_ROOT);
+      const staleLocks: ParityLocks = {
+        ...locks,
+        omc: {
+          ...locks.omc,
+          commit: '0000000000000000000000000000000000000000'
+        }
+      };
+
+      const docsResult = validateParityDocs(REPO_ROOT, staleLocks);
+      expect(docsResult.valid).toBe(false);
+      expect(docsResult.errors.some((e) => e.includes('Stale docs/parity/summary.md: missing OMC baseline commit 0000000000000000000000000000000000000000'))).toBe(true);
+    });
+
+    it('detects stale documentation when Cursor mechanism in locks is missing from cursor-mechanisms.md', () => {
+      const locks = loadParityLocks(REPO_ROOT);
+      const staleLocks: ParityLocks = {
+        ...locks,
+        hostCapabilities: {
+          ...locks.hostCapabilities,
+          mechanisms: [
+            ...locks.hostCapabilities.mechanisms,
+            {
+              mechanism_id: 'cursor-unregistered-future-primitive',
+              surface: 'automation',
+              name: 'Future Primitive',
+              version_or_commit: '1.0.0',
+              source_evidence: 'cursor-docs',
+              requirements: { local_or_cloud: 'local', platform: ['all'] },
+              contract: { input: 'in', output: 'out', lifecycle: 'life' },
+              persistence_and_identity: 'local',
+              permissions_and_tools: 'none',
+              known_limitations: [],
+              status: 'live'
+            }
+          ]
+        }
+      };
+
+      const docsResult = validateParityDocs(REPO_ROOT, staleLocks);
+      expect(docsResult.valid).toBe(false);
+      expect(docsResult.errors.some((e) => e.includes('Stale docs/parity/cursor-mechanisms.md: missing mechanism \'cursor-unregistered-future-primitive\''))).toBe(true);
+    });
   });
 });
 
