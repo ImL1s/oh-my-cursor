@@ -370,6 +370,18 @@ describe('ProjectMemoryStore transactional, conflict-aware, and schema-validated
     expect(await store.delete('del-1', { expectedUpdatedAt: record.updated_at })).toBe(true);
     expect(store.list()).toEqual([]);
     expect(await store.delete('del-1')).toBe(false);
+
+    // If an unlink occurred but index write failed, retrying delete reconciles index and returns false
+    await store.put('record 2', {}, 'del-2');
+    const rec2File = path.join(root.path, 'memory', 'records', 'del-2.json');
+    const indexFile = path.join(root.path, 'memory', 'index.json');
+    fs.unlinkSync(rec2File);
+    const rawIndex = JSON.parse(fs.readFileSync(indexFile, 'utf8'));
+    expect(rawIndex.ids).toContain('del-2');
+
+    expect(await store.delete('del-2')).toBe(false);
+    const updatedIndex = JSON.parse(fs.readFileSync(indexFile, 'utf8'));
+    expect(updatedIndex.ids).not.toContain('del-2');
   });
 
   it('detects corrupt records in doctor and repairs cleanly into quarantine without data loss', async () => {

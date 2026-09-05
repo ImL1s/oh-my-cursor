@@ -189,6 +189,7 @@ export class ProjectMemoryStore {
     return this.withIndexLock(() => {
       const targetFile = this.file(safeId);
       if (!fs.existsSync(targetFile)) {
+        this.rescanUnlocked();
         return false;
       }
       if (options.expectedUpdatedAt !== undefined) {
