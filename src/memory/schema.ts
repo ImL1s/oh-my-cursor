@@ -2,9 +2,11 @@ import { redact } from '../runtime/redaction.js';
 
 export const MAX_RECORD_TEXT_BYTES = 64 * 1024;
 export const MAX_RECORD_METADATA_BYTES = 64 * 1024;
+export const MAX_RECORD_FILE_BYTES = 512 * 1024;
 export const MAX_IMPORT_RECORDS = 1000;
 export const MAX_IMPORT_BUNDLE_BYTES = 8 * 1024 * 1024;
 export const MAX_SEARCH_QUERY_LENGTH = 4096;
+export const MAX_INDEX_FILE_BYTES = 8 * 1024 * 1024;
 
 export interface ProjectMemory {
   readonly schema_version: 1;

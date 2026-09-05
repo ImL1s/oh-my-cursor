@@ -708,4 +708,72 @@ describe('ProjectMemoryStore transactional, conflict-aware, and schema-validated
       'E_MEMORY_CONFLICT_POLICY_INVALID',
     );
   });
+
+  it('safely handles non-regular and oversized index or record files in doctor', async () => {
+    const root = projectStateRoot(tempDir);
+    const store = new ProjectMemoryStore(root, now);
+
+    await store.put('some valid content', {}, 'valid-record');
+    const indexFile = path.join(root.path, 'memory', 'index.json');
+
+    // 1. Non-regular index file (symlink)
+    fs.unlinkSync(indexFile);
+    fs.symlinkSync('/dev/null', indexFile);
+
+    const symlinkReport = await store.doctor();
+    expect(symlinkReport.ok).toBe(false);
+    expect(symlinkReport.corrupt_records).toEqual([
+      expect.objectContaining({
+        file: 'index.json',
+        reason: 'Index file is not a regular file',
+      }),
+    ]);
+
+    const repairSymlink = await store.doctor({ repair: true });
+    expect(repairSymlink.index_rebuilt).toBe(true);
+    expect(repairSymlink.corrupt_records[0]?.quarantined_to).toBeDefined();
+    expect((await store.doctor()).ok).toBe(true);
+
+    // 2. Oversized index file (> MAX_INDEX_FILE_BYTES = 8MB)
+    const fd = fs.openSync(indexFile, 'w');
+    fs.writeSync(fd, 'x', 8 * 1024 * 1024 + 1024);
+    fs.closeSync(fd);
+
+    const oversizedReport = await store.doctor();
+    expect(oversizedReport.ok).toBe(false);
+    expect(oversizedReport.corrupt_records).toEqual([
+      expect.objectContaining({
+        file: 'index.json',
+        reason: expect.stringContaining('Index file exceeds maximum allowed size'),
+      }),
+    ]);
+
+    const repairOversized = await store.doctor({ repair: true });
+    expect(repairOversized.index_rebuilt).toBe(true);
+    expect(repairOversized.corrupt_records[0]?.quarantined_to).toBeDefined();
+    expect((await store.doctor()).ok).toBe(true);
+
+    // 3. Oversized record file (> MAX_RECORD_FILE_BYTES = 512KB)
+    const recordsDir = path.join(root.path, 'memory', 'records');
+    const oversizedRecordPath = path.join(recordsDir, 'huge.json');
+    const rfd = fs.openSync(oversizedRecordPath, 'w');
+    fs.writeSync(rfd, 'y', 512 * 1024 + 1024);
+    fs.closeSync(rfd);
+
+    const recordReport = await store.doctor();
+    expect(recordReport.ok).toBe(false);
+    expect(recordReport.corrupt_records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          file: 'huge.json',
+          reason: 'E_STATE_CORRUPT',
+        }),
+      ]),
+    );
+
+    const repairRecord = await store.doctor({ repair: true });
+    expect(repairRecord.corrupt_records.some((c) => c.file === 'huge.json' && c.quarantined_to)).toBe(true);
+    expect(fs.existsSync(oversizedRecordPath)).toBe(false);
+    expect((await store.doctor()).ok).toBe(true);
+  });
 });

@@ -6,6 +6,8 @@ import { withinStateRoot, type StateRoot } from '../runtime/state-root.js';
 import {
   cleanMemoryMetadata,
   cleanMemoryText,
+  MAX_INDEX_FILE_BYTES,
+  MAX_RECORD_FILE_BYTES,
   MAX_SEARCH_QUERY_LENGTH,
   safeMemoryId,
   validateConflictPolicy,
@@ -35,6 +37,9 @@ function readMemoryRecordFile(file: string, expectedId: string): ProjectMemory {
       throw new Error('E_STATE_CORRUPT');
     }
     if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) {
+      throw new Error('E_STATE_CORRUPT');
+    }
+    if (stat.size > MAX_RECORD_FILE_BYTES) {
       throw new Error('E_STATE_CORRUPT');
     }
     const raw = fs.readFileSync(file, 'utf8');
@@ -570,30 +575,47 @@ export class ProjectMemoryStore {
 
       const indexFile = this.indexFile();
       let indexIssue: string | undefined;
+      let indexStat: fs.Stats | undefined;
 
-      if (!fs.existsSync(indexFile)) {
+      try {
+        indexStat = fs.lstatSync(indexFile);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          indexIssue = `Index file stat failed: ${(err as Error).message}`;
+        }
+      }
+
+      if (!indexStat) {
         if (validRecordIds.length > 0) {
           indexIssue = 'Index file is missing';
         }
       } else {
         try {
-          const rawIndex = JSON.parse(fs.readFileSync(indexFile, 'utf8'));
-          if (
-            rawIndex === null ||
-            typeof rawIndex !== 'object' ||
-            rawIndex.schema_version !== 1 ||
-            !Array.isArray(rawIndex.ids) ||
-            !rawIndex.ids.every((id: unknown) => typeof id === 'string')
-          ) {
-            indexIssue = 'Index file is malformed';
+          if (!indexStat.isFile() || indexStat.isSymbolicLink()) {
+            indexIssue = 'Index file is not a regular file';
+          } else if (typeof process.getuid === 'function' && indexStat.uid !== process.getuid()) {
+            indexIssue = 'Index file is not owned by current user';
+          } else if (indexStat.size > MAX_INDEX_FILE_BYTES) {
+            indexIssue = `Index file exceeds maximum allowed size (${indexStat.size} bytes > ${MAX_INDEX_FILE_BYTES} bytes)`;
           } else {
-            const indexIds = [...(rawIndex.ids as string[])].sort();
-            const sortedValidIds = [...validRecordIds].sort();
+            const rawIndex = JSON.parse(fs.readFileSync(indexFile, 'utf8'));
             if (
-              indexIds.length !== sortedValidIds.length ||
-              indexIds.some((id, idx) => id !== sortedValidIds[idx])
+              rawIndex === null ||
+              typeof rawIndex !== 'object' ||
+              rawIndex.schema_version !== 1 ||
+              !Array.isArray(rawIndex.ids) ||
+              !rawIndex.ids.every((id: unknown) => typeof id === 'string')
             ) {
-              indexIssue = `Index IDs [${indexIds.join(', ')}] do not match scanned records [${sortedValidIds.join(', ')}]`;
+              indexIssue = 'Index file is malformed';
+            } else {
+              const indexIds = [...(rawIndex.ids as string[])].sort();
+              const sortedValidIds = [...validRecordIds].sort();
+              if (
+                indexIds.length !== sortedValidIds.length ||
+                indexIds.some((id, idx) => id !== sortedValidIds[idx])
+              ) {
+                indexIssue = `Index IDs [${indexIds.join(', ')}] do not match scanned records [${sortedValidIds.join(', ')}]`;
+              }
             }
           }
         } catch (err) {
@@ -603,7 +625,13 @@ export class ProjectMemoryStore {
 
       if (indexIssue !== undefined) {
         let quarantinedTo: string | undefined;
-        if (options.repair === true && fs.existsSync(indexFile)) {
+        let indexStillExists = false;
+        try {
+          fs.lstatSync(indexFile);
+          indexStillExists = true;
+        } catch {}
+
+        if (options.repair === true && indexStillExists) {
           const qDir = this.quarantineDir();
           fs.mkdirSync(qDir, { recursive: true, mode: 0o700 });
           const nonce = crypto.randomBytes(6).toString('hex');
@@ -620,7 +648,13 @@ export class ProjectMemoryStore {
       }
 
       let indexRebuilt = false;
-      if (options.repair === true && (corruptRecords.length > 0 || !fs.existsSync(indexFile))) {
+      let indexFileExists = false;
+      try {
+        fs.lstatSync(indexFile);
+        indexFileExists = true;
+      } catch {}
+
+      if (options.repair === true && (corruptRecords.length > 0 || !indexFileExists)) {
         this.rescanUnlocked();
         indexRebuilt = true;
       }
