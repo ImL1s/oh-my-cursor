@@ -38,6 +38,13 @@ export * as workflows from './workflows/index.js';
 export * as modes from './modes/index.js';
 export * as team from './team/index.js';
 export * as parity from './parity/index.js';
+export * as cursorSdk from './runtime/cursor-sdk/index.js';
+export {
+  createCursorRuntime,
+  DefaultCursorRuntime,
+  CursorRuntimeError,
+  WorkflowProjectionStore,
+} from './runtime/cursor-sdk/index.js';
 export {
   MCP_PROTOCOL_VERSION,
   MCP_SERVER_NAME,
